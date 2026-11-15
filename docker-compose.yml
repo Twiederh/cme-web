@@ -1,0 +1,18 @@
+services:
+  cme-web:
+    build: .
+    image: cme-web:latest
+    container_name: cme-web
+    restart: unless-stopped
+    ports:
+      - "${CME_WEB_PORT:-8080}:8080"
+    environment:
+      CME_HOST: ${CME_HOST}
+      CME_USER: ${CME_USER}
+      CME_PASSWORD: ${CME_PASSWORD}
+      CME_SECRET: ${CME_SECRET:-}
+      CME_SSH_PORT: ${CME_SSH_PORT:-22}
+      CME_WEB_USER: ${CME_WEB_USER}
+      CME_WEB_PASS: ${CME_WEB_PASS}
+      CME_DEMO: ${CME_DEMO:-false}
+      TZ: Europe/Berlin

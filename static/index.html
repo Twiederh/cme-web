@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CME Telefonanlage</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+    --accent: #1f6feb; --ok: #1a7f37; --ok-bg: #e6f4ea; --bad: #c62828; --bad-bg: #fdecea;
+    --warn: #9a6700; --warn-bg: #fff4d6; --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1d2128; --text: #e6e9ef; --muted: #959cab; --line: #2c313a;
+      --accent: #58a6ff; --ok: #56d364; --ok-bg: #12301b; --bad: #ff7b72; --bad-bg: #3a1614;
+      --warn: #e3b341; --warn-bg: #33290f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--card);
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .host { color: var(--muted); }
+  header .spacer { flex: 1; }
+  .stamp { color: var(--muted); font-size: 12px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 24px 60px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  .kpi .label { color: var(--muted); font-size: 12px; }
+  .kpi .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .kpi .sub { font-size: 12px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  section.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+                 margin-bottom: 16px; overflow: hidden; }
+  section.card > h2 { font-size: 14px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+                      display: flex; align-items: center; gap: 8px; }
+  section.card > h2 .count { color: var(--muted); font-weight: 400; }
+  section.card > h2 .right { margin-left: auto; }
+  .body { padding: 14px 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  .empty { padding: 16px; color: var(--muted); }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.neutral { background: var(--line); color: var(--muted); }
+  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+                 border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  button:disabled { opacity: .55; cursor: default; }
+  button.save.dirty { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+  form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  form label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  input, select { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px;
+                  background: var(--bg); color: var(--text); }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .lines { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+  .lines .ln { display: flex; gap: 6px; align-items: center; }
+  .lines .ln span { width: 72px; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  .msg { margin-top: 10px; padding: 8px 10px; border-radius: 7px; font-size: 13px; white-space: pre-wrap; display: none; }
+  .msg.ok { display: block; background: var(--ok-bg); color: var(--ok); }
+  .msg.bad { display: block; background: var(--bad-bg); color: var(--bad); }
+  .errors { background: var(--warn-bg); color: var(--warn); border-radius: var(--radius); padding: 10px 14px;
+            margin-bottom: 16px; display: none; white-space: pre-wrap; font-size: 13px; }
+  pre.raw { margin: 0; padding: 12px 16px; max-height: 420px; overflow: auto; font-size: 12px;
+            background: var(--bg); border-top: 1px solid var(--line); }
+  .demo { background: var(--warn-bg); color: var(--warn); padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent);
+          border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>CME Telefonanlage</h1>
+  <span class="host" id="host"></span>
+  <span class="demo" id="demo" hidden>Demo-Modus</span>
+  <span class="spacer"></span>
+  <span class="stamp" id="stamp"></span>
+  <button id="refresh" title="Neu laden">Aktualisieren</button>
+  <button id="save" class="save" title="write memory">Konfiguration speichern</button>
+</header>
+
+<main>
+  <div class="errors" id="errors"></div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">SIP-Trunk-Registrierungen</div><div class="value" id="k-trunks">–</div><div class="sub" id="k-trunks-sub"></div></div>
+    <div class="kpi"><div class="label">Dial-Peers aktiv</div><div class="value" id="k-peers">–</div><div class="sub" id="k-peers-sub"></div></div>
+    <div class="kpi"><div class="label">Telefone registriert</div><div class="value" id="k-phones">–</div><div class="sub" id="k-phones-sub"></div></div>
+    <div class="kpi"><div class="label">Rufnummern</div><div class="value" id="k-numbers">–</div><div class="sub" id="k-numbers-sub"></div></div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>SIP-Trunk · Registrierung beim Provider <span class="count" id="c-trunks"></span></h2>
+      <table><thead><tr><th>Rufnummer</th><th>Dial-Peer</th><th>Status</th><th>Läuft ab in</th></tr></thead>
+        <tbody id="t-trunks"></tbody></table>
+    </section>
+    <section class="card">
+      <h2>Dial-Peers <span class="count" id="c-peers"></span></h2>
+      <table><thead><tr><th>Tag</th><th>Muster</th><th>Ziel</th><th>Status</th></tr></thead>
+        <tbody id="t-peers"></tbody></table>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Telefone <span class="count" id="c-phones"></span></h2>
+    <table><thead><tr><th>Pool</th><th>Beschreibung</th><th>Typ</th><th>MAC</th><th>Leitungen</th><th>IP</th><th>Status</th><th></th></tr></thead>
+      <tbody id="t-phones"></tbody></table>
+  </section>
+
+  <section class="card">
+    <h2>Rufnummern <span class="count" id="c-numbers"></span></h2>
+    <table><thead><tr><th>DN</th><th>Nummer</th><th>Name</th><th>Beschriftung</th><th>Telefone</th></tr></thead>
+      <tbody id="t-numbers"></tbody></table>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Rufnummer anlegen</h2>
+      <div class="body">
+        <form id="f-number">
+          <div class="row">
+            <div><label>Nummer *</label><input name="number" required placeholder="104" pattern="\+?[0-9*#]{1,32}"></div>
+            <div><label>Name</label><input name="name" maxlength="40" placeholder="Wohnzimmer"></div>
+          </div>
+          <div class="row">
+            <div><label>Beschriftung am Telefon</label><input name="label" maxlength="40" placeholder="Wohnzimmer"></div>
+            <div></div>
+          </div>
+          <div class="actions"><button class="primary" type="submit">Anlegen</button></div>
+          <div class="msg" id="m-number"></div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Telefon anlegen</h2>
+      <div class="body">
+        <form id="f-phone">
+          <div class="row">
+            <div><label>MAC-Adresse *</label><input name="mac" required placeholder="70DB.98A1.0C11"></div>
+            <div><label>Typ *</label><select name="type" id="sel-type"></select></div>
+          </div>
+          <div class="row">
+            <div><label>Beschreibung</label><input name="description" maxlength="40" placeholder="Büro"></div>
+            <div><label>Codec</label><select name="codec" id="sel-codec"></select></div>
+          </div>
+          <label>Leitungen *</label>
+          <div class="lines" id="lines"></div>
+          <div class="row">
+            <div><label>SIP-Benutzer (leer = Nummer von Leitung 1)</label><input name="username" placeholder="automatisch"></div>
+            <div><label>SIP-Passwort (leer = zufällig)</label><input name="password" placeholder="automatisch"></div>
+          </div>
+          <div class="actions">
+            <button class="primary" type="submit">Anlegen</button>
+            <button type="button" id="add-line" class="small">+ Leitung</button>
+          </div>
+          <div class="msg" id="m-phone"></div>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Router-Ausgabe
+      <span class="right actions">
+        <select id="raw-cmd" style="width:auto"></select>
+        <button id="raw-run" class="small">Anzeigen</button>
+      </span>
+    </h2>
+    <pre class="raw mono" id="raw-out">Befehl auswählen und „Anzeigen“ klicken.</pre>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let data = null, busy = false;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const badge = (cls, txt) => `<span class="badge ${cls}">${esc(txt)}</span>`;
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  let j; try { j = await r.json(); } catch { j = { ok: false, error: `HTTP ${r.status}` }; }
+  if (!r.ok && j.ok === undefined) j.ok = false;
+  return j;
+}
+
+function fmtSecs(s) {
+  if (s < 0) return "–";
+  const m = Math.floor(s / 60);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+}
+
+function render() {
+  const d = data;
+  $("#host").textContent = d.hostname ? `· ${d.hostname}` : "";
+  $("#stamp").textContent = "Stand " + new Date(d.ts * 1000).toLocaleTimeString("de-DE");
+  $("#save").classList.toggle("dirty", d.dirty);
+  $("#save").textContent = d.dirty ? "Ungespeichert · speichern" : "Konfiguration speichern";
+
+  const err = $("#errors");
+  err.style.display = d.errors.length ? "block" : "none";
+  err.textContent = d.errors.length ? "Hinweise vom Router:\n" + d.errors.join("\n") : "";
+
+  // KPIs
+  const tOk = d.trunks.filter(t => t.registered).length;
+  $("#k-trunks").innerHTML = d.trunks.length ? `${tOk} / ${d.trunks.length}` : "–";
+  $("#k-trunks-sub").textContent = d.trunks.length ? (tOk === d.trunks.length ? "alle registriert" : `${d.trunks.length - tOk} nicht registriert`) : "keine Registrierung gefunden";
+  const voip = d.dialpeers.filter(p => p.type === "voip");
+  const pUp = d.dialpeers.filter(p => p.admin === "up" && p.oper === "up").length;
+  $("#k-peers").textContent = d.dialpeers.length ? `${pUp} / ${d.dialpeers.length}` : "–";
+  $("#k-peers-sub").textContent = `${voip.length} VoIP, ${d.dialpeers.length - voip.length} POTS`;
+  const phOk = d.phones.filter(p => p.state === "REGISTERED").length;
+  $("#k-phones").textContent = `${phOk} / ${d.phones.length}`;
+  $("#k-phones-sub").textContent = d.phones.length - phOk ? `${d.phones.length - phOk} offline` : "alle online";
+  $("#k-numbers").textContent = d.numbers.length;
+  $("#k-numbers-sub").textContent = `${d.numbers.filter(n => !n.pools.length).length} ohne Telefon`;
+
+  // Trunks
+  $("#c-trunks").textContent = d.trunks.length ? `(${d.trunks.length})` : "";
+  $("#t-trunks").innerHTML = d.trunks.length ? d.trunks.map(t => `<tr>
+      <td class="mono">${esc(t.line)}</td><td class="mono">${esc(t.peer)}</td>
+      <td>${t.registered ? badge("ok", "registriert") : badge("bad", "nicht registriert")}</td>
+      <td class="muted">${fmtSecs(t.expires)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">Keine Registrierungen (show sip-ua register status ist leer).</td></tr>`;
+
+  // Dial-Peers
+  $("#c-peers").textContent = d.dialpeers.length ? `(${d.dialpeers.length})` : "";
+  $("#t-peers").innerHTML = d.dialpeers.length ? d.dialpeers.map(p => {
+      let st;
+      if (p.admin !== "up") st = badge("neutral", "deaktiviert");
+      else if (p.oper !== "up") st = badge("bad", "down");
+      else st = badge("ok", "up");
+      if (p.keepalive === "busyout") st += " " + badge("bad", "Keepalive: busyout");
+      else if (p.keepalive === "active") st += " " + badge("ok", "Keepalive ok");
+      return `<tr><td class="mono">${esc(p.tag)} <span class="muted">${esc(p.type)}</span></td>
+        <td class="mono">${esc(p.pattern) || '<span class="muted">–</span>'}</td>
+        <td class="mono">${esc(p.target) || '<span class="muted">–</span>'}</td><td>${st}</td></tr>`;
+    }).join("") : `<tr><td colspan="4" class="empty">Keine Dial-Peers gefunden.</td></tr>`;
+
+  // Telefone
+  $("#c-phones").textContent = `(${d.phones.length})`;
+  $("#t-phones").innerHTML = d.phones.length ? d.phones.map(p => {
+      const st = p.state === "REGISTERED" ? badge("ok", "registriert")
+               : p.state === "UNBEKANNT" ? badge("neutral", "unbekannt") : badge("bad", "offline");
+      const lines = p.lines.map(l => `<div><span class="muted">${esc(l.ln)}:</span> <span class="mono">${esc(l.number)}</span> ${l.name ? `<span class="muted">${esc(l.name)}</span>` : ""}</div>`).join("");
+      return `<tr><td class="mono">${esc(p.tag)}</td><td>${esc(p.description) || '<span class="muted">–</span>'}</td>
+        <td>${esc(p.type)}</td><td class="mono">${esc(p.mac)}</td><td>${lines}</td>
+        <td class="mono">${esc(p.ip) || '<span class="muted">–</span>'}</td><td>${st}</td>
+        <td><button class="small" data-restart="${esc(p.tag)}">Neustart</button></td></tr>`;
+    }).join("") : `<tr><td colspan="8" class="empty">Noch keine Telefone angelegt.</td></tr>`;
+
+  // Rufnummern
+  $("#c-numbers").textContent = `(${d.numbers.length})`;
+  const poolName = Object.fromEntries(d.phones.map(p => [p.tag, p.description || `Pool ${p.tag}`]));
+  $("#t-numbers").innerHTML = d.numbers.length ? d.numbers.map(n => `<tr>
+      <td class="mono">${esc(n.tag)}</td><td class="mono">${esc(n.number)}</td><td>${esc(n.name)}</td><td>${esc(n.label)}</td>
+      <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">Noch keine Rufnummern angelegt.</td></tr>`;
+
+  refreshLineSelects();
+}
+
+function numberOptions(selected) {
+  return `<option value="">– Rufnummer wählen –</option>` + data.numbers.map(n =>
+    `<option value="${esc(n.tag)}" ${String(selected) === n.tag ? "selected" : ""}>${esc(n.number)}${n.name ? " · " + esc(n.name) : ""}</option>`).join("");
+}
+function addLine(sel = "") {
+  const box = $("#lines"), i = box.children.length + 1;
+  const div = document.createElement("div");
+  div.className = "ln";
+  div.innerHTML = `<span>Leitung ${i}</span><select name="dn">${data ? numberOptions(sel) : ""}</select>` +
+    (i > 1 ? `<button type="button" class="small" title="entfernen">✕</button>` : "");
+  div.querySelector("button")?.addEventListener("click", () => { div.remove(); renumber(); });
+  box.appendChild(div);
+}
+function renumber() { [...$("#lines").children].forEach((d, i) => d.querySelector("span").textContent = `Leitung ${i + 1}`); }
+function refreshLineSelects() {
+  if (!$("#lines").children.length) addLine();
+  $("#lines").querySelectorAll("select").forEach(s => { const v = s.value; s.innerHTML = numberOptions(v); });
+}
+
+async function load(force = false) {
+  if (busy) return;
+  busy = true;
+  $("#refresh").innerHTML = `<span class="spin"></span> Lädt`;
+  try {
+    const j = await api("/api/status" + (force ? "?force=1" : ""));
+    if (j.ok === false) throw new Error(j.error);
+    data = j; render();
+  } catch (e) {
+    const err = $("#errors"); err.style.display = "block"; err.textContent = "Fehler beim Laden: " + e.message;
+  } finally {
+    busy = false; $("#refresh").textContent = "Aktualisieren";
+  }
+}
+
+function showMsg(el, ok, text) { el.className = "msg " + (ok ? "ok" : "bad"); el.textContent = text; }
+
+$("#f-number").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector("button[type=submit]"), m = $("#m-number");
+  btn.disabled = true;
+  const j = await api("/api/numbers", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(f))) });
+  btn.disabled = false;
+  if (j.ok) { showMsg(m, true, `Rufnummer angelegt (voice register dn ${j.tag}).\n${j.config.join("\n")}`); f.reset(); load(true); }
+  else showMsg(m, false, j.error || "Fehler");
+});
+
+$("#f-phone").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector("button[type=submit]"), m = $("#m-phone");
+  const fd = new FormData(f);
+  const body = Object.fromEntries([...fd.entries()].filter(([k]) => k !== "dn"));
+  body.dns = fd.getAll("dn").filter(Boolean);
+  btn.disabled = true;
+  const j = await api("/api/phones", { method: "POST", body: JSON.stringify(body) });
+  btn.disabled = false;
+  if (j.ok) {
+    showMsg(m, true, `Telefon angelegt (voice register pool ${j.tag}).\nSIP-Benutzer: ${j.username}  Passwort: ${j.password}\n\n${j.config.join("\n")}`);
+    f.reset(); $("#lines").innerHTML = ""; addLine(); load(true);
+  } else showMsg(m, false, j.error || "Fehler");
+});
+
+$("#add-line").addEventListener("click", () => addLine());
+$("#refresh").addEventListener("click", () => load(true));
+
+$("#save").addEventListener("click", async () => {
+  const b = $("#save"); b.disabled = true; b.innerHTML = `<span class="spin"></span> Speichert`;
+  const j = await api("/api/save", { method: "POST" });
+  b.disabled = false;
+  if (!j.ok) alert("Speichern fehlgeschlagen:\n" + (j.error || j.output));
+  load(true);
+});
+
+document.addEventListener("click", async (e) => {
+  const tag = e.target.dataset?.restart;
+  if (!tag) return;
+  if (!confirm(`Telefon in Pool ${tag} neu starten?`)) return;
+  e.target.disabled = true;
+  const j = await api(`/api/phones/${tag}/restart`, { method: "POST" });
+  e.target.disabled = false;
+  if (!j.ok) alert(j.error || "Fehler");
+  setTimeout(() => load(true), 4000);
+});
+
+$("#raw-run").addEventListener("click", async () => {
+  const out = $("#raw-out"); out.textContent = "Lädt …";
+  const j = await api("/api/raw?cmd=" + encodeURIComponent($("#raw-cmd").value));
+  out.textContent = j.ok ? (j.output || "(leer)") : "Fehler: " + j.error;
+});
+
+(async () => {
+  const meta = await api("/api/meta");
+  $("#demo").hidden = !meta.demo;
+  $("#sel-type").innerHTML = meta.phone_types.map(t => `<option ${t === "8851" ? "selected" : ""}>${t}</option>`).join("");
+  $("#sel-codec").innerHTML = meta.codecs.map(c => `<option>${c}</option>`).join("");
+  $("#raw-cmd").innerHTML = meta.raw_commands.map(c => `<option>${esc(c)}</option>`).join("");
+  await load();
+  setInterval(() => { if (!document.hidden) load(); }, 30000);
+})();
+</script>
+</body>
+</html>
