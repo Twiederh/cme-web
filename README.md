@@ -32,6 +32,33 @@ Der Container verbindet sich per SSH (netmiko) mit dem Router.
 Updates: Im Stack **Pull and redeploy** (mit „Re-pull image and redeploy“) klicken,
 oder unter **GitOps updates** automatisches Aktualisieren einschalten.
 
+## Hinter Traefik
+
+Für einen vorhandenen Traefik (v3) gibt es `docker-compose.traefik.yml`.
+Sie veröffentlicht keinen Port, sondern hängt den Container ins Traefik-Netz
+und setzt die Labels für HTTPS, die Weiterleitung von HTTP auf HTTPS,
+eine IP-Allowlist (nur LAN) und Sicherheits-Header.
+
+In Portainer als **Compose path** `docker-compose.traefik.yml` angeben und
+zusätzlich zu den Variablen oben setzen:
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `CME_DOMAIN` | – (Pflicht) | Hostname, z. B. `cme.example.de` |
+| `TRAEFIK_NETWORK` | `proxy` | Docker-Netz, in dem Traefik hängt (muss existieren) |
+| `TRAEFIK_ENTRYPOINT_HTTPS` | `websecure` | HTTPS-Entrypoint von Traefik |
+| `TRAEFIK_ENTRYPOINT_HTTP` | `web` | HTTP-Entrypoint (für die Weiterleitung) |
+| `TRAEFIK_CERTRESOLVER` | `letsencrypt` | Name des Certresolvers in Traefik |
+| `TRAEFIK_ALLOW` | private Netze | Erlaubte Quell-IPs, kommagetrennt |
+
+Hinweise:
+- Traefik v2: in der Datei `ipallowlist` durch `ipwhitelist` ersetzen.
+- Bei einem Wildcard-Zertifikat ohne Certresolver die Zeile mit
+  `tls.certresolver` entfernen.
+- Steht Traefik hinter einem weiteren Proxy oder NAT, sieht die Allowlist
+  dessen IP. Dann `TRAEFIK_ALLOW` anpassen oder die Zeile entfernen.
+- Der Login der Seite (`CME_WEB_USER`/`CME_WEB_PASS`) bleibt zusätzlich aktiv.
+
 ## Mit docker compose auf der Kommandozeile
 
 ```

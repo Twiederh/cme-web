@@ -1,0 +1,50 @@
+# Variante hinter einem vorhandenen Traefik (v3).
+# In Portainer als "Compose path" diese Datei angeben.
+services:
+  cme-web:
+    build: .
+    image: cme-web:latest
+    container_name: cme-web
+    restart: unless-stopped
+    environment:
+      CME_HOST: ${CME_HOST}
+      CME_USER: ${CME_USER}
+      CME_PASSWORD: ${CME_PASSWORD}
+      CME_SECRET: ${CME_SECRET:-}
+      CME_SSH_PORT: ${CME_SSH_PORT:-22}
+      CME_WEB_USER: ${CME_WEB_USER}
+      CME_WEB_PASS: ${CME_WEB_PASS}
+      CME_DEMO: ${CME_DEMO:-false}
+      TZ: Europe/Berlin
+    networks:
+      - default
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
+      # HTTPS
+      - "traefik.http.routers.cme-web.rule=Host(`${CME_DOMAIN}`)"
+      - "traefik.http.routers.cme-web.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
+      - "traefik.http.routers.cme-web.tls=true"
+      - "traefik.http.routers.cme-web.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.cme-web.middlewares=cme-web-lan,cme-web-headers"
+      # HTTP -> HTTPS
+      - "traefik.http.routers.cme-web-http.rule=Host(`${CME_DOMAIN}`)"
+      - "traefik.http.routers.cme-web-http.entrypoints=${TRAEFIK_ENTRYPOINT_HTTP:-web}"
+      - "traefik.http.routers.cme-web-http.middlewares=cme-web-https"
+      - "traefik.http.middlewares.cme-web-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.cme-web-https.redirectscheme.permanent=true"
+      # Nur aus dem eigenen Netz erreichbar
+      - "traefik.http.middlewares.cme-web-lan.ipallowlist.sourcerange=${TRAEFIK_ALLOW:-192.168.0.0/16,10.0.0.0/8,172.16.0.0/12}"
+      # Sicherheits-Header
+      - "traefik.http.middlewares.cme-web-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.cme-web-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.cme-web-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.cme-web-headers.headers.referrerPolicy=same-origin"
+      # Ziel im Container
+      - "traefik.http.services.cme-web.loadbalancer.server.port=8080"
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-proxy}
