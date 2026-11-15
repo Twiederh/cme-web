@@ -6,6 +6,8 @@ services:
     image: cme-web:latest
     container_name: cme-web
     restart: unless-stopped
+    ports:
+      - "${CME_WEB_PORT:-8080}:8080"
     environment:
       CME_HOST: ${CME_HOST}
       CME_USER: ${CME_USER}
