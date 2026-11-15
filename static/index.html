@@ -16,6 +16,7 @@
       --warn: #e3b341; --warn-bg: #33290f; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
          background: var(--bg); color: var(--text); }
   header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--card);
@@ -66,6 +67,9 @@
   .lines { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
   .lines .ln { display: flex; gap: 6px; align-items: center; }
   .lines .ln span { width: 72px; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  label.check { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; margin-bottom: 10px; }
+  label.check input { width: auto; }
+  section.card.editing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .actions { display: flex; gap: 8px; align-items: center; }
   .msg { margin-top: 10px; padding: 8px 10px; border-radius: 7px; font-size: 13px; white-space: pre-wrap; display: none; }
   .msg.ok { display: block; background: var(--ok-bg); color: var(--ok); }
@@ -146,9 +150,10 @@
     </section>
 
     <section class="card">
-      <h2>Telefon anlegen</h2>
+      <h2 id="phone-title">Telefon anlegen</h2>
       <div class="body">
         <form id="f-phone">
+          <input type="hidden" name="edit_tag" value="">
           <div class="row">
             <div><label>MAC-Adresse *</label><input name="mac" required placeholder="70DB.98A1.0C11"></div>
             <div><label>Typ *</label><select name="type" id="sel-type"></select></div>
@@ -161,11 +166,13 @@
           <div class="lines" id="lines"></div>
           <div class="row">
             <div><label>SIP-Benutzer (leer = Nummer von Leitung 1)</label><input name="username" placeholder="automatisch"></div>
-            <div><label>SIP-Passwort (leer = zufällig)</label><input name="password" placeholder="automatisch"></div>
+            <div><label id="pw-label">SIP-Passwort (leer = zufällig)</label><input name="password" placeholder="automatisch"></div>
           </div>
+          <label class="check" id="restart-row" hidden><input type="checkbox" name="restart" checked> Telefon nach dem Speichern neu starten</label>
           <div class="actions">
-            <button class="primary" type="submit">Anlegen</button>
+            <button class="primary" type="submit" id="phone-submit">Anlegen</button>
             <button type="button" id="add-line" class="small">+ Leitung</button>
+            <button type="button" id="edit-cancel" class="small" hidden>Abbrechen</button>
           </div>
           <div class="msg" id="m-phone"></div>
         </form>
@@ -260,7 +267,8 @@ function render() {
       return `<tr><td class="mono">${esc(p.tag)}</td><td>${esc(p.description) || '<span class="muted">–</span>'}</td>
         <td>${esc(p.type)}</td><td class="mono">${esc(p.mac)}</td><td>${lines}</td>
         <td class="mono">${esc(p.ip) || '<span class="muted">–</span>'}</td><td>${st}</td>
-        <td><button class="small" data-restart="${esc(p.tag)}">Neustart</button></td></tr>`;
+        <td><div class="actions"><button class="small" data-edit="${esc(p.tag)}">Bearbeiten</button>
+          <button class="small" data-restart="${esc(p.tag)}">Neustart</button></div></td></tr>`;
     }).join("") : `<tr><td colspan="8" class="empty">Noch keine Telefone angelegt.</td></tr>`;
 
   // Rufnummern
@@ -324,17 +332,74 @@ $("#f-phone").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target, btn = f.querySelector("button[type=submit]"), m = $("#m-phone");
   const fd = new FormData(f);
-  const body = Object.fromEntries([...fd.entries()].filter(([k]) => k !== "dn"));
+  const editTag = fd.get("edit_tag");
+  const body = Object.fromEntries([...fd.entries()].filter(([k]) => k !== "dn" && k !== "edit_tag" && k !== "restart"));
   body.dns = fd.getAll("dn").filter(Boolean);
+  body.restart = fd.get("restart") === "on";
   btn.disabled = true;
-  const j = await api("/api/phones", { method: "POST", body: JSON.stringify(body) });
+  const j = editTag
+    ? await api(`/api/phones/${editTag}`, { method: "PUT", body: JSON.stringify(body) })
+    : await api("/api/phones", { method: "POST", body: JSON.stringify(body) });
   btn.disabled = false;
-  if (j.ok) {
+  if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
+  if (editTag) {
+    showMsg(m, true, j.unchanged ? "Keine Änderungen." :
+      `Telefon gespeichert (voice register pool ${j.tag}).` + (j.password ? `\nSIP-Benutzer: ${j.username}  Passwort: ${j.password}` : "") +
+      `\n\n${j.config.join("\n")}`);
+    endEdit(false);
+  } else {
     showMsg(m, true, `Telefon angelegt (voice register pool ${j.tag}).\nSIP-Benutzer: ${j.username}  Passwort: ${j.password}\n\n${j.config.join("\n")}`);
-    f.reset(); $("#lines").innerHTML = ""; addLine(); load(true);
-  } else showMsg(m, false, j.error || "Fehler");
+    resetPhoneForm();
+  }
+  load(true);
 });
 
+function resetPhoneForm() {
+  const f = $("#f-phone");
+  f.reset(); f.edit_tag.value = "";
+  $("#lines").innerHTML = ""; addLine();
+}
+
+function startEdit(tag) {
+  const p = data.phones.find(x => x.tag === tag);
+  if (!p) return;
+  const f = $("#f-phone");
+  f.reset();
+  f.edit_tag.value = tag;
+  f.mac.value = p.mac;
+  if (![...f.type.options].some(o => o.value === p.type)) f.type.add(new Option(p.type, p.type));
+  f.type.value = p.type;
+  f.description.value = p.description || "";
+  f.codec.value = p.codec || "g711alaw";
+  f.username.value = p.username || "";
+  f.password.value = "";
+  $("#lines").innerHTML = "";
+  (p.lines.length ? p.lines : [{ dn: "" }]).forEach(l => addLine(l.dn));
+  $("#phone-title").textContent = `Telefon bearbeiten · Pool ${tag}` + (p.description ? ` (${p.description})` : "");
+  $("#phone-submit").textContent = "Änderungen speichern";
+  $("#pw-label").textContent = "SIP-Passwort (leer = unverändert)";
+  f.password.placeholder = "unverändert";
+  $("#restart-row").hidden = false;
+  $("#edit-cancel").hidden = false;
+  $("#m-phone").className = "msg";
+  const card = f.closest("section.card");
+  card.classList.add("editing");
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function endEdit(clearMsg = true) {
+  resetPhoneForm();
+  $("#phone-title").textContent = "Telefon anlegen";
+  $("#phone-submit").textContent = "Anlegen";
+  $("#pw-label").textContent = "SIP-Passwort (leer = zufällig)";
+  $("#f-phone").password.placeholder = "automatisch";
+  $("#restart-row").hidden = true;
+  $("#edit-cancel").hidden = true;
+  $("#f-phone").closest("section.card").classList.remove("editing");
+  if (clearMsg) $("#m-phone").className = "msg";
+}
+
+$("#edit-cancel").addEventListener("click", () => endEdit());
 $("#add-line").addEventListener("click", () => addLine());
 $("#refresh").addEventListener("click", () => load(true));
 
@@ -344,6 +409,11 @@ $("#save").addEventListener("click", async () => {
   b.disabled = false;
   if (!j.ok) alert("Speichern fehlgeschlagen:\n" + (j.error || j.output));
   load(true);
+});
+
+document.addEventListener("click", (e) => {
+  const tag = e.target.dataset?.edit;
+  if (tag) startEdit(tag);
 });
 
 document.addEventListener("click", async (e) => {

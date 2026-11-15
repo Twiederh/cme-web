@@ -163,7 +163,7 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur = dns.setdefault(tag, {"tag": tag, "number": "", "name": "", "label": ""})
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "type": "", "description": "",
-                                             "username": "", "numbers": []})
+                                             "username": "", "codec": "", "numbers": []})
             cur["_kind"] = kind
             continue
         if not line.startswith(" "):
@@ -185,6 +185,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["description"] = s.split(None, 1)[1]
             elif s.startswith("username "):
                 cur["username"] = s.split()[1]
+            elif s.startswith("codec "):
+                cur["codec"] = s.split()[1]
             else:
                 mm = re.match(r"number (\d+) dn (\d+)", s)
                 if mm:
@@ -245,6 +247,8 @@ class Router:
 
 class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
+
+    SINGLE = ("id mac", "type", "description", "codec", "username", "number", "name", "label")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -318,10 +322,28 @@ class DemoRouter:
                         block = None
                     continue
                 if block and line.strip() not in ("create profile", "restart", "reset"):
-                    i = self.cfg.index(block) + 1
-                    while i < len(self.cfg) and self.cfg[i].startswith(" "):
-                        i += 1
-                    self.cfg.insert(i, line)
+                    start = self.cfg.index(block) + 1
+                    end = start
+                    while end < len(self.cfg) and self.cfg[end].startswith(" "):
+                        end += 1
+                    s = line.strip()
+                    if s.startswith("no "):
+                        target = " " + s[3:]
+                        for j in range(start, end):
+                            if self.cfg[j] == target or self.cfg[j].startswith(target + " "):
+                                del self.cfg[j]
+                                break
+                        continue
+                    key = next((k for k in self.SINGLE if s.startswith(k + " ")), None)
+                    if key == "number" and " dn " in s:      # Pool-Leitung: "number 1 dn 3"
+                        key = " ".join(s.split()[:2])
+                    if key:
+                        for j in range(start, end):
+                            if self.cfg[j].strip().startswith(key + " "):
+                                del self.cfg[j]
+                                end -= 1
+                                break
+                    self.cfg.insert(end, line)
         return "\n".join(lines)
 
     def save(self) -> str:
@@ -443,9 +465,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         res["tag"] = tag
         return jsonify(res), (200 if res["ok"] else 400)
 
-    @app.post("/api/phones")
-    def add_phone():
-        data = request.get_json(force=True) or {}
+    def phone_input(data: dict, st: dict, own_tag: str | None) -> dict:
+        """Prueft die Formulardaten fuer Anlegen und Bearbeiten."""
         mac = norm_mac(data.get("mac"))
         ptype = check(data.get("type"), RE_TYPE, "Telefontyp")
         desc = check(data.get("description"), RE_TEXT, "Beschreibung", required=False)
@@ -455,28 +476,85 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         dn_tags = [str(d) for d in (data.get("dns") or []) if str(d).strip()]
         if not dn_tags:
             raise InputError("Mindestens eine Rufnummer auswaehlen.")
-        st = get_status(force=True)
         known = {n["tag"]: n for n in st["numbers"]}
         for d in dn_tags:
             if d not in known:
                 raise InputError(f"Rufnummer mit Tag {d} gibt es nicht.")
         if len(set(dn_tags)) != len(dn_tags):
             raise InputError("Eine Rufnummer ist doppelt ausgewaehlt.")
-        if any(p["mac"].upper() == mac for p in st["phones"]):
-            raise InputError(f"Ein Telefon mit MAC {mac} ist schon angelegt.")
-        username = check(data.get("username") or known[dn_tags[0]]["number"].lstrip("+"),
+        other = next((p for p in st["phones"] if p["mac"].upper() == mac and p["tag"] != own_tag), None)
+        if other:
+            raise InputError(f"MAC {mac} ist schon Pool {other['tag']} zugeordnet.")
+        return {"mac": mac, "type": ptype, "description": desc, "codec": codec,
+                "dns": dn_tags, "known": known}
+
+    @app.post("/api/phones")
+    def add_phone():
+        data = request.get_json(force=True) or {}
+        st = get_status(force=True)
+        v = phone_input(data, st, None)
+        username = check(data.get("username") or v["known"][v["dns"][0]]["number"].lstrip("+"),
                          RE_CRED, "Benutzername")
         password = check(data.get("password") or secrets.token_hex(6), RE_CRED, "Passwort")
         tag = str(max([int(p["tag"]) for p in st["phones"]] + [0]) + 1)
 
-        lines = [f"voice register pool {tag}", f" id mac {mac}", f" type {ptype}"]
-        lines += [f" number {i} dn {d}" for i, d in enumerate(dn_tags, 1)]
-        lines += [" dtmf-relay rtp-nte", f" codec {codec}", f" username {username} password {password}"]
-        if desc:
-            lines.append(f" description {desc}")
+        lines = [f"voice register pool {tag}", f" id mac {v['mac']}", f" type {v['type']}"]
+        lines += [f" number {i} dn {d}" for i, d in enumerate(v["dns"], 1)]
+        lines += [" dtmf-relay rtp-nte", f" codec {v['codec']}", f" username {username} password {password}"]
+        if v["description"]:
+            lines.append(f" description {v['description']}")
         lines += ["voice register global", " create profile"]
         res = apply(lines)
         res.update(tag=tag, username=username, password=password)
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.put("/api/phones/<tag>")
+    def edit_phone(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltiger Pool")
+        data = request.get_json(force=True) or {}
+        st = get_status(force=True)
+        cur = next((p for p in st["phones"] if p["tag"] == tag), None)
+        if not cur:
+            raise InputError(f"Pool {tag} gibt es nicht.")
+        v = phone_input(data, st, tag)
+
+        lines = [f"voice register pool {tag}"]
+        if v["mac"] != cur["mac"].upper():
+            if cur["mac"]:
+                lines.append(f" no id mac {cur['mac']}")
+            lines.append(f" id mac {v['mac']}")
+        if v["type"] != cur["type"]:
+            lines.append(f" type {v['type']}")
+        if v["codec"] != cur.get("codec"):
+            lines.append(f" codec {v['codec']}")
+        if v["description"] != cur["description"]:
+            lines.append(f" description {v['description']}" if v["description"] else " no description")
+
+        old_lines = [(l["ln"], l["dn"]) for l in cur["lines"]]
+        new_lines = [(str(i), d) for i, d in enumerate(v["dns"], 1)]
+        # Nur geaenderte Leitungen anfassen: erst entfernen, dann neu setzen
+        lines += [f" no number {ln} dn {dn}" for ln, dn in old_lines if (ln, dn) not in new_lines]
+        lines += [f" number {ln} dn {dn}" for ln, dn in new_lines if (ln, dn) not in old_lines]
+
+        username = (data.get("username") or "").strip()
+        password = (data.get("password") or "").strip()
+        if password:
+            username = check(username or cur["username"] or v["known"][v["dns"][0]]["number"].lstrip("+"),
+                             RE_CRED, "Benutzername")
+            password = check(password, RE_CRED, "Passwort")
+            lines.append(f" username {username} password {password}")
+        elif username and username != cur["username"]:
+            raise InputError("Fuer einen neuen SIP-Benutzer bitte auch ein Passwort angeben.")
+
+        if len(lines) == 1:
+            return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
+
+        lines += ["voice register global", " create profile"]
+        if data.get("restart", True):
+            lines += [f"voice register pool {tag}", " restart"]
+        res = apply(lines)
+        res.update(tag=tag, username=username or cur["username"], password=password or None)
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.post("/api/phones/<tag>/restart")
