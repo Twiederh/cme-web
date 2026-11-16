@@ -694,6 +694,24 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     def id_line(v: dict) -> str:
         return f" id mac {v['mac']}" if v["id_kind"] == "mac" else f" id ip {v['ip']} mask {v['mask']}"
 
+    def verify_pool(res: dict, tag: str, v: dict) -> None:
+        """Liest die Konfiguration neu und prueft, ob der Router den Pool uebernommen hat."""
+        if not res["ok"]:
+            return
+        pool = next((p for p in get_status(force=True)["phones"] if p["tag"] == tag), None)
+        problem = None
+        if pool is None:
+            problem = f"Der Router hat voice register pool {tag} nicht übernommen."
+        elif v["id_kind"] == "ip" and pool.get("id_ip") != v["ip"]:
+            problem = f"In Pool {tag} fehlt danach die IP-Kennung {v['ip']}."
+        elif v["id_kind"] == "mac" and pool.get("mac") != v["mac"]:
+            problem = f"In Pool {tag} fehlt danach die MAC {v['mac']}."
+        elif sorted(l["dn"] for l in pool["lines"]) != sorted(v["dns"]):
+            problem = f"In Pool {tag} fehlen danach Leitungen."
+        if problem:
+            res.update(ok=False, error=(f"{problem} Der Router hat die Befehle nicht übernommen. "
+                                        f"Ausgabe des Routers:\n\n{output_tail(res['output'], 40)}"))
+
     @app.post("/api/phones")
     def add_phone():
         data = request.get_json(force=True) or {}
@@ -714,19 +732,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         lines += ["voice register global", " create profile"]
         res = apply(lines)
         res.update(tag=tag, username=username, password=password)
-        if res["ok"]:
-            # Nachpruefen, ob der Router den Pool wirklich uebernommen hat
-            st2 = get_status(force=True)
-            pool = next((p for p in st2["phones"] if p["tag"] == tag), None)
-            problem = None
-            if pool is None:
-                problem = f"Der Router hat voice register pool {tag} nicht übernommen."
-            elif v["id_kind"] == "ip" and pool.get("id_ip") != v["ip"]:
-                problem = f"Pool {tag} wurde angelegt, aber ohne die IP-Kennung {v['ip']}."
-            elif v["id_kind"] == "mac" and pool.get("mac") != v["mac"]:
-                problem = f"Pool {tag} wurde angelegt, aber ohne die MAC {v['mac']}."
-            if problem:
-                res.update(ok=False, error=f"{problem} Ausgabe des Routers:\n\n{output_tail(res['output'])}")
+        verify_pool(res, tag, v)
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.put("/api/phones/<tag>")
@@ -787,6 +793,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines += [f"voice register pool {tag}", " restart"]
         res = apply(lines)
         res.update(tag=tag, username=username or cur["username"], password=password or None)
+        verify_pool(res, tag, v)
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.delete("/api/phones/<tag>")
