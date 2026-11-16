@@ -74,6 +74,7 @@
   label.check { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; margin-bottom: 10px; }
   label.check input { width: auto; }
   section.card.editing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #codec-rows select { max-width: 260px; }
   .hint { font-size: 12px; color: var(--muted); background: var(--bg); border: 1px dashed var(--line);
           border-radius: 7px; padding: 8px 10px; margin-bottom: 10px; }
   .actions { display: flex; gap: 8px; align-items: center; }
@@ -135,6 +136,27 @@
     <h2>Rufnummern <span class="count" id="c-numbers"></span></h2>
     <table><thead><tr><th>DN</th><th>Nummer</th><th>Name</th><th>Beschriftung</th><th>Telefone</th><th></th></tr></thead>
       <tbody id="t-numbers"></tbody></table>
+  </section>
+
+  <section class="card">
+    <h2>Codec-Listen <span class="count" id="c-codecs"></span></h2>
+    <table><thead><tr><th>Liste</th><th>Reihenfolge (bevorzugt zuerst)</th><th>Verwendet von</th><th></th></tr></thead>
+      <tbody id="t-codecs"></tbody></table>
+    <div class="body" style="border-top: 1px solid var(--line)">
+      <form id="f-codec">
+        <input type="hidden" name="edit_tag" value="">
+        <label id="codec-title" style="font-weight:600;color:var(--text);font-size:13px;margin-bottom:8px">Neue Codec-Liste</label>
+        <div class="lines" id="codec-rows"></div>
+        <div class="hint" id="codec-warn" hidden></div>
+        <label class="check" id="codec-restart-row" hidden><input type="checkbox" name="restart" checked> Telefone mit dieser Liste danach neu starten</label>
+        <div class="actions">
+          <button class="primary" type="submit" id="codec-submit">Anlegen</button>
+          <button type="button" id="codec-add" class="small">+ Codec</button>
+          <button type="button" id="codec-cancel" class="small" hidden>Abbrechen</button>
+        </div>
+        <div class="msg" id="m-codec"></div>
+      </form>
+    </div>
   </section>
 
   <div class="grid">
@@ -221,7 +243,7 @@
 
 <script>
 const $ = (s) => document.querySelector(s);
-let data = null, busy = false;
+let data = null, busy = false, META = { codecs: [], list_codecs: [] };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const badge = (cls, txt) => `<span class="badge ${cls}">${esc(txt)}</span>`;
@@ -317,7 +339,32 @@ function render() {
         <button class="small danger" data-delete-number="${esc(n.tag)}">Löschen</button></div></td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">Noch keine Rufnummern angelegt.</td></tr>`;
 
+  // Codec-Listen
+  const lists = d.codec_lists || [];
+  $("#c-codecs").textContent = `(${lists.length})`;
+  $("#t-codecs").innerHTML = lists.length ? lists.map(c => {
+      const users = c.pools.map(t => esc(poolName[t] || `Pool ${t}`))
+        .concat(c.dialpeers.map(t => `<span class="muted">Dial-Peer</span> ${esc(t)}`));
+      return `<tr><td class="mono">${esc(c.tag)}</td>
+        <td class="mono">${c.codecs.map(esc).join(' <span class="muted">›</span> ')}</td>
+        <td>${users.length ? users.join(", ") : '<span class="muted">nicht verwendet</span>'}</td>
+        <td><div class="actions"><button class="small" data-edit-codec="${esc(c.tag)}">Bearbeiten</button>
+          <button class="small danger" data-delete-codec="${esc(c.tag)}">Löschen</button></div></td></tr>`;
+    }).join("") : `<tr><td colspan="4" class="empty">Noch keine Codec-Listen angelegt.</td></tr>`;
+
   refreshLineSelects();
+  refreshCodecSelect();
+  if (!$("#codec-rows").children.length) resetCodecForm();
+}
+
+function refreshCodecSelect() {
+  const sel = $("#sel-codec"), v = sel.value;
+  const lists = (data && data.codec_lists) || [];
+  sel.innerHTML = `<optgroup label="Einzelner Codec">` +
+    META.codecs.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("") + `</optgroup>` +
+    (lists.length ? `<optgroup label="Codec-Liste">` + lists.map(c =>
+      `<option value="list:${esc(c.tag)}">Liste ${esc(c.tag)}: ${esc(c.codecs.join(" › "))}</option>`).join("") + `</optgroup>` : "");
+  if ([...sel.options].some(o => o.value === v)) sel.value = v;
 }
 
 function numberOptions(selected) {
@@ -480,7 +527,8 @@ function startEdit(tag) {
   if (![...f.type.options].some(o => o.value === p.type)) f.type.add(new Option(p.type, p.type));
   f.type.value = p.type;
   f.description.value = p.description || "";
-  f.codec.value = p.codec || "g711alaw";
+  refreshCodecSelect();
+  f.codec.value = p.codec_list ? `list:${p.codec_list}` : (p.codec || "g711alaw");
   f.username.value = p.username || "";
   f.password.value = "";
   $("#lines").innerHTML = "";
@@ -521,6 +569,79 @@ function updateIdKind(setType = true) {
 }
 $("#sel-idkind").addEventListener("change", () => updateIdKind());
 
+function addCodecRow(sel = "") {
+  const box = $("#codec-rows"), i = box.children.length + 1;
+  const div = document.createElement("div");
+  div.className = "ln";
+  div.innerHTML = `<span>${i}. Wahl</span><select name="c">` +
+    META.list_codecs.map(c => `<option ${c === sel ? "selected" : ""}>${esc(c)}</option>`).join("") + `</select>` +
+    (i > 1 ? `<button type="button" class="small" title="entfernen">✕</button>` : "");
+  div.querySelector("button")?.addEventListener("click", () => {
+    div.remove();
+    [...box.children].forEach((d, k) => d.querySelector("span").textContent = `${k + 1}. Wahl`);
+  });
+  box.appendChild(div);
+}
+
+function resetCodecForm() {
+  const f = $("#f-codec");
+  f.reset(); f.edit_tag.value = "";
+  $("#codec-rows").innerHTML = "";
+  addCodecRow("g722-64"); addCodecRow("g711alaw");
+}
+
+function startCodecEdit(tag) {
+  const c = data.codec_lists.find(x => x.tag === tag);
+  if (!c) return;
+  const f = $("#f-codec");
+  f.reset(); f.edit_tag.value = tag;
+  $("#codec-rows").innerHTML = "";
+  c.codecs.forEach(x => addCodecRow(x));
+  $("#codec-title").textContent = `Codec-Liste ${tag} bearbeiten`;
+  $("#codec-submit").textContent = "Änderungen speichern";
+  $("#codec-cancel").hidden = false;
+  $("#codec-restart-row").hidden = !c.pools.length;
+  const warn = $("#codec-warn");
+  warn.hidden = !c.dialpeers.length;
+  warn.textContent = c.dialpeers.length
+    ? `Achtung: Diese Liste wird auch von Dial-Peer ${c.dialpeers.join(", ")} verwendet (z. B. SIP-Trunk). ` +
+      `Eine Änderung wirkt dort sofort.` : "";
+  $("#m-codec").className = "msg";
+  const card = f.closest("section.card");
+  card.classList.add("editing");
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function endCodecEdit(clearMsg = true) {
+  resetCodecForm();
+  $("#codec-title").textContent = "Neue Codec-Liste";
+  $("#codec-submit").textContent = "Anlegen";
+  $("#codec-cancel").hidden = true;
+  $("#codec-restart-row").hidden = true;
+  $("#codec-warn").hidden = true;
+  $("#f-codec").closest("section.card").classList.remove("editing");
+  if (clearMsg) $("#m-codec").className = "msg";
+}
+
+$("#f-codec").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, btn = $("#codec-submit"), m = $("#m-codec");
+  const editTag = f.edit_tag.value;
+  const body = { codecs: [...f.querySelectorAll("select[name=c]")].map(s => s.value), restart: f.restart.checked };
+  btn.disabled = true;
+  const j = editTag
+    ? await api(`/api/codeclists/${editTag}`, { method: "PUT", body: JSON.stringify(body) })
+    : await api("/api/codeclists", { method: "POST", body: JSON.stringify(body) });
+  btn.disabled = false;
+  if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
+  showMsg(m, true, j.unchanged ? "Keine Änderungen." :
+    `Codec-Liste ${j.tag} ${editTag ? "gespeichert" : "angelegt"}.\n\n${j.config.join("\n")}`);
+  endCodecEdit(false);
+  load(true);
+});
+$("#codec-add").addEventListener("click", () => addCodecRow());
+$("#codec-cancel").addEventListener("click", () => endCodecEdit());
+
 $("#edit-cancel").addEventListener("click", () => endEdit());
 $("#add-line").addEventListener("click", () => addLine());
 $("#refresh").addEventListener("click", () => load(true));
@@ -538,6 +659,21 @@ document.addEventListener("click", (e) => {
   if (tag) startEdit(tag);
   const ntag = e.target.dataset?.editNumber;
   if (ntag) startNumberEdit(ntag);
+  const ctag = e.target.dataset?.editCodec;
+  if (ctag) startCodecEdit(ctag);
+});
+
+document.addEventListener("click", async (e) => {
+  const tag = e.target.dataset?.deleteCodec;
+  if (!tag) return;
+  const c = data.codec_lists.find(x => x.tag === tag);
+  if (!confirm(`Codec-Liste ${tag} (${c?.codecs.join(" › ")}) wirklich löschen?`)) return;
+  e.target.disabled = true;
+  const j = await api(`/api/codeclists/${tag}`, { method: "DELETE" });
+  e.target.disabled = false;
+  if (!j.ok) { alert(j.error || "Fehler"); return; }
+  if ($("#f-codec").edit_tag.value === tag) endCodecEdit();
+  load(true);
 });
 
 document.addEventListener("click", async (e) => {
@@ -589,6 +725,7 @@ $("#raw-run").addEventListener("click", async () => {
 
 (async () => {
   const meta = await api("/api/meta");
+  META = meta;
   const me = await api("/api/me");
   if (me.user) {
     $("#user-name").textContent = me.user.name + (me.user.provider ? ` (${me.user.provider})` : "");
@@ -597,7 +734,8 @@ $("#raw-run").addEventListener("click", async () => {
   $("#demo").hidden = !meta.demo;
   $("#sel-type").innerHTML = meta.phone_types.map(t =>
     `<option value="${esc(t)}" ${t === "8851" ? "selected" : ""}>${t ? esc(t) : "Fremdgerät (ohne Typ)"}</option>`).join("");
-  $("#sel-codec").innerHTML = meta.codecs.map(c => `<option>${c}</option>`).join("");
+  refreshCodecSelect();
+  $("#sel-codec").value = "g711alaw";
   $("#raw-cmd").innerHTML = meta.raw_commands.map(c => `<option>${esc(c)}</option>`).join("");
   await load();
   setInterval(() => { if (!document.hidden) load(); }, 30000);
