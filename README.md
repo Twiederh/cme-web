@@ -36,7 +36,7 @@ oder unter **GitOps updates** automatisches Aktualisieren einschalten.
 ## Hinter Traefik
 
 Für einen vorhandenen Traefik (v3) gibt es `docker-compose.traefik.yml`.
-Sie veröffentlicht keinen Port, sondern hängt den Container ins Traefik-Netz
+Sie veröffentlicht keinen Port (Zugriff nur über Traefik), sondern hängt den Container ins Traefik-Netz
 und setzt die Labels für HTTPS, die Weiterleitung von HTTP auf HTTPS,
 eine IP-Allowlist (nur LAN) und Sicherheits-Header.
 
@@ -174,6 +174,37 @@ Rufnummern des Telefons bleiben erhalten.
 Rufnummer löschen: Hängt die Nummer noch an Telefonen, wird sie dort zuerst mit
 `no number <n> dn <tag>` entfernt (die Seite fragt vorher nach), dann
 `no voice register dn <tag>`, `create profile` und `restart` der betroffenen Telefone.
+
+### Fremdgeräte (z. B. Gigaset-Basisstation)
+
+SIP-Geräte anderer Hersteller werden über ihre **IP-Adresse** erkannt statt über
+die MAC. Im Formular „Telefon anlegen“ dazu *Erkennung über: IP-Adresse* wählen,
+der Typ steht dann auf „Fremdgerät (ohne Typ)“:
+```
+voice register pool <tag>
+ id ip 192.168.1.60 mask 255.255.255.255
+ number 1 dn <dn>
+ number 2 dn <dn> ...
+ dtmf-relay rtp-nte
+ codec g711alaw
+ username <benutzer> password <passwort>
+ description Gigaset
+```
+Das Gerät braucht eine feste IP (DHCP-Reservierung). Am Gerät je Mobilteil bzw.
+VoIP-Verbindung eintragen:
+
+| Gigaset | Wert |
+|---|---|
+| Domain / Registrar / Proxy | IP des Routers, Port 5060 |
+| Benutzername (SIP-User) | die Rufnummer der Leitung, z. B. `110` |
+| Authentifizierungsname | SIP-Benutzer aus dem Formular |
+| Passwort | SIP-Passwort aus dem Formular |
+
+Mehrere Mobilteile: je Mobilteil eine Rufnummer anlegen und alle als Leitungen
+desselben Pools eintragen; sie teilen sich Authentifizierungsname und Passwort.
+
+Damit CME die Anmeldedaten auch wirklich prüft, sollte unter
+`voice register global` der Befehl `authenticate register` gesetzt sein.
 
 ### Shared Lines
 
