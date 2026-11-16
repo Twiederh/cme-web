@@ -19,7 +19,8 @@ Demo ohne Router:
   .venv/bin/python3 cme_web.py --demo
 
 Optionen auch per Umgebungsvariable: CME_HOST, CME_USER, CME_PASSWORD,
-CME_SECRET, CME_WEB_USER / CME_WEB_PASS (Login fuer die Weboberflaeche).
+CME_SECRET. Anmeldung an der Weboberflaeche per OIDC (Authentik, Pocket-ID, ...)
+und/oder lokalem Benutzer CME_WEB_USER / CME_WEB_PASS - siehe auth.py.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 BASE = Path(__file__).resolve().parent
 
@@ -375,15 +376,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     def healthz():
         return "ok"
 
-    @app.before_request
-    def auth():
-        if not web_user or request.path == "/healthz":
-            return None
-        a = request.authorization
-        if not a or not (secrets.compare_digest(a.username or "", web_user)
-                         and secrets.compare_digest(a.password or "", web_pass)):
-            return Response("Login erforderlich", 401, {"WWW-Authenticate": 'Basic realm="CME"'})
-        return None
+    from auth import setup_auth
+    app.config["AUTH"] = setup_auth(app, BASE, web_user, web_pass)
 
     @app.errorhandler(InputError)
     def on_input_error(e):
@@ -671,9 +665,6 @@ def main():
 
     web_user = os.environ.get("CME_WEB_USER", "")
     web_pass = os.environ.get("CME_WEB_PASS", "")
-    if args.listen not in ("127.0.0.1", "localhost", "::1") and not web_user:
-        print("Hinweis: Die Oberflaeche ist im Netz erreichbar, aber ohne Login. "
-              "Setze CME_WEB_USER und CME_WEB_PASS.")
 
     if args.demo:
         router = DemoRouter()
@@ -692,6 +683,12 @@ def main():
             print(f"Warnung: Router nicht erreichbar ({type(e).__name__}: {e})", flush=True)
 
     app = create_app(router, web_user, web_pass)
+    auth = app.config["AUTH"]
+    if auth["enabled"]:
+        print("Anmeldung: " + ", ".join(auth["methods"]), flush=True)
+    elif args.listen not in ("127.0.0.1", "localhost", "::1"):
+        print("Hinweis: Die Oberflaeche ist im Netz erreichbar, aber ohne Login. "
+              "Setze OIDC_PROVIDERS oder CME_WEB_USER/CME_WEB_PASS.", flush=True)
     print(f"Oeffne http://{args.listen}:{args.web_port}", flush=True)
     try:
         from waitress import serve
