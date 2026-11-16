@@ -126,24 +126,30 @@
 
   <section class="card">
     <h2>Rufnummern <span class="count" id="c-numbers"></span></h2>
-    <table><thead><tr><th>DN</th><th>Nummer</th><th>Name</th><th>Beschriftung</th><th>Telefone</th></tr></thead>
+    <table><thead><tr><th>DN</th><th>Nummer</th><th>Name</th><th>Beschriftung</th><th>Telefone</th><th></th></tr></thead>
       <tbody id="t-numbers"></tbody></table>
   </section>
 
   <div class="grid">
     <section class="card">
-      <h2>Rufnummer anlegen</h2>
+      <h2 id="number-title">Rufnummer anlegen</h2>
       <div class="body">
         <form id="f-number">
+          <input type="hidden" name="edit_tag" value="">
           <div class="row">
             <div><label>Nummer *</label><input name="number" required placeholder="104" pattern="\+?[0-9*#]{1,32}"></div>
             <div><label>Name</label><input name="name" maxlength="40" placeholder="Wohnzimmer"></div>
           </div>
           <div class="row">
             <div><label>Beschriftung am Telefon</label><input name="label" maxlength="40" placeholder="Wohnzimmer"></div>
-            <div></div>
+            <div><label>Max. gleichzeitige Anrufe (Shared Line)</label><input name="max_calls" type="number" min="1" max="50" placeholder="Standard" disabled></div>
           </div>
-          <div class="actions"><button class="primary" type="submit">Anlegen</button></div>
+          <label class="check"><input type="checkbox" name="shared" id="cb-shared"> Shared Line – Nummer kann auf mehreren Telefonen liegen</label>
+          <label class="check" id="number-restart-row" hidden><input type="checkbox" name="restart" checked> Betroffene Telefone nach dem Speichern neu starten</label>
+          <div class="actions">
+            <button class="primary" type="submit" id="number-submit">Anlegen</button>
+            <button type="button" id="number-cancel" class="small" hidden>Abbrechen</button>
+          </div>
           <div class="msg" id="m-number"></div>
         </form>
       </div>
@@ -275,16 +281,28 @@ function render() {
   $("#c-numbers").textContent = `(${d.numbers.length})`;
   const poolName = Object.fromEntries(d.phones.map(p => [p.tag, p.description || `Pool ${p.tag}`]));
   $("#t-numbers").innerHTML = d.numbers.length ? d.numbers.map(n => `<tr>
-      <td class="mono">${esc(n.tag)}</td><td class="mono">${esc(n.number)}</td><td>${esc(n.name)}</td><td>${esc(n.label)}</td>
-      <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}</td></tr>`).join("")
-    : `<tr><td colspan="5" class="empty">Noch keine Rufnummern angelegt.</td></tr>`;
+      <td class="mono">${esc(n.tag)}</td>
+      <td><span class="mono">${esc(n.number)}</span> ${n.shared ? badge("warn", "Shared" + (n.max_calls ? ` · max ${n.max_calls}` : "")) : ""}</td>
+      <td>${esc(n.name)}</td><td>${esc(n.label)}</td>
+      <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}</td>
+      <td><button class="small" data-edit-number="${esc(n.tag)}">Bearbeiten</button></td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">Noch keine Rufnummern angelegt.</td></tr>`;
 
   refreshLineSelects();
 }
 
 function numberOptions(selected) {
-  return `<option value="">– Rufnummer wählen –</option>` + data.numbers.map(n =>
-    `<option value="${esc(n.tag)}" ${String(selected) === n.tag ? "selected" : ""}>${esc(n.number)}${n.name ? " · " + esc(n.name) : ""}</option>`).join("");
+  const own = $("#f-phone").edit_tag.value;
+  const poolName = Object.fromEntries(data.phones.map(p => [p.tag, p.description || `Pool ${p.tag}`]));
+  return `<option value="">– Rufnummer wählen –</option>` + data.numbers.map(n => {
+    const others = n.pools.filter(t => t !== own);
+    const blocked = others.length && !n.shared && String(selected) !== n.tag;
+    let hint = "";
+    if (n.shared) hint = " · Shared";
+    else if (others.length) hint = ` · belegt (${others.map(t => poolName[t] || `Pool ${t}`).join(", ")})`;
+    return `<option value="${esc(n.tag)}" ${String(selected) === n.tag ? "selected" : ""} ${blocked ? "disabled" : ""}>` +
+      `${esc(n.number)}${n.name ? " · " + esc(n.name) : ""}${esc(hint)}</option>`;
+  }).join("");
 }
 function addLine(sel = "") {
   const box = $("#lines"), i = box.children.length + 1;
@@ -321,12 +339,71 @@ function showMsg(el, ok, text) { el.className = "msg " + (ok ? "ok" : "bad"); el
 $("#f-number").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target, btn = f.querySelector("button[type=submit]"), m = $("#m-number");
+  const editTag = f.edit_tag.value;
+  const body = {
+    number: f.number.value, name: f.name.value, label: f.label.value,
+    shared: f.shared.checked, max_calls: f.shared.checked ? f.max_calls.value : "",
+    restart: f.restart.checked,
+  };
   btn.disabled = true;
-  const j = await api("/api/numbers", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(f))) });
+  const j = editTag
+    ? await api(`/api/numbers/${editTag}`, { method: "PUT", body: JSON.stringify(body) })
+    : await api("/api/numbers", { method: "POST", body: JSON.stringify(body) });
   btn.disabled = false;
-  if (j.ok) { showMsg(m, true, `Rufnummer angelegt (voice register dn ${j.tag}).\n${j.config.join("\n")}`); f.reset(); load(true); }
-  else showMsg(m, false, j.error || "Fehler");
+  if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
+  if (editTag) {
+    showMsg(m, true, j.unchanged ? "Keine Änderungen." : `Rufnummer gespeichert (voice register dn ${j.tag}).\n\n${j.config.join("\n")}`);
+    endNumberEdit(false);
+  } else {
+    showMsg(m, true, `Rufnummer angelegt (voice register dn ${j.tag}).\n${j.config.join("\n")}`);
+    resetNumberForm();
+  }
+  load(true);
 });
+
+function resetNumberForm() {
+  const f = $("#f-number");
+  f.reset(); f.edit_tag.value = ""; f.max_calls.disabled = true;
+}
+
+function startNumberEdit(tag) {
+  const n = data.numbers.find(x => x.tag === tag);
+  if (!n) return;
+  const f = $("#f-number");
+  f.reset();
+  f.edit_tag.value = tag;
+  f.number.value = n.number;
+  f.name.value = n.name || "";
+  f.label.value = n.label || "";
+  f.shared.checked = !!n.shared;
+  f.max_calls.value = n.max_calls || "";
+  f.max_calls.disabled = !n.shared;
+  $("#number-title").textContent = `Rufnummer bearbeiten · DN ${tag}` + (n.name ? ` (${n.name})` : "");
+  $("#number-submit").textContent = "Änderungen speichern";
+  $("#number-restart-row").hidden = !n.pools.length;
+  $("#number-cancel").hidden = false;
+  $("#m-number").className = "msg";
+  const card = f.closest("section.card");
+  card.classList.add("editing");
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function endNumberEdit(clearMsg = true) {
+  resetNumberForm();
+  $("#number-title").textContent = "Rufnummer anlegen";
+  $("#number-submit").textContent = "Anlegen";
+  $("#number-restart-row").hidden = true;
+  $("#number-cancel").hidden = true;
+  $("#f-number").closest("section.card").classList.remove("editing");
+  if (clearMsg) $("#m-number").className = "msg";
+}
+
+$("#cb-shared").addEventListener("change", (e) => {
+  const mc = $("#f-number").max_calls;
+  mc.disabled = !e.target.checked;
+  if (!e.target.checked) mc.value = "";
+});
+$("#number-cancel").addEventListener("click", () => endNumberEdit());
 
 $("#f-phone").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -375,6 +452,7 @@ function startEdit(tag) {
   f.password.value = "";
   $("#lines").innerHTML = "";
   (p.lines.length ? p.lines : [{ dn: "" }]).forEach(l => addLine(l.dn));
+  refreshLineSelects();
   $("#phone-title").textContent = `Telefon bearbeiten · Pool ${tag}` + (p.description ? ` (${p.description})` : "");
   $("#phone-submit").textContent = "Änderungen speichern";
   $("#pw-label").textContent = "SIP-Passwort (leer = unverändert)";
@@ -414,6 +492,8 @@ $("#save").addEventListener("click", async () => {
 document.addEventListener("click", (e) => {
   const tag = e.target.dataset?.edit;
   if (tag) startEdit(tag);
+  const ntag = e.target.dataset?.editNumber;
+  if (ntag) startNumberEdit(ntag);
 });
 
 document.addEventListener("click", async (e) => {

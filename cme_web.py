@@ -160,7 +160,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
         if m:
             kind, tag = m.groups()
             if kind == "dn":
-                cur = dns.setdefault(tag, {"tag": tag, "number": "", "name": "", "label": ""})
+                cur = dns.setdefault(tag, {"tag": tag, "number": "", "name": "", "label": "",
+                                           "shared": False, "max_calls": ""})
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "type": "", "description": "",
                                              "username": "", "codec": "", "numbers": []})
@@ -173,6 +174,11 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
             continue
         s = line.strip()
         if cur["_kind"] == "dn":
+            if s == "shared-line" or s.startswith("shared-line "):
+                cur["shared"] = True
+                mc = re.search(r"max-calls (\d+)", s)
+                cur["max_calls"] = mc.group(1) if mc else ""
+                continue
             for key in ("number", "name", "label"):
                 if s.startswith(key + " "):
                     cur[key] = s[len(key) + 1:].strip()
@@ -248,7 +254,8 @@ class Router:
 class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
-    SINGLE = ("id mac", "type", "description", "codec", "username", "number", "name", "label")
+    SINGLE = ("id mac", "type", "description", "codec", "username", "number", "name", "label",
+              "shared-line")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -258,10 +265,13 @@ class DemoRouter:
             "voice register dn  1", " number 101", " name Thomas", " label Thomas Buero",
             "voice register dn  2", " number 102", " name Kueche", " label Kueche",
             "voice register dn  3", " number 103", " name Flur",
+            "voice register dn  4", " number 100", " name Zentrale", " label Zentrale",
+            " shared-line max-calls 4",
             "voice register pool  1", " id mac 70DB.98A1.0C11", " type 8851", " number 1 dn 1",
-            " number 2 dn 2", " description Buero Thomas", " username 101 password x",
+            " number 2 dn 4", " description Buero Thomas", " username 101 password x",
             " codec g711alaw",
             "voice register pool  2", " id mac 00EB.D5C3.4F02", " type 8865", " number 1 dn 2",
+            " number 2 dn 4",
             " description Kueche", " username 102 password x", " codec g711alaw",
             "voice register pool  3", " id mac 6C41.0E22.9A03", " type 6901", " number 1 dn 3",
             " description Flur", " username 103 password x", " codec g711alaw",
@@ -334,12 +344,13 @@ class DemoRouter:
                                 del self.cfg[j]
                                 break
                         continue
-                    key = next((k for k in self.SINGLE if s.startswith(k + " ")), None)
+                    key = next((k for k in self.SINGLE if s == k or s.startswith(k + " ")), None)
                     if key == "number" and " dn " in s:      # Pool-Leitung: "number 1 dn 3"
                         key = " ".join(s.split()[:2])
                     if key:
                         for j in range(start, end):
-                            if self.cfg[j].strip().startswith(key + " "):
+                            t = self.cfg[j].strip()
+                            if t == key or t.startswith(key + " "):
                                 del self.cfg[j]
                                 end -= 1
                                 break
@@ -446,23 +457,78 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     def status():
         return jsonify(get_status(force=request.args.get("force") == "1"))
 
-    @app.post("/api/numbers")
-    def add_number():
-        data = request.get_json(force=True) or {}
+    def number_input(data: dict) -> dict:
         number = check(data.get("number"), RE_NUMBER, "Rufnummer")
         name = check(data.get("name"), RE_TEXT, "Name", required=False)
         label = check(data.get("label"), RE_TEXT, "Beschriftung", required=False)
+        shared = bool(data.get("shared"))
+        max_calls = str(data.get("max_calls") or "").strip()
+        if max_calls and (not max_calls.isdigit() or not 1 <= int(max_calls) <= 50):
+            raise InputError("Max. Anrufe muss eine Zahl zwischen 1 und 50 sein.")
+        return {"number": number, "name": name, "label": label, "shared": shared,
+                "max_calls": max_calls if shared else ""}
+
+    def shared_line_cmd(max_calls: str) -> str:
+        return f" shared-line max-calls {max_calls}" if max_calls else " shared-line"
+
+    @app.post("/api/numbers")
+    def add_number():
+        data = request.get_json(force=True) or {}
+        v = number_input(data)
         st = get_status(force=True)
-        if any(n["number"] == number for n in st["numbers"]):
-            raise InputError(f"Rufnummer {number} gibt es schon.")
+        if any(n["number"] == v["number"] for n in st["numbers"]):
+            raise InputError(f"Rufnummer {v['number']} gibt es schon.")
         tag = str(max([int(n["tag"]) for n in st["numbers"]] + [0]) + 1)
-        lines = [f"voice register dn {tag}", f" number {number}"]
-        if name:
-            lines.append(f" name {name}")
-        if label:
-            lines.append(f" label {label}")
+        lines = [f"voice register dn {tag}", f" number {v['number']}"]
+        if v["name"]:
+            lines.append(f" name {v['name']}")
+        if v["label"]:
+            lines.append(f" label {v['label']}")
+        if v["shared"]:
+            lines.append(shared_line_cmd(v["max_calls"]))
         res = apply(lines)
         res["tag"] = tag
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.put("/api/numbers/<tag>")
+    def edit_number(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltige Rufnummer")
+        data = request.get_json(force=True) or {}
+        v = number_input(data)
+        st = get_status(force=True)
+        cur = next((n for n in st["numbers"] if n["tag"] == tag), None)
+        if not cur:
+            raise InputError(f"Rufnummer mit DN {tag} gibt es nicht.")
+        if any(n["number"] == v["number"] and n["tag"] != tag for n in st["numbers"]):
+            raise InputError(f"Rufnummer {v['number']} gibt es schon.")
+
+        lines = [f"voice register dn {tag}"]
+        if v["number"] != cur["number"]:
+            lines.append(f" number {v['number']}")
+        for key in ("name", "label"):
+            if v[key] != cur[key]:
+                lines.append(f" {key} {v[key]}" if v[key] else f" no {key}")
+        if v["shared"] and (not cur["shared"] or v["max_calls"] != cur["max_calls"]):
+            # Direkt neu setzen; ein "no shared-line" vorher wuerde der Router bei
+            # einer DN auf mehreren Telefonen ablehnen.
+            lines.append(shared_line_cmd(v["max_calls"]))
+        elif not v["shared"] and cur["shared"]:
+            if len(cur["pools"]) > 1:
+                raise InputError(
+                    "Die Nummer liegt auf mehreren Telefonen (Pool " + ", ".join(cur["pools"]) +
+                    "). Erst dort entfernen, dann Shared Line ausschalten.")
+            lines.append(" no shared-line")
+
+        if len(lines) == 1:
+            return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
+
+        lines += ["voice register global", " create profile"]
+        if data.get("restart", True):
+            for p in cur["pools"]:
+                lines += [f"voice register pool {p}", " restart"]
+        res = apply(lines)
+        res.update(tag=tag, restarted=cur["pools"] if data.get("restart", True) else [])
         return jsonify(res), (200 if res["ok"] else 400)
 
     def phone_input(data: dict, st: dict, own_tag: str | None) -> dict:
@@ -482,6 +548,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                 raise InputError(f"Rufnummer mit Tag {d} gibt es nicht.")
         if len(set(dn_tags)) != len(dn_tags):
             raise InputError("Eine Rufnummer ist doppelt ausgewaehlt.")
+        for d in dn_tags:
+            others = [p for p in known[d]["pools"] if p != own_tag]
+            if others and not known[d]["shared"]:
+                raise InputError(
+                    f"Rufnummer {known[d]['number']} ist schon Pool {', '.join(others)} zugeordnet. "
+                    "Fuer mehrere Telefone die Nummer zuerst als Shared Line markieren.")
         other = next((p for p in st["phones"] if p["mac"].upper() == mac and p["tag"] != own_tag), None)
         if other:
             raise InputError(f"MAC {mac} ist schon Pool {other['tag']} zugeordnet.")

@@ -1,7 +1,8 @@
 # CME Web – Weboberfläche für Cisco Call Manager Express (SIP)
 
 Zeigt den Status der SIP-Trunks, Dial-Peers, SIP-Telefone und Rufnummern
-und legt Rufnummern (`voice register dn`) und Telefone (`voice register pool`) an.
+und legt Rufnummern (`voice register dn`) und Telefone (`voice register pool`) an
+oder bearbeitet sie – einschließlich Shared Lines.
 Der Container verbindet sich per SSH (netmiko) mit dem Router.
 
 ## Installation mit Portainer
@@ -98,6 +99,27 @@ voice register pool <tag>
 voice register global
  create profile
 ```
+
+Telefon bearbeiten: Es werden nur geänderte Werte geschickt (z. B. `type`,
+`description`, `no number 2 dn 5` / `number 2 dn 7`, bei neuer MAC erst
+`no id mac <alt>`), danach `create profile` und optional `restart` für den Pool.
+
+Rufnummer bearbeiten: `number`, `name`/`no name`, `label`/`no label` und
+Shared Line; danach `create profile` und optional `restart` für alle Telefone,
+auf denen die Nummer liegt.
+
+### Shared Lines
+
+Eine Rufnummer, die auf mehreren Telefonen klingeln soll, wird im Formular
+„Rufnummer anlegen/bearbeiten“ als **Shared Line** markiert:
+```
+voice register dn <tag>
+ shared-line [max-calls <n>]
+```
+Erst dann lässt sie sich in „Telefon anlegen/bearbeiten“ mehreren Telefonen als
+Leitung zuordnen. Nummern ohne Shared Line, die schon an einem anderen Telefon
+hängen, sind in der Auswahl gesperrt. Shared Line ausschalten geht erst, wenn die
+Nummer nur noch auf einem Telefon liegt.
 
 Geänderte Konfiguration wird erst mit „Konfiguration speichern“ (`write memory`)
 dauerhaft gespeichert.
