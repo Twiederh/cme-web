@@ -44,6 +44,8 @@ PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "ATA1
 CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8"]
 # Codecs fuer Codec-Listen (voice class codec); was der Router kennt, haengt von der IOS-Version ab
 LIST_CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8", "g729br8", "ilbc", "opus"]
+# Arten von Sammelgruppen (voice hunt-group)
+HUNT_TYPES = ["parallel", "sequential", "peer", "longest-idle"]
 
 # Nur diese show-Befehle duerfen ueber die Oberflaeche roh abgefragt werden
 RAW_COMMANDS = [
@@ -59,6 +61,8 @@ RAW_COMMANDS = [
     "show running-config | section voice register",
     "show running-config | section dial-peer",
     "show running-config | section voice class codec",
+    "show running-config | section voice hunt-group",
+    "show voice hunt-group",
     "show running-config | section sip-ua",
     "show version | include uptime|IOS",
 ]
@@ -238,6 +242,41 @@ def parse_codec_classes(out: str) -> dict[str, dict]:
     return lists
 
 
+def parse_hunt_groups(out: str) -> dict[str, dict]:
+    """show running-config | section voice hunt-group -> {tag: {...}}"""
+    groups: dict[str, dict] = {}
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"^voice hunt-group\s+(\d+)\s+(\S+)", line)
+        if m:
+            cur = groups.setdefault(m.group(1), {"tag": m.group(1), "type": m.group(2).lower(),
+                                                 "pilot": "", "secondary": "", "list": [],
+                                                 "timeout": "", "final": "", "name": "", "hops": ""})
+            continue
+        if not line.startswith(" "):
+            cur = None
+            continue
+        if cur is None:
+            continue
+        s = line.strip()
+        if s.startswith("pilot "):
+            parts = s.split()
+            cur["pilot"] = parts[1]
+            if len(parts) > 3 and parts[2] == "secondary":
+                cur["secondary"] = parts[3]
+        elif s.startswith("list "):
+            cur["list"] = [x for x in s[5:].replace(" ", "").split(",") if x]
+        elif s.startswith("timeout "):
+            cur["timeout"] = s.split(None, 1)[1].replace(" ", "")
+        elif s.startswith("final "):
+            cur["final"] = s.split()[1]
+        elif s.startswith("name "):
+            cur["name"] = s[5:].strip()
+        elif s.startswith("hops "):
+            cur["hops"] = s.split()[1]
+    return groups
+
+
 def parse_dialpeer_codecs(out: str) -> dict[str, list[str]]:
     """show running-config | section dial-peer voice -> {codec-list-tag: [dial-peer-tags]}"""
     used: dict[str, list[str]] = {}
@@ -346,7 +385,7 @@ class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
     SINGLE = ("id mac", "id ip", "type", "description", "voice-class codec", "codec", "username",
-              "number", "name", "label", "shared-line")
+              "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -372,6 +411,7 @@ class DemoRouter:
             "voice class codec 1", " codec preference 1 g711alaw", " codec preference 2 g711ulaw",
             "voice class codec 2", " codec preference 1 g722-64", " codec preference 2 g711alaw",
             " codec preference 3 g711ulaw",
+            "voice hunt-group 1 parallel", " pilot 199", " list 101,102", " timeout 20", " name Alle",
         ]
         self.dialpeers = ("dial-peer voice 100 voip\n description Trunk raus\n destination-pattern 0T\n"
                           " session protocol sipv2\n session target sip-server\n voice-class codec 1\n"
@@ -384,6 +424,8 @@ class DemoRouter:
             return "\n".join(l for l in self._blocks("voice register"))
         if cmd.startswith("show running-config | section voice class codec"):
             return "\n".join(l for l in self._blocks("voice class codec"))
+        if cmd.startswith("show running-config | section voice hunt-group"):
+            return "\n".join(l for l in self._blocks("voice hunt-group"))
         if cmd.startswith("show running-config | section dial-peer"):
             return self.dialpeers
         if cmd.startswith("show running-config | include ^hostname"):
@@ -435,10 +477,15 @@ class DemoRouter:
         with self.lock:
             block = None
             for line in lines:
-                m = re.match(r"^no (voice register (?:dn|pool)|voice class codec)\s+(\d+)$", line.strip())
+                m = re.match(r"^no (voice register (?:dn|pool)|voice class codec|voice hunt-group)\s+(\d+)$",
+                             line.strip())
                 if m:
-                    head = (f"{m.group(1)}  {m.group(2)}" if m.group(1).startswith("voice register")
-                            else f"{m.group(1)} {m.group(2)}")
+                    if m.group(1) == "voice hunt-group":
+                        head = next((l for l in self.cfg
+                                     if re.match(rf"^voice hunt-group {m.group(2)} ", l)), None)
+                    else:
+                        head = (f"{m.group(1)}  {m.group(2)}" if m.group(1).startswith("voice register")
+                                else f"{m.group(1)} {m.group(2)}")
                     if head in self.cfg:
                         i = self.cfg.index(head)
                         j = i + 1
@@ -450,6 +497,15 @@ class DemoRouter:
                 if not line.startswith(" "):
                     m = re.match(r"^voice register (dn|pool)\s+(\d+)$", line.strip())
                     mc = re.match(r"^voice class codec\s+(\d+)$", line.strip())
+                    mh = re.match(r"^voice hunt-group\s+(\d+)\s+(\S+)$", line.strip())
+                    if mh:
+                        old = next((l for l in self.cfg if re.match(rf"^voice hunt-group {mh.group(1)} ", l)), None)
+                        block = f"voice hunt-group {mh.group(1)} {mh.group(2)}"
+                        if old is None:
+                            self.cfg.append(block)
+                        elif old != block:
+                            return line + "\n% A hunt-group with this tag and a different type already exists"
+                        continue
                     if m or mc:
                         block = (f"voice register {m.group(1)}  {m.group(2)}" if m
                                  else f"voice class codec {mc.group(1)}")
@@ -536,6 +592,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         brief = parse_pool_brief(safe("show voice register pool all brief"))
         codec_lists = parse_codec_classes(safe("show running-config | section voice class codec"))
         dp_codecs = parse_dialpeer_codecs(safe("show running-config | section dial-peer voice"))
+        hunts = parse_hunt_groups(safe("show running-config | section voice hunt-group"))
 
         dn_by_tag = {t: d for t, d in dns.items()}
         phones = []
@@ -550,12 +607,25 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         for p in pools.values():
             for n in p["numbers"]:
                 used.setdefault(n["dn"], []).append(p["tag"])
-        numbers = [{**d, "pools": used.get(t, [])} for t, d in sorted(dns.items(), key=lambda kv: int(kv[0]))]
+        hunt_member: dict[str, list[str]] = {}
+        for h in hunts.values():
+            for num in h["list"]:
+                hunt_member.setdefault(num, []).append(h["tag"])
+        numbers = [{**d, "pools": used.get(t, []), "huntgroups": hunt_member.get(d["number"], [])}
+                   for t, d in sorted(dns.items(), key=lambda kv: int(kv[0]))]
+        by_number = {n["number"]: n for n in numbers}
+        huntgroups = []
+        for t, h in sorted(hunts.items(), key=lambda kv: int(kv[0])):
+            members = [{"number": num, "dn": by_number.get(num, {}).get("tag", ""),
+                        "name": by_number.get(num, {}).get("name", ""),
+                        "pools": by_number.get(num, {}).get("pools", [])} for num in h["list"]]
+            huntgroups.append({**h, "members": members})
         clists = [{**c, "pools": [p["tag"] for p in phones if p.get("codec_list") == t],
                    "dialpeers": dp_codecs.get(t, [])}
                   for t, c in sorted(codec_lists.items(), key=lambda kv: int(kv[0]))]
         return {"hostname": hostname, "trunks": reg, "dialpeers": peers, "phones": phones,
-                "numbers": numbers, "codec_lists": clists, "errors": errors, "ts": time.time()}
+                "numbers": numbers, "codec_lists": clists, "huntgroups": huntgroups,
+                "errors": errors, "ts": time.time()}
 
     def get_status(force=False) -> dict:
         with cache_lock:
@@ -583,6 +653,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     @app.get("/api/meta")
     def meta():
         return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, list_codecs=LIST_CODECS,
+                       hunt_types=HUNT_TYPES,
                        raw_commands=RAW_COMMANDS,
                        demo=isinstance(router, DemoRouter))
 
@@ -611,6 +682,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         st = get_status(force=True)
         if any(n["number"] == v["number"] for n in st["numbers"]):
             raise InputError(f"Rufnummer {v['number']} gibt es schon.")
+        check_not_pilot(st, v["number"])
         tag = str(max([int(n["tag"]) for n in st["numbers"]] + [0]) + 1)
         lines = [f"voice register dn {tag}", f" number {v['number']}"]
         if v["name"]:
@@ -639,6 +711,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             raise InputError(f"Rufnummer mit DN {tag} gibt es nicht.")
         if any(n["number"] == v["number"] and n["tag"] != tag for n in st["numbers"]):
             raise InputError(f"Rufnummer {v['number']} gibt es schon.")
+        if v["number"] != cur["number"]:
+            check_not_pilot(st, v["number"])
 
         lines = [f"voice register dn {tag}"]
         if v["number"] != cur["number"]:
@@ -661,6 +735,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
 
         lines += ["voice register global", " create profile"]
+        if v["number"] != cur["number"]:
+            # Sammelgruppen fuehren Rufnummern, nicht DN-Tags: Listen mitziehen
+            for h in st["huntgroups"]:
+                if cur["number"] in h["list"]:
+                    new_list = [v["number"] if x == cur["number"] else x for x in h["list"]]
+                    lines += [f"voice hunt-group {h['tag']} {h['type']}", f" list {','.join(new_list)}"]
         if data.get("restart", True):
             for p in cur["pools"]:
                 lines += [f"voice register pool {p}", " restart"]
@@ -845,6 +925,9 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         cur = next((n for n in st["numbers"] if n["tag"] == tag), None)
         if not cur:
             raise InputError(f"Rufnummer mit DN {tag} gibt es nicht.")
+        if cur["huntgroups"]:
+            raise InputError(f"Rufnummer {cur['number']} ist Mitglied in Sammelgruppe "
+                             f"{', '.join(cur['huntgroups'])}. Zuerst dort entfernen.")
         detach = request.args.get("detach") == "1"
         if cur["pools"] and not detach:
             raise InputError(f"Rufnummer {cur['number']} liegt noch auf Pool {', '.join(cur['pools'])}.")
@@ -928,6 +1011,116 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         if users:
             raise InputError(f"Codec-Liste {tag} wird noch verwendet: {', '.join(users)}.")
         res = apply([f"no voice class codec {tag}"])
+        res["tag"] = tag
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    # ---------------- Sammelgruppen (voice hunt-group) ----------------
+
+    def check_not_pilot(st: dict, number: str, own_tag: str | None = None) -> None:
+        for h in st.get("huntgroups", []):
+            if h["tag"] != own_tag and number in (h["pilot"], h["secondary"]):
+                raise InputError(f"{number} ist schon Pilotnummer der Sammelgruppe {h['tag']}.")
+
+    def hunt_input(data: dict, st: dict, own_tag: str | None) -> dict:
+        htype = (data.get("type") or "").strip()
+        if htype not in HUNT_TYPES:
+            raise InputError("Ungueltige Art der Sammelgruppe")
+        pilot = check(data.get("pilot"), RE_NUMBER, "Pilotnummer")
+        if any(n["number"] == pilot for n in st["numbers"]):
+            raise InputError(f"{pilot} ist schon eine Rufnummer (DN). Die Pilotnummer muss eine "
+                             "eigene Nummer sein; die Rufnummer zuerst umbenennen.")
+        check_not_pilot(st, pilot, own_tag)
+        members = [str(m).strip() for m in (data.get("members") or []) if str(m).strip()]
+        if not members:
+            raise InputError("Mindestens ein Mitglied auswaehlen.")
+        if len(members) > 20:
+            raise InputError("Hoechstens 20 Mitglieder.")
+        if len(set(members)) != len(members):
+            raise InputError("Ein Mitglied ist doppelt ausgewaehlt.")
+        known = {n["number"] for n in st["numbers"]}
+        for m in members:
+            if m not in known:
+                raise InputError(f"Rufnummer {m} gibt es nicht.")
+        timeout = str(data.get("timeout") or "").strip()
+        if timeout and (not timeout.isdigit() or not 3 <= int(timeout) <= 600):
+            raise InputError("Klingeldauer muss zwischen 3 und 600 Sekunden liegen.")
+        final = check(data.get("final"), RE_NUMBER, "Weiterleitung", required=False)
+        if final and final == pilot:
+            raise InputError("Die Weiterleitung darf nicht auf die eigene Pilotnummer zeigen.")
+        name = check(data.get("name"), RE_TEXT, "Name", required=False)
+        return {"type": htype, "pilot": pilot, "members": members, "timeout": timeout,
+                "final": final, "name": name}
+
+    def hunt_lines(tag: str, v: dict, cur: dict | None) -> list[str]:
+        """Befehle fuer eine Sammelgruppe; bei cur=None alles, sonst nur Aenderungen."""
+        lines = [f"voice hunt-group {tag} {v['type']}"]
+        if cur is None or v["pilot"] != cur["pilot"]:
+            lines.append(f" pilot {v['pilot']}")
+        if cur is None or v["members"] != cur["list"]:
+            lines.append(f" list {','.join(v['members'])}")
+        for key in ("timeout", "final", "name"):
+            old = cur[key] if cur else ""
+            if v[key] != old:
+                lines.append(f" {key} {v[key]}" if v[key] else f" no {key}")
+        return lines
+
+    def verify_hunt(res: dict, tag: str, v: dict) -> None:
+        if not res["ok"]:
+            return
+        h = next((x for x in get_status(force=True)["huntgroups"] if x["tag"] == tag), None)
+        problem = None
+        if h is None:
+            problem = f"Der Router hat die Sammelgruppe {tag} nicht übernommen."
+        elif h["pilot"] != v["pilot"]:
+            problem = f"In Sammelgruppe {tag} fehlt danach die Pilotnummer {v['pilot']}."
+        elif h["list"] != v["members"]:
+            problem = f"In Sammelgruppe {tag} stimmen die Mitglieder danach nicht."
+        if problem:
+            res.update(ok=False, error=(f"{problem} Ausgabe des Routers:\n\n"
+                                        f"{output_tail(res['output'], 40)}"))
+
+    @app.post("/api/huntgroups")
+    def add_huntgroup():
+        data = request.get_json(force=True) or {}
+        st = get_status(force=True)
+        v = hunt_input(data, st, None)
+        used = {int(h["tag"]) for h in st["huntgroups"]}
+        tag = str(next(i for i in range(1, 101) if i not in used))
+        res = apply(hunt_lines(tag, v, None))
+        res["tag"] = tag
+        verify_hunt(res, tag, v)
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.put("/api/huntgroups/<tag>")
+    def edit_huntgroup(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltige Sammelgruppe")
+        data = request.get_json(force=True) or {}
+        st = get_status(force=True)
+        cur = next((h for h in st["huntgroups"] if h["tag"] == tag), None)
+        if not cur:
+            raise InputError(f"Sammelgruppe {tag} gibt es nicht.")
+        v = hunt_input(data, st, tag)
+        if v["type"] != cur["type"]:
+            # Die Art laesst sich in IOS nicht aendern: Gruppe neu anlegen
+            lines = [f"no voice hunt-group {tag}"] + hunt_lines(tag, v, None)
+        else:
+            lines = hunt_lines(tag, v, cur)
+            if len(lines) == 1:
+                return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
+        res = apply(lines)
+        res["tag"] = tag
+        verify_hunt(res, tag, v)
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.delete("/api/huntgroups/<tag>")
+    def delete_huntgroup(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltige Sammelgruppe")
+        st = get_status(force=True)
+        if not any(h["tag"] == tag for h in st["huntgroups"]):
+            raise InputError(f"Sammelgruppe {tag} gibt es nicht.")
+        res = apply([f"no voice hunt-group {tag}"])
         res["tag"] = tag
         return jsonify(res), (200 if res["ok"] else 400)
 

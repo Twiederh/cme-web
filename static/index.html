@@ -76,6 +76,7 @@
   label.check input { width: auto; }
   section.card.editing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #codec-rows select { max-width: 260px; }
+  #hunt-rows select { max-width: 380px; }
   .hint { font-size: 12px; color: var(--muted); background: var(--bg); border: 1px dashed var(--line);
           border-radius: 7px; padding: 8px 10px; margin-bottom: 10px; }
   .actions { display: flex; gap: 8px; align-items: center; }
@@ -156,6 +157,38 @@
           <button type="button" id="codec-cancel" class="small" hidden>Abbrechen</button>
         </div>
         <div class="msg" id="m-codec"></div>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Sammelgruppen <span class="count" id="c-hunts"></span></h2>
+    <table><thead><tr><th>Gruppe</th><th>Pilotnummer</th><th>Art</th><th>Mitglieder</th><th>Klingeln</th><th>Sonst weiter an</th><th></th></tr></thead>
+      <tbody id="t-hunts"></tbody></table>
+    <div class="body" style="border-top: 1px solid var(--line)">
+      <form id="f-hunt">
+        <input type="hidden" name="edit_tag" value="">
+        <label id="hunt-title" style="font-weight:600;color:var(--text);font-size:13px;margin-bottom:8px">Neue Sammelgruppe</label>
+        <div class="row">
+          <div><label>Pilotnummer * (wird angerufen)</label><input name="pilot" required placeholder="+4961874191283" pattern="\+?[0-9*#]{1,32}"></div>
+          <div><label>Name</label><input name="name" maxlength="40" placeholder="Alle Telefone"></div>
+        </div>
+        <div class="row">
+          <div><label>Art</label><select name="type" id="sel-hunt-type"></select></div>
+          <div class="row" style="margin:0">
+            <div><label>Klingeldauer (s)</label><input name="timeout" type="number" min="3" max="600" placeholder="Standard"></div>
+            <div><label>Sonst weiter an</label><input name="final" placeholder="z. B. 2831" pattern="\+?[0-9*#]{1,32}"></div>
+          </div>
+        </div>
+        <div class="hint" id="hunt-type-hint"></div>
+        <label>Mitglieder *</label>
+        <div class="lines" id="hunt-rows"></div>
+        <div class="actions">
+          <button class="primary" type="submit" id="hunt-submit">Anlegen</button>
+          <button type="button" id="hunt-add" class="small">+ Mitglied</button>
+          <button type="button" id="hunt-cancel" class="small" hidden>Abbrechen</button>
+        </div>
+        <div class="msg" id="m-hunt"></div>
       </form>
     </div>
   </section>
@@ -326,7 +359,8 @@ function render() {
       <td class="mono">${esc(n.tag)}</td>
       <td><span class="mono">${esc(n.number)}</span> ${n.shared ? badge("warn", "Shared" + (n.max_calls ? ` · max ${n.max_calls}` : "")) : ""}</td>
       <td>${esc(n.name)}</td><td>${esc(n.label)}</td>
-      <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}</td>
+      <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}
+        ${(n.huntgroups || []).map(t => badge("neutral", `Sammelgruppe ${t}`)).join(" ")}</td>
       <td><div class="actions"><button class="small" data-edit-number="${esc(n.tag)}">Bearbeiten</button>
         <button class="small danger" data-delete-number="${esc(n.tag)}">Löschen</button></div></td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">Noch keine Rufnummern angelegt.</td></tr>`;
@@ -344,9 +378,95 @@ function render() {
           <button class="small danger" data-delete-codec="${esc(c.tag)}">Löschen</button></div></td></tr>`;
     }).join("") : `<tr><td colspan="4" class="empty">Noch keine Codec-Listen angelegt.</td></tr>`;
 
+  // Sammelgruppen
+  const hunts = d.huntgroups || [];
+  $("#c-hunts").textContent = `(${hunts.length})`;
+  $("#t-hunts").innerHTML = hunts.length ? hunts.map(h => {
+      const mem = h.members.map(m => `<div><span class="mono">${esc(m.number)}</span> ` +
+        (m.dn ? `<span class="muted">${esc(m.name || "")}${m.pools.length ? " · " + m.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : " · kein Telefon"}</span>`
+              : badge("bad", "unbekannte Nummer")) + `</div>`).join("");
+      return `<tr><td>${esc(h.name) || `<span class="muted">Gruppe ${esc(h.tag)}</span>`} <span class="muted mono">#${esc(h.tag)}</span></td>
+        <td class="mono">${esc(h.pilot)}</td><td>${esc(HUNT_LABEL[h.type] || h.type)}</td><td>${mem}</td>
+        <td class="muted">${h.timeout ? esc(h.timeout) + " s" : "Standard"}</td>
+        <td class="mono">${esc(h.final) || '<span class="muted">–</span>'}</td>
+        <td><div class="actions"><button class="small" data-edit-hunt="${esc(h.tag)}">Bearbeiten</button>
+          <button class="small danger" data-delete-hunt="${esc(h.tag)}">Löschen</button></div></td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="empty">Noch keine Sammelgruppen angelegt.</td></tr>`;
+
   refreshLineSelects();
   refreshCodecSelect();
+  refreshHuntSelects();
   if (!$("#codec-rows").children.length) resetCodecForm();
+}
+
+const HUNT_LABEL = {
+  "parallel": "Parallel – alle gleichzeitig",
+  "sequential": "Nacheinander – immer ab dem ersten",
+  "peer": "Reihum – ab dem nächsten",
+  "longest-idle": "Längste Ruhezeit zuerst",
+};
+const HUNT_HINT = {
+  "parallel": "Alle Mitglieder klingeln gleichzeitig; wer zuerst abnimmt, bekommt den Anruf.",
+  "sequential": "Die Mitglieder klingeln nacheinander in der Reihenfolge der Liste, jeweils für die Klingeldauer.",
+  "peer": "Wie nacheinander, aber jeder Anruf beginnt beim Mitglied nach dem, das zuletzt geklingelt hat.",
+  "longest-idle": "Es klingelt zuerst das Mitglied, das am längsten keinen Anruf hatte.",
+};
+
+function huntOptions(selected) {
+  return `<option value="">– Rufnummer wählen –</option>` + data.numbers.map(n =>
+    `<option value="${esc(n.number)}" ${n.number === selected ? "selected" : ""}>${esc(n.number)}${n.name ? " · " + esc(n.name) : ""}</option>`).join("");
+}
+function addHuntRow(sel = "") {
+  const box = $("#hunt-rows"), i = box.children.length + 1;
+  const div = document.createElement("div");
+  div.className = "ln";
+  div.innerHTML = `<span>${i}.</span><select name="m">${data ? huntOptions(sel) : ""}</select>` +
+    (i > 1 ? `<button type="button" class="small" title="entfernen">✕</button>` : "");
+  div.querySelector("button")?.addEventListener("click", () => {
+    div.remove();
+    [...box.children].forEach((d, k) => d.querySelector("span").textContent = `${k + 1}.`);
+  });
+  box.appendChild(div);
+}
+function refreshHuntSelects() {
+  if (!$("#hunt-rows").children.length) { addHuntRow(); addHuntRow(); }
+  $("#hunt-rows").querySelectorAll("select").forEach(s => { const v = s.value; s.innerHTML = huntOptions(v); });
+}
+function updateHuntHint() {
+  $("#hunt-type-hint").textContent = HUNT_HINT[$("#sel-hunt-type").value] || "";
+}
+function resetHuntForm() {
+  const f = $("#f-hunt");
+  f.reset(); f.edit_tag.value = "";
+  f.type.value = "parallel"; updateHuntHint();
+  $("#hunt-rows").innerHTML = "";
+  if (data) { addHuntRow(); addHuntRow(); }
+}
+function startHuntEdit(tag) {
+  const h = data.huntgroups.find(x => x.tag === tag);
+  if (!h) return;
+  const f = $("#f-hunt");
+  f.reset(); f.edit_tag.value = tag;
+  f.pilot.value = h.pilot; f.name.value = h.name || ""; f.type.value = h.type;
+  f.timeout.value = (h.timeout || "").split(",")[0]; f.final.value = h.final || "";
+  updateHuntHint();
+  $("#hunt-rows").innerHTML = "";
+  (h.list.length ? h.list : [""]).forEach(n => addHuntRow(n));
+  $("#hunt-title").textContent = `Sammelgruppe ${tag} bearbeiten` + (h.name ? ` (${h.name})` : "");
+  $("#hunt-submit").textContent = "Änderungen speichern";
+  $("#hunt-cancel").hidden = false;
+  $("#m-hunt").className = "msg";
+  const card = f.closest("section.card");
+  card.classList.add("editing");
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function endHuntEdit(clearMsg = true) {
+  resetHuntForm();
+  $("#hunt-title").textContent = "Neue Sammelgruppe";
+  $("#hunt-submit").textContent = "Anlegen";
+  $("#hunt-cancel").hidden = true;
+  $("#f-hunt").closest("section.card").classList.remove("editing");
+  if (clearMsg) $("#m-hunt").className = "msg";
 }
 
 function refreshCodecSelect() {
@@ -624,6 +744,50 @@ $("#f-codec").addEventListener("submit", async (e) => {
   load(true);
 });
 $("#codec-add").addEventListener("click", () => addCodecRow());
+
+$("#f-hunt").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, btn = $("#hunt-submit"), m = $("#m-hunt");
+  const editTag = f.edit_tag.value;
+  const body = {
+    pilot: f.pilot.value, name: f.name.value, type: f.type.value, timeout: f.timeout.value,
+    final: f.final.value, members: [...f.querySelectorAll("select[name=m]")].map(s => s.value).filter(Boolean),
+  };
+  if (editTag) {
+    const h = data.huntgroups.find(x => x.tag === editTag);
+    if (h && h.type !== body.type && !confirm("Die Art einer Sammelgruppe lässt sich nicht direkt ändern. " +
+        "Die Gruppe wird dafür gelöscht und neu angelegt – Anrufe auf die Pilotnummer gehen dabei kurz ins Leere. Fortfahren?")) return;
+  }
+  btn.disabled = true;
+  const j = editTag
+    ? await api(`/api/huntgroups/${editTag}`, { method: "PUT", body: JSON.stringify(body) })
+    : await api("/api/huntgroups", { method: "POST", body: JSON.stringify(body) });
+  btn.disabled = false;
+  if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
+  showMsg(m, true, j.unchanged ? "Keine Änderungen." :
+    `Sammelgruppe ${j.tag} ${editTag ? "gespeichert" : "angelegt"}.\n\n${j.config.join("\n")}`);
+  endHuntEdit(false);
+  load(true);
+});
+$("#hunt-add").addEventListener("click", () => addHuntRow());
+$("#hunt-cancel").addEventListener("click", () => endHuntEdit());
+$("#sel-hunt-type").addEventListener("change", updateHuntHint);
+
+document.addEventListener("click", async (e) => {
+  const etag = e.target.dataset?.editHunt;
+  if (etag) { startHuntEdit(etag); return; }
+  const tag = e.target.dataset?.deleteHunt;
+  if (!tag) return;
+  const h = data.huntgroups.find(x => x.tag === tag);
+  if (!confirm(`Sammelgruppe ${h?.name || tag} (Pilot ${h?.pilot}) wirklich löschen?\n\n` +
+               `Anrufe auf ${h?.pilot} kommen danach nirgends mehr an.`)) return;
+  e.target.disabled = true;
+  const j = await api(`/api/huntgroups/${tag}`, { method: "DELETE" });
+  e.target.disabled = false;
+  if (!j.ok) { alert(j.error || "Fehler"); return; }
+  if ($("#f-hunt").edit_tag.value === tag) endHuntEdit();
+  load(true);
+});
 $("#codec-cancel").addEventListener("click", () => endCodecEdit());
 
 $("#edit-cancel").addEventListener("click", () => endEdit());
@@ -720,6 +884,9 @@ $("#raw-run").addEventListener("click", async () => {
     `<option value="${esc(t)}" ${t === "8851" ? "selected" : ""}>${t ? esc(t) : "Fremdgerät (ohne Typ)"}</option>`).join("");
   refreshCodecSelect();
   $("#sel-codec").value = "g711alaw";
+  $("#sel-hunt-type").innerHTML = (meta.hunt_types || []).map(t =>
+    `<option value="${esc(t)}">${esc(HUNT_LABEL[t] || t)}</option>`).join("");
+  updateHuntHint();
   $("#raw-cmd").innerHTML = meta.raw_commands.map(c => `<option>${esc(c)}</option>`).join("");
   await load();
   setInterval(() => { if (!document.hidden) load(); }, 30000);
