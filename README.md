@@ -229,6 +229,40 @@ neuen gesetzt. Gelöscht werden kann eine Liste nur, wenn sie nirgends verwendet
 Welche Codecs der Router für Listen kennt (z. B. `opus`, `ilbc`), hängt von der
 IOS-Version ab; ein unbekannter Codec wird vom Router mit einer `%`-Meldung abgelehnt.
 
+### Sammelgruppen (Hunt Groups)
+
+In der Karte **Sammelgruppen** werden `voice hunt-group`s angelegt, bearbeitet und
+gelöscht. Eine Sammelgruppe hat eine eigene **Pilotnummer**; ruft jemand sie an,
+klingeln die Mitglieder (Rufnummern/DNs):
+```
+voice hunt-group <tag> parallel
+ pilot +4961874191283
+ list 2831,2832
+ timeout 30
+ final 2831
+ name Testnummer
+```
+
+| Art | Verhalten |
+|---|---|
+| Parallel | alle Mitglieder gleichzeitig |
+| Nacheinander (`sequential`) | in Listenreihenfolge, immer ab dem ersten |
+| Reihum (`peer`) | ab dem Mitglied nach dem zuletzt angerufenen |
+| Längste Ruhezeit (`longest-idle`) | zuerst das Mitglied, das am längsten keinen Anruf hatte |
+
+Hinweise:
+- Die Pilotnummer darf keine vorhandene Rufnummer (DN) sein. Soll eine externe
+  Nummer auf mehreren Geräten klingeln, bekommt jedes Gerät eine eigene interne
+  Nummer und die externe Nummer wird Pilot einer parallelen Gruppe. Das ist auch
+  der Weg für Fremdgeräte wie Gigaset, die bei Shared Lines nicht mitklingeln.
+- Die Art lässt sich in IOS nicht ändern; die Seite löscht die Gruppe dafür und
+  legt sie neu an (`no voice hunt-group <tag>`).
+- Wird die Nummer eines Mitglieds geändert, passt die Seite die Liste der Gruppe an.
+  Eine Rufnummer, die noch Mitglied ist, lässt sich nicht löschen.
+- Ausgehende Anrufe zeigen die interne Nummer des Geräts. Soll nach außen die
+  Pilotnummer erscheinen, braucht der ausgehende Dial-Peer eine Übersetzungsregel
+  (`translation-profile outgoing`).
+
 ### Shared Lines
 
 Eine Rufnummer, die auf mehreren Telefonen klingeln soll, wird im Formular
