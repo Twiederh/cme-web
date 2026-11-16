@@ -194,7 +194,7 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
         else:
             if s.startswith("id mac "):
                 cur["mac"] = s.split()[2].upper()
-            elif s.startswith("id ip "):
+            elif s.startswith("id ip ") or s.startswith("id network "):
                 parts = s.split()
                 cur["id_ip"] = parts[2]
                 cur["id_mask"] = parts[4] if len(parts) > 4 and parts[3] == "mask" else ""
@@ -532,7 +532,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         errs = config_errors(out)
         state["dirty"] = True
         state["cache_ts"] = 0
-        return {"ok": not errs, "error": "\n".join(errs) if errs else None, "config": lines}
+        return {"ok": not errs, "error": "\n".join(errs) if errs else None, "config": lines,
+                "output": out}
+
+    def output_tail(out: str, n: int = 25) -> str:
+        rows = [l for l in (out or "").splitlines() if l.strip()]
+        return "\n".join(rows[-n:])
 
     @app.get("/")
     def index():
@@ -579,6 +584,10 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines.append(shared_line_cmd(v["max_calls"]))
         res = apply(lines)
         res["tag"] = tag
+        if res["ok"] and not any(n["tag"] == tag for n in get_status(force=True)["numbers"]):
+            res.update(ok=False, error=(
+                f"Der Router hat voice register dn {tag} nicht übernommen. "
+                f"Ausgabe des Routers:\n\n{output_tail(res['output'])}"))
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.put("/api/numbers/<tag>")
@@ -705,6 +714,19 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         lines += ["voice register global", " create profile"]
         res = apply(lines)
         res.update(tag=tag, username=username, password=password)
+        if res["ok"]:
+            # Nachpruefen, ob der Router den Pool wirklich uebernommen hat
+            st2 = get_status(force=True)
+            pool = next((p for p in st2["phones"] if p["tag"] == tag), None)
+            problem = None
+            if pool is None:
+                problem = f"Der Router hat voice register pool {tag} nicht übernommen."
+            elif v["id_kind"] == "ip" and pool.get("id_ip") != v["ip"]:
+                problem = f"Pool {tag} wurde angelegt, aber ohne die IP-Kennung {v['ip']}."
+            elif v["id_kind"] == "mac" and pool.get("mac") != v["mac"]:
+                problem = f"Pool {tag} wurde angelegt, aber ohne die MAC {v['mac']}."
+            if problem:
+                res.update(ok=False, error=f"{problem} Ausgabe des Routers:\n\n{output_tail(res['output'])}")
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.put("/api/phones/<tag>")
