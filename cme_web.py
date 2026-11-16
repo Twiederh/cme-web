@@ -323,6 +323,17 @@ class DemoRouter:
         with self.lock:
             block = None
             for line in lines:
+                m = re.match(r"^no voice register (dn|pool)\s+(\d+)$", line.strip())
+                if m:
+                    head = f"voice register {m.group(1)}  {m.group(2)}"
+                    if head in self.cfg:
+                        i = self.cfg.index(head)
+                        j = i + 1
+                        while j < len(self.cfg) and self.cfg[j].startswith(" "):
+                            j += 1
+                        del self.cfg[i:j]
+                    block = None
+                    continue
                 if not line.startswith(" "):
                     m = re.match(r"^voice register (dn|pool)\s+(\d+)$", line.strip())
                     if m:
@@ -621,6 +632,41 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines += [f"voice register pool {tag}", " restart"]
         res = apply(lines)
         res.update(tag=tag, username=username or cur["username"], password=password or None)
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.delete("/api/phones/<tag>")
+    def delete_phone(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltiger Pool")
+        st = get_status(force=True)
+        if not any(p["tag"] == tag for p in st["phones"]):
+            raise InputError(f"Pool {tag} gibt es nicht.")
+        res = apply([f"no voice register pool {tag}", "voice register global", " create profile"])
+        res["tag"] = tag
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.delete("/api/numbers/<tag>")
+    def delete_number(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltige Rufnummer")
+        st = get_status(force=True)
+        cur = next((n for n in st["numbers"] if n["tag"] == tag), None)
+        if not cur:
+            raise InputError(f"Rufnummer mit DN {tag} gibt es nicht.")
+        detach = request.args.get("detach") == "1"
+        if cur["pools"] and not detach:
+            raise InputError(f"Rufnummer {cur['number']} liegt noch auf Pool {', '.join(cur['pools'])}.")
+        lines = []
+        # Erst von den Telefonen entfernen, dann die DN loeschen
+        for p in st["phones"]:
+            for l in p["lines"]:
+                if l["dn"] == tag:
+                    lines += [f"voice register pool {p['tag']}", f" no number {l['ln']} dn {tag}"]
+        lines += [f"no voice register dn {tag}", "voice register global", " create profile"]
+        for p in cur["pools"]:
+            lines += [f"voice register pool {p}", " restart"]
+        res = apply(lines)
+        res.update(tag=tag, detached=cur["pools"])
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.post("/api/phones/<tag>/restart")
