@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import ipaddress
 import os
 import re
 import secrets
@@ -38,7 +39,8 @@ from flask import Flask, jsonify, request, send_from_directory
 
 BASE = Path(__file__).resolve().parent
 
-PHONE_TYPES = ["6901", "8811", "8841", "8845", "8851", "8861", "8865", "ATA190", "7821", "7841", "7861"]
+# "" = Fremdgeraet (z.B. Gigaset): kein "type" in der Konfiguration
+PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "ATA190", "7821", "7841", "7861"]
 CODECS = ["g711alaw", "g711ulaw", "g729r8"]
 
 # Nur diese show-Befehle duerfen ueber die Oberflaeche roh abgefragt werden
@@ -136,7 +138,8 @@ def parse_pool_brief(out: str) -> dict[str, dict]:
     last = None
     mac_re = r"[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
     for line in out.splitlines():
-        m = re.match(rf"^\s*(\d+)\s+({mac_re})\s+(?:(\d+\.\d+\.\d+\.\d+)\s+)?(\d+)\s+(\d+)\s+(\S+)\s+(\S+)", line)
+        ip_re = r"\d+\.\d+\.\d+\.\d+"
+        m = re.match(rf"^\s*(\d+)\s+({mac_re}|{ip_re})\s+(?:({ip_re})\s+)?(\d+)\s+(\d+)\s+(\S+)\s+(\S+)", line)
         if m:
             last = m.group(1)
             pools[last] = {"mac": m.group(2).upper(), "ip": m.group(3) or "",
@@ -164,7 +167,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur = dns.setdefault(tag, {"tag": tag, "number": "", "name": "", "label": "",
                                            "shared": False, "max_calls": ""})
             else:
-                cur = pools.setdefault(tag, {"tag": tag, "mac": "", "type": "", "description": "",
+                cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "",
+                                             "type": "", "description": "",
                                              "username": "", "codec": "", "numbers": []})
             cur["_kind"] = kind
             continue
@@ -186,6 +190,10 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
         else:
             if s.startswith("id mac "):
                 cur["mac"] = s.split()[2].upper()
+            elif s.startswith("id ip "):
+                parts = s.split()
+                cur["id_ip"] = parts[2]
+                cur["id_mask"] = parts[4] if len(parts) > 4 and parts[3] == "mask" else ""
             elif s.startswith("type "):
                 cur["type"] = s.split(None, 1)[1]
             elif s.startswith("description "):
@@ -255,7 +263,7 @@ class Router:
 class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
-    SINGLE = ("id mac", "type", "description", "codec", "username", "number", "name", "label",
+    SINGLE = ("id mac", "id ip", "type", "description", "codec", "username", "number", "name", "label",
               "shared-line")
 
     def __init__(self):
@@ -276,8 +284,11 @@ class DemoRouter:
             " description Kueche", " username 102 password x", " codec g711alaw",
             "voice register pool  3", " id mac 6C41.0E22.9A03", " type 6901", " number 1 dn 3",
             " description Flur", " username 103 password x", " codec g711alaw",
+            "voice register dn  5", " number 110", " name Mobilteil", " label Mobilteil",
+            "voice register pool  4", " id ip 192.168.1.60 mask 255.255.255.255", " number 1 dn 5",
+            " description Gigaset N510", " username gigaset password x", " codec g711alaw",
         ]
-        self.registered = {"1": "192.168.1.31", "2": "192.168.1.32"}
+        self.registered = {"1": "192.168.1.31", "2": "192.168.1.32", "4": "192.168.1.60"}
 
     def show(self, cmd: str) -> str:
         time.sleep(0.2)
@@ -310,7 +321,8 @@ class DemoRouter:
                 for i, n in enumerate(p["numbers"]):
                     num = dns.get(n["dn"], {}).get("number", "")
                     if i == 0:
-                        out.append(f"{tag:<4} {p['mac']:<14} {ip:<15} {n['ln']:<2} {n['dn']:<3} {num:<20} {state}")
+                        ident = p["mac"] or p["id_ip"]
+                        out.append(f"{tag:<4} {ident:<14} {ip:<15} {n['ln']:<2} {n['dn']:<3} {num:<20} {state}")
                     else:
                         out.append(f"{'':<4} {'':<14} {'':<15} {n['ln']:<2} {n['dn']:<3} {num:<20} {state}")
             return "\n".join(out)
@@ -538,8 +550,24 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
     def phone_input(data: dict, st: dict, own_tag: str | None) -> dict:
         """Prueft die Formulardaten fuer Anlegen und Bearbeiten."""
-        mac = norm_mac(data.get("mac"))
-        ptype = check(data.get("type"), RE_TYPE, "Telefontyp")
+        id_kind = data.get("id_kind") or "mac"
+        mac = ip = ""
+        mask = "255.255.255.255"
+        if id_kind == "ip":
+            try:
+                ip = str(ipaddress.IPv4Address((data.get("id_ip") or "").strip()))
+            except ValueError:
+                raise InputError("Ungueltige IP-Adresse")
+            if data.get("id_mask"):
+                try:
+                    mask = str(ipaddress.IPv4Network(f"0.0.0.0/{data['id_mask'].strip()}").netmask)
+                except ValueError:
+                    raise InputError("Ungueltige Netzmaske")
+        elif id_kind == "mac":
+            mac = norm_mac(data.get("mac"))
+        else:
+            raise InputError("Kennung muss MAC oder IP sein")
+        ptype = check(data.get("type"), RE_TYPE, "Telefontyp", required=(id_kind == "mac"))
         desc = check(data.get("description"), RE_TEXT, "Beschreibung", required=False)
         codec = data.get("codec") or "g711alaw"
         if codec not in CODECS:
@@ -559,11 +587,19 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                 raise InputError(
                     f"Rufnummer {known[d]['number']} ist schon Pool {', '.join(others)} zugeordnet. "
                     "Fuer mehrere Telefone die Nummer zuerst als Shared Line markieren.")
-        other = next((p for p in st["phones"] if p["mac"].upper() == mac and p["tag"] != own_tag), None)
-        if other:
-            raise InputError(f"MAC {mac} ist schon Pool {other['tag']} zugeordnet.")
-        return {"mac": mac, "type": ptype, "description": desc, "codec": codec,
-                "dns": dn_tags, "known": known}
+        if mac:
+            other = next((p for p in st["phones"] if p["mac"].upper() == mac and p["tag"] != own_tag), None)
+            if other:
+                raise InputError(f"MAC {mac} ist schon Pool {other['tag']} zugeordnet.")
+        if ip:
+            other = next((p for p in st["phones"] if p.get("id_ip") == ip and p["tag"] != own_tag), None)
+            if other:
+                raise InputError(f"IP {ip} ist schon Pool {other['tag']} zugeordnet.")
+        return {"id_kind": id_kind, "mac": mac, "ip": ip, "mask": mask, "type": ptype,
+                "description": desc, "codec": codec, "dns": dn_tags, "known": known}
+
+    def id_line(v: dict) -> str:
+        return f" id mac {v['mac']}" if v["id_kind"] == "mac" else f" id ip {v['ip']} mask {v['mask']}"
 
     @app.post("/api/phones")
     def add_phone():
@@ -575,7 +611,9 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         password = check(data.get("password") or secrets.token_hex(6), RE_CRED, "Passwort")
         tag = str(max([int(p["tag"]) for p in st["phones"]] + [0]) + 1)
 
-        lines = [f"voice register pool {tag}", f" id mac {v['mac']}", f" type {v['type']}"]
+        lines = [f"voice register pool {tag}", id_line(v)]
+        if v["type"]:
+            lines.append(f" type {v['type']}")
         lines += [f" number {i} dn {d}" for i, d in enumerate(v["dns"], 1)]
         lines += [" dtmf-relay rtp-nte", f" codec {v['codec']}", f" username {username} password {password}"]
         if v["description"]:
@@ -597,12 +635,18 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         v = phone_input(data, st, tag)
 
         lines = [f"voice register pool {tag}"]
-        if v["mac"] != cur["mac"].upper():
-            if cur["mac"]:
+        cur_kind = "ip" if cur.get("id_ip") else "mac"
+        changed_id = (v["id_kind"] != cur_kind
+                      or (cur_kind == "mac" and v["mac"] != cur["mac"].upper())
+                      or (cur_kind == "ip" and (v["ip"], v["mask"]) != (cur["id_ip"], cur.get("id_mask") or v["mask"])))
+        if changed_id:
+            if cur.get("id_ip"):
+                lines.append(f" no id ip {cur['id_ip']} mask {cur.get('id_mask') or '255.255.255.255'}")
+            elif cur["mac"]:
                 lines.append(f" no id mac {cur['mac']}")
-            lines.append(f" id mac {v['mac']}")
+            lines.append(id_line(v))
         if v["type"] != cur["type"]:
-            lines.append(f" type {v['type']}")
+            lines.append(f" type {v['type']}" if v["type"] else f" no type {cur['type']}")
         if v["codec"] != cur.get("codec"):
             lines.append(f" codec {v['codec']}")
         if v["description"] != cur["description"]:
