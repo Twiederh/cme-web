@@ -41,7 +41,9 @@ BASE = Path(__file__).resolve().parent
 
 # "" = Fremdgeraet (z.B. Gigaset): kein "type" in der Konfiguration
 PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "ATA190", "7821", "7841", "7861"]
-CODECS = ["g711alaw", "g711ulaw", "g729r8"]
+CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8"]
+# Codecs fuer Codec-Listen (voice class codec); was der Router kennt, haengt von der IOS-Version ab
+LIST_CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8", "g729br8", "ilbc", "opus"]
 
 # Nur diese show-Befehle duerfen ueber die Oberflaeche roh abgefragt werden
 RAW_COMMANDS = [
@@ -56,6 +58,7 @@ RAW_COMMANDS = [
     "show call active voice brief",
     "show running-config | section voice register",
     "show running-config | section dial-peer",
+    "show running-config | section voice class codec",
     "show running-config | section sip-ua",
     "show version | include uptime|IOS",
 ]
@@ -169,7 +172,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "",
                                              "type": "", "description": "",
-                                             "username": "", "codec": "", "numbers": []})
+                                             "username": "", "codec": "", "codec_list": "",
+                                             "numbers": []})
             cur["_kind"] = kind
             continue
         if not line.startswith(" "):
@@ -202,6 +206,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["username"] = s.split()[1]
             elif s.startswith("codec "):
                 cur["codec"] = s.split()[1]
+            elif s.startswith("voice-class codec "):
+                cur["codec_list"] = s.split()[2]
             else:
                 mm = re.match(r"number (\d+) dn (\d+)", s)
                 if mm:
@@ -209,6 +215,45 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
     for d in list(dns.values()) + list(pools.values()):
         d.pop("_kind", None)
     return dns, pools
+
+
+def parse_codec_classes(out: str) -> dict[str, dict]:
+    """show running-config | section voice class codec -> {tag: {tag, codecs: [...]}}"""
+    lists: dict[str, dict] = {}
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"^voice class codec\s+(\d+)\s*$", line)
+        if m:
+            cur = lists.setdefault(m.group(1), {"tag": m.group(1), "prefs": {}})
+            continue
+        if not line.startswith(" "):
+            cur = None
+            continue
+        mm = re.match(r"^\s+codec preference (\d+) (\S+)", line)
+        if cur is not None and mm:
+            cur["prefs"][int(mm.group(1))] = mm.group(2)
+    for c in lists.values():
+        c["codecs"] = [c["prefs"][k] for k in sorted(c["prefs"])]
+        del c["prefs"]
+    return lists
+
+
+def parse_dialpeer_codecs(out: str) -> dict[str, list[str]]:
+    """show running-config | section dial-peer voice -> {codec-list-tag: [dial-peer-tags]}"""
+    used: dict[str, list[str]] = {}
+    peer = None
+    for line in out.splitlines():
+        m = re.match(r"^dial-peer voice (\d+)", line)
+        if m:
+            peer = m.group(1)
+            continue
+        if not line.startswith(" "):
+            peer = None
+            continue
+        mm = re.match(r"^\s+voice-class codec (\d+)", line)
+        if peer and mm:
+            used.setdefault(mm.group(1), []).append(peer)
+    return used
 
 
 def config_errors(out: str) -> list[str]:
@@ -263,8 +308,8 @@ class Router:
 class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
-    SINGLE = ("id mac", "id ip", "type", "description", "codec", "username", "number", "name", "label",
-              "shared-line")
+    SINGLE = ("id mac", "id ip", "type", "description", "voice-class codec", "codec", "username",
+              "number", "name", "label", "shared-line")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -278,7 +323,7 @@ class DemoRouter:
             " shared-line max-calls 4",
             "voice register pool  1", " id mac 70DB.98A1.0C11", " type 8851", " number 1 dn 1",
             " number 2 dn 4", " description Buero Thomas", " username 101 password x",
-            " codec g711alaw",
+            " codec g711alaw", " voice-class codec 2",
             "voice register pool  2", " id mac 00EB.D5C3.4F02", " type 8865", " number 1 dn 2",
             " number 2 dn 4",
             " description Kueche", " username 102 password x", " codec g711alaw",
@@ -287,13 +332,23 @@ class DemoRouter:
             "voice register dn  5", " number 110", " name Mobilteil", " label Mobilteil",
             "voice register pool  4", " id ip 192.168.1.60 mask 255.255.255.255", " number 1 dn 5",
             " description Gigaset N510", " username gigaset password x", " codec g711alaw",
+            "voice class codec 1", " codec preference 1 g711alaw", " codec preference 2 g711ulaw",
+            "voice class codec 2", " codec preference 1 g722-64", " codec preference 2 g711alaw",
+            " codec preference 3 g711ulaw",
         ]
+        self.dialpeers = ("dial-peer voice 100 voip\n description Trunk raus\n destination-pattern 0T\n"
+                          " session protocol sipv2\n session target sip-server\n voice-class codec 1\n"
+                          "dial-peer voice 200 voip\n description Telefone\n destination-pattern 1..\n")
         self.registered = {"1": "192.168.1.31", "2": "192.168.1.32", "4": "192.168.1.60"}
 
     def show(self, cmd: str) -> str:
         time.sleep(0.2)
         if cmd.startswith("show running-config | section voice register"):
-            return "\n".join(self.cfg)
+            return "\n".join(l for l in self._blocks("voice register"))
+        if cmd.startswith("show running-config | section voice class codec"):
+            return "\n".join(l for l in self._blocks("voice class codec"))
+        if cmd.startswith("show running-config | section dial-peer"):
+            return self.dialpeers
         if cmd.startswith("show running-config | include ^hostname"):
             return "hostname cme-demo"
         if cmd == "show sip-ua register status":
@@ -330,14 +385,23 @@ class DemoRouter:
             return f"(Demo) Keine Beispielausgabe fuer: {cmd}"
         return "% Invalid input detected at '^' marker."
 
+    def _blocks(self, prefix: str):
+        take = False
+        for l in self.cfg:
+            if not l.startswith(" "):
+                take = l.startswith(prefix)
+            if take:
+                yield l
+
     def configure(self, lines: list[str]) -> str:
         time.sleep(0.3)
         with self.lock:
             block = None
             for line in lines:
-                m = re.match(r"^no voice register (dn|pool)\s+(\d+)$", line.strip())
+                m = re.match(r"^no (voice register (?:dn|pool)|voice class codec)\s+(\d+)$", line.strip())
                 if m:
-                    head = f"voice register {m.group(1)}  {m.group(2)}"
+                    head = (f"{m.group(1)}  {m.group(2)}" if m.group(1).startswith("voice register")
+                            else f"{m.group(1)} {m.group(2)}")
                     if head in self.cfg:
                         i = self.cfg.index(head)
                         j = i + 1
@@ -348,8 +412,10 @@ class DemoRouter:
                     continue
                 if not line.startswith(" "):
                     m = re.match(r"^voice register (dn|pool)\s+(\d+)$", line.strip())
-                    if m:
-                        block = f"voice register {m.group(1)}  {m.group(2)}"
+                    mc = re.match(r"^voice class codec\s+(\d+)$", line.strip())
+                    if m or mc:
+                        block = (f"voice register {m.group(1)}  {m.group(2)}" if m
+                                 else f"voice class codec {mc.group(1)}")
                         if block not in self.cfg:
                             self.cfg.append(block)
                     else:
@@ -371,6 +437,8 @@ class DemoRouter:
                     key = next((k for k in self.SINGLE if s == k or s.startswith(k + " ")), None)
                     if key == "number" and " dn " in s:      # Pool-Leitung: "number 1 dn 3"
                         key = " ".join(s.split()[:2])
+                    if s.startswith("codec preference "):      # "codec preference 2 g711alaw"
+                        key = " ".join(s.split()[:3])
                     if key:
                         for j in range(start, end):
                             t = self.cfg[j].strip()
@@ -429,6 +497,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         peers = parse_dial_peers(safe("show dial-peer voice summary"))
         dns, pools = parse_voice_register_config(safe("show running-config | section voice register"))
         brief = parse_pool_brief(safe("show voice register pool all brief"))
+        codec_lists = parse_codec_classes(safe("show running-config | section voice class codec"))
+        dp_codecs = parse_dialpeer_codecs(safe("show running-config | section dial-peer voice"))
 
         dn_by_tag = {t: d for t, d in dns.items()}
         phones = []
@@ -444,8 +514,11 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             for n in p["numbers"]:
                 used.setdefault(n["dn"], []).append(p["tag"])
         numbers = [{**d, "pools": used.get(t, [])} for t, d in sorted(dns.items(), key=lambda kv: int(kv[0]))]
+        clists = [{**c, "pools": [p["tag"] for p in phones if p.get("codec_list") == t],
+                   "dialpeers": dp_codecs.get(t, [])}
+                  for t, c in sorted(codec_lists.items(), key=lambda kv: int(kv[0]))]
         return {"hostname": hostname, "trunks": reg, "dialpeers": peers, "phones": phones,
-                "numbers": numbers, "errors": errors, "ts": time.time()}
+                "numbers": numbers, "codec_lists": clists, "errors": errors, "ts": time.time()}
 
     def get_status(force=False) -> dict:
         with cache_lock:
@@ -467,7 +540,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
     @app.get("/api/meta")
     def meta():
-        return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, raw_commands=RAW_COMMANDS,
+        return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, list_codecs=LIST_CODECS,
+                       raw_commands=RAW_COMMANDS,
                        demo=isinstance(router, DemoRouter))
 
     @app.get("/api/status")
@@ -570,7 +644,13 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         ptype = check(data.get("type"), RE_TYPE, "Telefontyp", required=(id_kind == "mac"))
         desc = check(data.get("description"), RE_TEXT, "Beschreibung", required=False)
         codec = data.get("codec") or "g711alaw"
-        if codec not in CODECS:
+        codec_list = ""
+        if codec.startswith("list:"):
+            codec_list = codec[5:]
+            if not any(c["tag"] == codec_list for c in st.get("codec_lists", [])):
+                raise InputError(f"Codec-Liste {codec_list} gibt es nicht.")
+            codec = ""
+        elif codec not in CODECS:
             raise InputError("Ungueltiger Codec")
         dn_tags = [str(d) for d in (data.get("dns") or []) if str(d).strip()]
         if not dn_tags:
@@ -596,7 +676,11 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             if other:
                 raise InputError(f"IP {ip} ist schon Pool {other['tag']} zugeordnet.")
         return {"id_kind": id_kind, "mac": mac, "ip": ip, "mask": mask, "type": ptype,
-                "description": desc, "codec": codec, "dns": dn_tags, "known": known}
+                "description": desc, "codec": codec, "codec_list": codec_list,
+                "dns": dn_tags, "known": known}
+
+    def codec_line(v: dict) -> str:
+        return f" voice-class codec {v['codec_list']}" if v["codec_list"] else f" codec {v['codec']}"
 
     def id_line(v: dict) -> str:
         return f" id mac {v['mac']}" if v["id_kind"] == "mac" else f" id ip {v['ip']} mask {v['mask']}"
@@ -615,7 +699,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         if v["type"]:
             lines.append(f" type {v['type']}")
         lines += [f" number {i} dn {d}" for i, d in enumerate(v["dns"], 1)]
-        lines += [" dtmf-relay rtp-nte", f" codec {v['codec']}", f" username {username} password {password}"]
+        lines += [" dtmf-relay rtp-nte", codec_line(v), f" username {username} password {password}"]
         if v["description"]:
             lines.append(f" description {v['description']}")
         lines += ["voice register global", " create profile"]
@@ -647,8 +731,13 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines.append(id_line(v))
         if v["type"] != cur["type"]:
             lines.append(f" type {v['type']}" if v["type"] else f" no type {cur['type']}")
-        if v["codec"] != cur.get("codec"):
-            lines.append(f" codec {v['codec']}")
+        if v["codec_list"]:
+            if v["codec_list"] != cur.get("codec_list"):
+                lines.append(codec_line(v))
+        elif cur.get("codec_list") or v["codec"] != cur.get("codec"):
+            if cur.get("codec_list"):
+                lines.append(" no voice-class codec")
+            lines.append(codec_line(v))
         if v["description"] != cur["description"]:
             lines.append(f" description {v['description']}" if v["description"] else " no description")
 
@@ -711,6 +800,76 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines += [f"voice register pool {p}", " restart"]
         res = apply(lines)
         res.update(tag=tag, detached=cur["pools"])
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    def codec_list_input(data: dict) -> list[str]:
+        codecs = [str(c).strip() for c in (data.get("codecs") or []) if str(c).strip()]
+        if not codecs:
+            raise InputError("Mindestens einen Codec auswaehlen.")
+        if len(codecs) > 10:
+            raise InputError("Hoechstens 10 Codecs.")
+        for c in codecs:
+            if c not in LIST_CODECS:
+                raise InputError(f"Unbekannter Codec: {c}")
+        if len(set(codecs)) != len(codecs):
+            raise InputError("Ein Codec ist doppelt ausgewaehlt.")
+        return codecs
+
+    def affected_restarts(clist: dict, restart: bool) -> list[str]:
+        out = ["voice register global", " create profile"] if clist["pools"] else []
+        if restart:
+            for p in clist["pools"]:
+                out += [f"voice register pool {p}", " restart"]
+        return out
+
+    @app.post("/api/codeclists")
+    def add_codec_list():
+        data = request.get_json(force=True) or {}
+        codecs = codec_list_input(data)
+        st = get_status(force=True)
+        used = {int(c["tag"]) for c in st["codec_lists"]}
+        tag = str(next(i for i in range(1, 10000) if i not in used))
+        lines = [f"voice class codec {tag}"]
+        lines += [f" codec preference {i} {c}" for i, c in enumerate(codecs, 1)]
+        res = apply(lines)
+        res["tag"] = tag
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.put("/api/codeclists/<tag>")
+    def edit_codec_list(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltige Codec-Liste")
+        data = request.get_json(force=True) or {}
+        codecs = codec_list_input(data)
+        st = get_status(force=True)
+        cur = next((c for c in st["codec_lists"] if c["tag"] == tag), None)
+        if not cur:
+            raise InputError(f"Codec-Liste {tag} gibt es nicht.")
+        if codecs == cur["codecs"]:
+            return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
+        # Erst alle alten Praeferenzen entfernen, sonst meldet IOS beim Umsortieren
+        # "Codec schon konfiguriert"
+        lines = [f"voice class codec {tag}"]
+        lines += [f" no codec preference {i}" for i in range(1, len(cur["codecs"]) + 1)]
+        lines += [f" codec preference {i} {c}" for i, c in enumerate(codecs, 1)]
+        lines += affected_restarts(cur, data.get("restart", True))
+        res = apply(lines)
+        res["tag"] = tag
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.delete("/api/codeclists/<tag>")
+    def delete_codec_list(tag):
+        if not tag.isdigit():
+            raise InputError("Ungueltige Codec-Liste")
+        st = get_status(force=True)
+        cur = next((c for c in st["codec_lists"] if c["tag"] == tag), None)
+        if not cur:
+            raise InputError(f"Codec-Liste {tag} gibt es nicht.")
+        users = [f"Pool {p}" for p in cur["pools"]] + [f"Dial-Peer {d}" for d in cur["dialpeers"]]
+        if users:
+            raise InputError(f"Codec-Liste {tag} wird noch verwendet: {', '.join(users)}.")
+        res = apply([f"no voice class codec {tag}"])
+        res["tag"] = tag
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.post("/api/phones/<tag>/restart")
