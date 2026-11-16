@@ -177,12 +177,13 @@ Rufnummer löschen: Hängt die Nummer noch an Telefonen, wird sie dort zuerst mi
 
 ### Fremdgeräte (z. B. Gigaset-Basisstation)
 
-SIP-Geräte anderer Hersteller werden über ihre **IP-Adresse** erkannt statt über
-die MAC. Im Formular „Telefon anlegen“ dazu *Erkennung über: IP-Adresse* wählen,
-der Typ steht dann auf „Fremdgerät (ohne Typ)“:
+Im CME-Modus erkennt der Router **alle** Telefone nur an der MAC-Adresse, auch
+Fremdgeräte (`id ip …` lehnt er mit „CME mode only accept mac address“ ab). Für eine
+Gigaset-Basis also die MAC der Basis eintragen (Aufkleber oder Gigaset-Weboberfläche)
+und als Typ „Fremdgerät (ohne Typ)“ wählen:
 ```
 voice register pool <tag>
- id ip 192.168.1.60 mask 255.255.255.255
+ id mac 7C2F.8011.2233
  number 1 dn <dn>
  number 2 dn <dn> ...
  dtmf-relay rtp-nte
@@ -190,7 +191,9 @@ voice register pool <tag>
  username <benutzer> password <passwort>
  description Gigaset
 ```
-Das Gerät braucht eine feste IP (DHCP-Reservierung). Am Gerät je Mobilteil bzw.
+CME verlangt für das SIP-Passwort 6–15 Buchstaben/Ziffern ohne Sonderzeichen, mit
+mindestens einer Ziffer, einem Groß- und einem Kleinbuchstaben. Ein leer gelassenes
+Passwort erzeugt die Seite passend dazu. Am Gerät je Mobilteil bzw.
 VoIP-Verbindung eintragen:
 
 | Gigaset | Wert |

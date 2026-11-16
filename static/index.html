@@ -48,6 +48,7 @@
   tr:last-child td { border-bottom: none; }
   td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
   .muted { color: var(--muted); }
+  .bad-text { color: #c0392b; }
   .empty { padding: 16px; color: var(--muted); }
   .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
   .badge.ok { background: var(--ok-bg); color: var(--ok); }
@@ -190,23 +191,14 @@
         <form id="f-phone">
           <input type="hidden" name="edit_tag" value="">
           <div class="row">
-            <div><label>Erkennung über</label>
-              <select name="id_kind" id="sel-idkind">
-                <option value="mac">MAC-Adresse (Cisco)</option>
-                <option value="ip">IP-Adresse (Fremdgerät)</option>
-              </select></div>
+            <div><label>MAC-Adresse *</label><input name="mac" required placeholder="70DB.98A1.0C11"></div>
             <div><label>Typ</label><select name="type" id="sel-type"></select></div>
           </div>
-          <div class="row">
-            <div id="wrap-mac"><label>MAC-Adresse *</label><input name="mac" placeholder="70DB.98A1.0C11"></div>
-            <div id="wrap-ip" hidden><label>IP-Adresse *</label><input name="id_ip" placeholder="192.168.1.60"></div>
-            <div></div>
-          </div>
           <div class="hint" id="ip-hint" hidden>
-            Am Gerät eintragen: <b>Registrar/Proxy</b> = IP des Routers, Port 5060 ·
-            <b>Benutzername</b> = Rufnummer der Leitung · <b>Authentifizierungsname</b> und
-            <b>Passwort</b> = SIP-Benutzer und SIP-Passwort von unten. Das Gerät braucht eine
-            feste IP-Adresse (DHCP-Reservierung).
+            CME erkennt auch Fremdgeräte nur an der <b>MAC-Adresse</b> (bei Gigaset: MAC der Basis,
+            steht auf dem Aufkleber und in der Weboberfläche). Am Gerät eintragen:
+            <b>Registrar/Proxy</b> = IP des Routers, Port 5060 · <b>Benutzername</b> = Rufnummer der
+            Leitung · <b>Authentifizierungsname</b> und <b>Passwort</b> = SIP-Benutzer und SIP-Passwort von unten.
           </div>
           <div class="row">
             <div><label>Beschreibung</label><input name="description" maxlength="40" placeholder="Büro"></div>
@@ -216,7 +208,7 @@
           <div class="lines" id="lines"></div>
           <div class="row">
             <div><label>SIP-Benutzer (leer = Nummer von Leitung 1)</label><input name="username" placeholder="automatisch"></div>
-            <div><label id="pw-label">SIP-Passwort (leer = zufällig)</label><input name="password" placeholder="automatisch"></div>
+            <div><label id="pw-label">SIP-Passwort (leer = zufällig)</label><input name="password" placeholder="automatisch" title="6–15 Buchstaben/Ziffern, mind. eine Ziffer, ein Groß- und ein Kleinbuchstabe"></div>
           </div>
           <label class="check" id="restart-row" hidden><input type="checkbox" name="restart" checked> Telefon nach dem Speichern neu starten</label>
           <div class="actions">
@@ -320,7 +312,7 @@ function render() {
       const lines = p.lines.map(l => `<div><span class="muted">${esc(l.ln)}:</span> <span class="mono">${esc(l.number)}</span> ${l.name ? `<span class="muted">${esc(l.name)}</span>` : ""}</div>`).join("");
       return `<tr><td class="mono">${esc(p.tag)}</td><td>${esc(p.description) || '<span class="muted">–</span>'}</td>
         <td>${p.type ? esc(p.type) : '<span class="muted">Fremdgerät</span>'}</td>
-        <td class="mono">${p.mac ? esc(p.mac) : `<span class="muted">IP</span> ${esc(p.id_ip)}`}</td><td>${lines}</td>
+        <td class="mono">${p.mac ? esc(p.mac) : (p.id_ip ? `<span class="muted">IP</span> ${esc(p.id_ip)}` : `<span class="bad-text">keine Kennung</span>`)}</td><td>${lines}</td>
         <td class="mono">${esc(p.ip) || '<span class="muted">–</span>'}</td><td>${st}</td>
         <td><div class="actions"><button class="small" data-edit="${esc(p.tag)}">Bearbeiten</button>
           <button class="small" data-restart="${esc(p.tag)}">Neustart</button>
@@ -510,7 +502,7 @@ $("#f-phone").addEventListener("submit", async (e) => {
 function resetPhoneForm() {
   const f = $("#f-phone");
   f.reset(); f.edit_tag.value = "";
-  updateIdKind(false);
+  updateTypeHint();
   $("#lines").innerHTML = ""; addLine();
 }
 
@@ -520,12 +512,10 @@ function startEdit(tag) {
   const f = $("#f-phone");
   f.reset();
   f.edit_tag.value = tag;
-  f.id_kind.value = p.id_ip ? "ip" : "mac";
-  updateIdKind(false);
   f.mac.value = p.mac || "";
-  f.id_ip.value = p.id_ip || "";
   if (![...f.type.options].some(o => o.value === p.type)) f.type.add(new Option(p.type, p.type));
   f.type.value = p.type;
+  updateTypeHint();
   f.description.value = p.description || "";
   refreshCodecSelect();
   f.codec.value = p.codec_list ? `list:${p.codec_list}` : (p.codec || "g711alaw");
@@ -558,16 +548,10 @@ function endEdit(clearMsg = true) {
   if (clearMsg) $("#m-phone").className = "msg";
 }
 
-function updateIdKind(setType = true) {
-  const f = $("#f-phone"), ip = f.id_kind.value === "ip";
-  $("#wrap-mac").hidden = ip;
-  $("#wrap-ip").hidden = !ip;
-  $("#ip-hint").hidden = !ip;
-  f.mac.required = !ip;
-  f.id_ip.required = ip;
-  if (setType) f.type.value = ip ? "" : (f.type.value || "8851");
+function updateTypeHint() {
+  $("#ip-hint").hidden = $("#f-phone").type.value !== "";
 }
-$("#sel-idkind").addEventListener("change", () => updateIdKind());
+$("#sel-type").addEventListener("change", updateTypeHint);
 
 function addCodecRow(sel = "") {
   const box = $("#codec-rows"), i = box.children.length + 1;

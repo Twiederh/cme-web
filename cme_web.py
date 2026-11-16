@@ -256,8 +256,45 @@ def parse_dialpeer_codecs(out: str) -> dict[str, list[str]]:
     return used
 
 
+# CME meldet viele Fehler ohne "%", z.B. "Failed: CME mode only accept mac address ..."
+# oder "Error: The password you have entered is invalid."
+ERROR_PREFIXES = ("%", "failed", "error")
+
+
 def config_errors(out: str) -> list[str]:
-    return [l.strip() for l in out.splitlines() if l.strip().startswith("%")]
+    errs = []
+    lines = out.splitlines()
+    for i, l in enumerate(lines):
+        t = l.strip()
+        if t.lower().startswith(ERROR_PREFIXES):
+            errs.append(t)
+            # Erlaeuterungen direkt darunter mitnehmen (z.B. Passwortregeln)
+            for nxt in lines[i + 1:i + 6]:
+                n = nxt.strip()
+                if not n or re.match(r"^[\w.-]+(\([\w-]+\))?#", n) or n.lower().startswith(ERROR_PREFIXES):
+                    break
+                errs.append("  " + n)
+    return errs
+
+
+def password_ok(pw: str) -> bool:
+    """Passwortregel von CME: 6-15 Zeichen, nur Buchstaben/Ziffern, je mind. eine Ziffer,
+    ein Gross- und ein Kleinbuchstabe."""
+    return (re.fullmatch(r"[A-Za-z0-9]{6,15}", pw) is not None and re.search(r"\d", pw) is not None
+            and re.search(r"[A-Z]", pw) is not None and re.search(r"[a-z]", pw) is not None)
+
+
+def new_password() -> str:
+    import string
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(12))
+        if password_ok(pw):
+            return pw
+
+
+PW_RULE = ("SIP-Passwort: 6-15 Buchstaben/Ziffern ohne Sonderzeichen, mindestens eine Ziffer, "
+           "ein Grossbuchstabe und ein Kleinbuchstabe.")
 
 
 # --------------------------------------------------------------------------
@@ -634,23 +671,13 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     def phone_input(data: dict, st: dict, own_tag: str | None) -> dict:
         """Prueft die Formulardaten fuer Anlegen und Bearbeiten."""
         id_kind = data.get("id_kind") or "mac"
-        mac = ip = ""
+        if id_kind != "mac":
+            raise InputError("CME erkennt Telefone nur an der MAC-Adresse, auch Fremdgeraete. "
+                             "Bei Gigaset die MAC der Basis eintragen.")
+        mac = norm_mac(data.get("mac"))
+        ip = ""
         mask = "255.255.255.255"
-        if id_kind == "ip":
-            try:
-                ip = str(ipaddress.IPv4Address((data.get("id_ip") or "").strip()))
-            except ValueError:
-                raise InputError("Ungueltige IP-Adresse")
-            if data.get("id_mask"):
-                try:
-                    mask = str(ipaddress.IPv4Network(f"0.0.0.0/{data['id_mask'].strip()}").netmask)
-                except ValueError:
-                    raise InputError("Ungueltige Netzmaske")
-        elif id_kind == "mac":
-            mac = norm_mac(data.get("mac"))
-        else:
-            raise InputError("Kennung muss MAC oder IP sein")
-        ptype = check(data.get("type"), RE_TYPE, "Telefontyp", required=(id_kind == "mac"))
+        ptype = check(data.get("type"), RE_TYPE, "Telefontyp", required=False)
         desc = check(data.get("description"), RE_TEXT, "Beschreibung", required=False)
         codec = data.get("codec") or "g711alaw"
         codec_list = ""
@@ -719,7 +746,9 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         v = phone_input(data, st, None)
         username = check(data.get("username") or v["known"][v["dns"][0]]["number"].lstrip("+"),
                          RE_CRED, "Benutzername")
-        password = check(data.get("password") or secrets.token_hex(6), RE_CRED, "Passwort")
+        password = (data.get("password") or "").strip() or new_password()
+        if not password_ok(password):
+            raise InputError(PW_RULE)
         tag = str(max([int(p["tag"]) for p in st["phones"]] + [0]) + 1)
 
         lines = [f"voice register pool {tag}", id_line(v)]
@@ -780,7 +809,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         if password:
             username = check(username or cur["username"] or v["known"][v["dns"][0]]["number"].lstrip("+"),
                              RE_CRED, "Benutzername")
-            password = check(password, RE_CRED, "Passwort")
+            if not password_ok(password):
+                raise InputError(PW_RULE)
             lines.append(f" username {username} password {password}")
         elif username and username != cur["username"]:
             raise InputError("Fuer einen neuen SIP-Benutzer bitte auch ein Passwort angeben.")
