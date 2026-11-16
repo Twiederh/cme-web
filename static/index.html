@@ -25,6 +25,8 @@
   header .host { color: var(--muted); }
   header .spacer { flex: 1; }
   .stamp { color: var(--muted); font-size: 12px; }
+  .user { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .user a { color: var(--accent); text-decoration: none; }
   main { max-width: 1200px; margin: 0 auto; padding: 20px 24px 60px; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .kpi { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
@@ -58,6 +60,8 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.small { padding: 2px 8px; font-size: 12px; }
   button:disabled { opacity: .55; cursor: default; }
+  button.danger { color: var(--bad); }
+  button.danger:hover { border-color: var(--bad); }
   button.save.dirty { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
   form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
   form label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
@@ -93,6 +97,7 @@
   <span class="stamp" id="stamp"></span>
   <button id="refresh" title="Neu laden">Aktualisieren</button>
   <button id="save" class="save" title="write memory">Konfiguration speichern</button>
+  <span class="user" id="user" hidden><span id="user-name"></span> · <a href="/logout">Abmelden</a></span>
 </header>
 
 <main>
@@ -206,6 +211,10 @@ const badge = (cls, txt) => `<span class="badge ${cls}">${esc(txt)}</span>`;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (r.status === 401) {   // Sitzung abgelaufen -> zur Anmeldung
+    location.href = "/login?next=" + encodeURIComponent(location.pathname);
+    return { ok: false, error: "Nicht angemeldet" };
+  }
   let j; try { j = await r.json(); } catch { j = { ok: false, error: `HTTP ${r.status}` }; }
   if (!r.ok && j.ok === undefined) j.ok = false;
   return j;
@@ -274,7 +283,8 @@ function render() {
         <td>${esc(p.type)}</td><td class="mono">${esc(p.mac)}</td><td>${lines}</td>
         <td class="mono">${esc(p.ip) || '<span class="muted">–</span>'}</td><td>${st}</td>
         <td><div class="actions"><button class="small" data-edit="${esc(p.tag)}">Bearbeiten</button>
-          <button class="small" data-restart="${esc(p.tag)}">Neustart</button></div></td></tr>`;
+          <button class="small" data-restart="${esc(p.tag)}">Neustart</button>
+          <button class="small danger" data-delete="${esc(p.tag)}">Löschen</button></div></td></tr>`;
     }).join("") : `<tr><td colspan="8" class="empty">Noch keine Telefone angelegt.</td></tr>`;
 
   // Rufnummern
@@ -285,7 +295,8 @@ function render() {
       <td><span class="mono">${esc(n.number)}</span> ${n.shared ? badge("warn", "Shared" + (n.max_calls ? ` · max ${n.max_calls}` : "")) : ""}</td>
       <td>${esc(n.name)}</td><td>${esc(n.label)}</td>
       <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}</td>
-      <td><button class="small" data-edit-number="${esc(n.tag)}">Bearbeiten</button></td></tr>`).join("")
+      <td><div class="actions"><button class="small" data-edit-number="${esc(n.tag)}">Bearbeiten</button>
+        <button class="small danger" data-delete-number="${esc(n.tag)}">Löschen</button></div></td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">Noch keine Rufnummern angelegt.</td></tr>`;
 
   refreshLineSelects();
@@ -507,6 +518,36 @@ document.addEventListener("click", async (e) => {
   setTimeout(() => load(true), 4000);
 });
 
+document.addEventListener("click", async (e) => {
+  const ptag = e.target.dataset?.delete;
+  const ntag = e.target.dataset?.deleteNumber;
+  if (!ptag && !ntag) return;
+  let url, question;
+  if (ptag) {
+    const p = data.phones.find(x => x.tag === ptag);
+    question = `Telefon „${p?.description || "Pool " + ptag}“ (${p?.mac || ""}) wirklich löschen?\n\n` +
+               `Die Rufnummern bleiben erhalten.`;
+    url = `/api/phones/${ptag}`;
+  } else {
+    const n = data.numbers.find(x => x.tag === ntag);
+    const poolName = Object.fromEntries(data.phones.map(p => [p.tag, p.description || `Pool ${p.tag}`]));
+    question = `Rufnummer ${n?.number}${n?.name ? " (" + n.name + ")" : ""} wirklich löschen?`;
+    if (n?.pools.length) {
+      question += `\n\nSie wird dabei von folgenden Telefonen entfernt, die danach neu starten:\n` +
+                  n.pools.map(t => "• " + (poolName[t] || `Pool ${t}`)).join("\n");
+    }
+    url = `/api/numbers/${ntag}?detach=1`;
+  }
+  if (!confirm(question)) return;
+  e.target.disabled = true;
+  const j = await api(url, { method: "DELETE" });
+  e.target.disabled = false;
+  if (!j.ok) { alert(j.error || "Fehler"); return; }
+  if (ptag && $("#f-phone").edit_tag.value === ptag) endEdit();
+  if (ntag && $("#f-number").edit_tag.value === ntag) endNumberEdit();
+  load(true);
+});
+
 $("#raw-run").addEventListener("click", async () => {
   const out = $("#raw-out"); out.textContent = "Lädt …";
   const j = await api("/api/raw?cmd=" + encodeURIComponent($("#raw-cmd").value));
@@ -515,6 +556,11 @@ $("#raw-run").addEventListener("click", async () => {
 
 (async () => {
   const meta = await api("/api/meta");
+  const me = await api("/api/me");
+  if (me.user) {
+    $("#user-name").textContent = me.user.name + (me.user.provider ? ` (${me.user.provider})` : "");
+    $("#user").hidden = false;
+  }
   $("#demo").hidden = !meta.demo;
   $("#sel-type").innerHTML = meta.phone_types.map(t => `<option ${t === "8851" ? "selected" : ""}>${t}</option>`).join("");
   $("#sel-codec").innerHTML = meta.codecs.map(c => `<option>${c}</option>`).join("");
