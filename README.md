@@ -206,6 +206,26 @@ desselben Pools eintragen; sie teilen sich Authentifizierungsname und Passwort.
 Damit CME die Anmeldedaten auch wirklich prüft, sollte unter
 `voice register global` der Befehl `authenticate register` gesetzt sein.
 
+### Codec-Listen
+
+In der Karte **Codec-Listen** werden `voice class codec`-Listen angelegt, sortiert,
+bearbeitet und gelöscht:
+```
+voice class codec <tag>
+ codec preference 1 g722-64
+ codec preference 2 g711alaw
+ codec preference 3 g711ulaw
+```
+Beim Telefon wählt man unter *Codec* entweder einen einzelnen Codec (`codec …`)
+oder eine Liste (`voice-class codec <tag>`). Die Tabelle zeigt, wo eine Liste
+verwendet wird – auch von Dial-Peers, etwa dem SIP-Trunk. Wird eine solche Liste
+geändert, wirkt das dort sofort; die Seite weist darauf hin. Beim Bearbeiten
+werden erst alle alten Einträge entfernt (`no codec preference n`) und dann die
+neuen gesetzt. Gelöscht werden kann eine Liste nur, wenn sie nirgends verwendet wird.
+
+Welche Codecs der Router für Listen kennt (z. B. `opus`, `ilbc`), hängt von der
+IOS-Version ab; ein unbekannter Codec wird vom Router mit einer `%`-Meldung abgelehnt.
+
 ### Shared Lines
 
 Eine Rufnummer, die auf mehreren Telefonen klingeln soll, wird im Formular
