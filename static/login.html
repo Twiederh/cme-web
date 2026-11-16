@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anmelden · CME Telefonanlage</title>
+<style>
+  :root { --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+          --accent: #1f6feb; --bad: #c62828; --bad-bg: #fdecea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1d2128; --text: #e6e9ef; --muted: #959cab; --line: #2c313a;
+            --accent: #58a6ff; --bad: #ff7b72; --bad-bg: #3a1614; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  .card { width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--line);
+          border-radius: 12px; padding: 28px 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 22px; color: var(--muted); }
+  .providers { display: flex; flex-direction: column; gap: 10px; }
+  a.btn, button { display: block; width: 100%; text-align: center; font: inherit; font-weight: 500;
+                  padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--card); color: var(--text); text-decoration: none; cursor: pointer; }
+  a.btn:hover, button:hover { border-color: var(--accent); }
+  a.btn.primary, button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sep { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 20px 0 14px; }
+  .sep::before, .sep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 3px; }
+  input { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--bg); color: var(--text); margin-bottom: 10px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .err { background: var(--bad-bg); color: var(--bad); border-radius: 8px; padding: 8px 10px; margin-bottom: 16px;
+         font-size: 13px; white-space: pre-wrap; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details[open] summary { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>CME Telefonanlage</h1>
+  <p class="sub">Bitte anmelden</p>
+  <div class="err" id="err" hidden></div>
+
+  <div class="providers" id="providers"></div>
+
+  <div id="local-wrap" hidden>
+    <div class="sep" id="sep">oder</div>
+    <details id="local-details">
+      <summary>Mit lokalem Benutzer anmelden</summary>
+      <form id="local">
+        <label for="u">Benutzer</label><input id="u" name="username" autocomplete="username" required>
+        <label for="p">Passwort</label><input id="p" name="password" type="password" autocomplete="current-password" required>
+        <button class="primary" type="submit">Anmelden</button>
+      </form>
+    </details>
+  </div>
+</main>
+
+<script>
+const params = new URLSearchParams(location.search);
+const next = params.get("next") || "/";
+const showErr = (t) => { const e = document.getElementById("err"); e.textContent = t; e.hidden = !t; };
+if (params.get("error")) showErr(params.get("error"));
+
+(async () => {
+  const info = await (await fetch("/api/auth/info")).json();
+  if (!info.enabled || info.user) { location.replace(next); return; }
+  const box = document.getElementById("providers");
+  info.providers.forEach((p, i) => {
+    const a = document.createElement("a");
+    a.className = "btn" + (i === 0 ? " primary" : "");
+    a.href = `/auth/login/${encodeURIComponent(p.name)}?next=${encodeURIComponent(next)}`;
+    a.textContent = `Anmelden mit ${p.label}`;
+    box.appendChild(a);
+  });
+  if (info.local) {
+    document.getElementById("local-wrap").hidden = false;
+    if (!info.providers.length) {
+      document.getElementById("sep").hidden = true;
+      document.getElementById("local-details").open = true;
+    }
+  }
+})();
+
+document.getElementById("local").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const r = await fetch("/auth/local", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: f.username.value, password: f.password.value, next }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (j.ok) location.replace(j.next || "/");
+  else { showErr(j.error || "Anmeldung fehlgeschlagen"); f.password.value = ""; f.password.focus(); }
+});
+</script>
+</body>
+</html>
