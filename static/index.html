@@ -279,6 +279,7 @@
             <div><label>SIP-Benutzer (leer = Nummer von Leitung 1)</label><input name="username" placeholder="automatisch"></div>
             <div><label id="pw-label">SIP-Passwort (leer = zufällig)</label><input name="password" placeholder="automatisch" title="6–15 Buchstaben/Ziffern, mind. eine Ziffer, ein Groß- und ein Kleinbuchstabe"></div>
           </div>
+          <label class="check" id="mobility-row"><input type="checkbox" name="mobility_key"> Mobility-Taste am Telefon (Single Number Reach ein-/ausschalten)</label>
           <label class="check" id="restart-row" hidden><input type="checkbox" name="restart" checked> Telefon nach dem Speichern neu starten</label>
           <div class="actions">
             <button class="primary" type="submit" id="phone-submit">Anlegen</button>
@@ -422,7 +423,8 @@ function render() {
       const st = p.state === "REGISTERED" ? badge("ok", "registriert")
                : p.state === "UNBEKANNT" ? badge("neutral", "unbekannt") : badge("bad", "offline");
       const lines = p.lines.map(l => `<div><span class="muted">${esc(l.ln)}:</span> <span class="mono">${esc(l.number)}</span> ${l.name ? `<span class="muted">${esc(l.name)}</span>` : ""}</div>`).join("");
-      return `<tr><td class="mono">${esc(p.tag)}</td><td>${esc(p.description) || '<span class="muted">–</span>'}</td>
+      return `<tr><td class="mono">${esc(p.tag)}</td><td>${esc(p.description) || '<span class="muted">–</span>'}
+          ${p.mobility_key ? badge("neutral", "Mobility-Taste") : ""}</td>
         <td>${p.type ? esc(TYPE_LABEL[p.type] ?? p.type) : '<span class="muted">Fremdgerät</span>'}</td>
         <td class="mono">${p.mac ? esc(p.mac) : p.device_id ? esc(p.device_id) : (p.id_ip ? `<span class="muted">IP</span> ${esc(p.id_ip)}` : `<span class="bad-text">keine Kennung</span>`)}</td><td>${lines}</td>
         <td class="mono">${esc(p.ip) || '<span class="muted">–</span>'}</td><td>${st}</td>
@@ -742,6 +744,7 @@ function startEdit(tag) {
   f.codec.value = p.codec_list ? `list:${p.codec_list}` : (p.codec || "g711alaw");
   f.username.value = p.username || "";
   f.password.value = "";
+  f.mobility_key.checked = !!p.mobility_key;
   $("#lines").innerHTML = "";
   (p.lines.length ? p.lines : [{ dn: "" }]).forEach(l => addLine(l.dn));
   refreshLineSelects();
@@ -783,6 +786,9 @@ function updateTypeHint() {
   $("#wrap-device").hidden = !jabber;
   f.mac.required = !jabber;
   f.device_id.required = jabber;
+  const noKeys = jabber || ["", "6901", "ATA190"].includes(t);
+  $("#mobility-row").hidden = noKeys;
+  if (noKeys) f.mobility_key.checked = false;
 }
 $("#sel-type").addEventListener("change", updateTypeHint);
 
