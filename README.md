@@ -245,6 +245,19 @@ ausgehenden Dial-Peer. Viele Provider lehnen eine fremde Absendernummer ab; dann
 „eigene Rufnummer anzeigen“ aktivieren. Am Handy angenommene Gespräche lassen sich am Tischtelefon mit
 *Fortsetzen* zurückholen.
 
+**Mobility-Taste am Telefon:** Im Formular „Telefon anlegen/bearbeiten“ legt der Haken
+*Mobility-Taste* ein Softkey-Template an (oder nimmt ein vorhandenes mit Mobility) und hängt es an den Pool:
+```
+voice register template 1
+ softkeys idle Redial Newcall Cfwdall Pickup DND Mobility
+ softkeys connected Hold Endcall Trnsfer Confrn Park Mobility
+voice register pool <tag>
+ template 1
+```
+Mit der Taste schaltet man SNR am Telefon ein und aus; während eines Gesprächs schiebt sie das Gespräch
+aufs Handy. Nutzt ein Pool schon ein anderes Template, ändert die Seite nichts und meldet das. Nicht
+möglich bei 6901, ATA, Jabber und Fremdgeräten.
+
 ### Hintergrundbilder und Klingeltöne
 
 Die Karten **Hintergrundbilder** und **Klingeltöne** zeigen, was die Telefone per TFTP
