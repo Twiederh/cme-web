@@ -209,6 +209,23 @@ desselben Pools eintragen; sie teilen sich Authentifizierungsname und Passwort.
 Damit CME die Anmeldedaten auch wirklich prüft, sollte unter
 `voice register global` der Befehl `authenticate register` gesetzt sein.
 
+### Cisco Jabber und 8945
+
+Unter *Typ* gibt es neben den Tischtelefonen (auch **8945**) die Softclients
+**Cisco Jabber** für Windows/Mac (`Jabber-CSF-Client`), iPhone (`Jabber-iPhone`) und
+Android (`Jabber-Android`). Jabber hat keine feste MAC; CME erkennt es über einen
+Gerätenamen:
+```
+voice register pool <tag>
+ id device-id-name CSFTHOMAS
+ type Jabber-CSF-Client
+ number 1 dn <dn>
+ username <benutzer> password <passwort>
+```
+Üblich sind die Präfixe `CSF` (Windows/Mac), `TCT` (iPhone) und `BOT` (Android) plus
+Benutzername. In Jabber denselben Gerätenamen, als Server die IP des Routers sowie
+SIP-Benutzer und SIP-Passwort eintragen.
+
 ### Codec-Listen
 
 In der Karte **Codec-Listen** werden `voice class codec`-Listen angelegt, sortiert,

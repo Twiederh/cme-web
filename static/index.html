@@ -224,7 +224,8 @@
         <form id="f-phone">
           <input type="hidden" name="edit_tag" value="">
           <div class="row">
-            <div><label>MAC-Adresse *</label><input name="mac" required placeholder="70DB.98A1.0C11"></div>
+            <div id="wrap-mac"><label>MAC-Adresse *</label><input name="mac" required placeholder="70DB.98A1.0C11"></div>
+            <div id="wrap-device" hidden><label>Gerätename (Device ID) *</label><input name="device_id" placeholder="CSFTHOMAS" pattern="[A-Za-z0-9_\-]{3,50}"></div>
             <div><label>Typ</label><select name="type" id="sel-type"></select></div>
           </div>
           <div class="hint" id="ip-hint" hidden>
@@ -232,6 +233,12 @@
             steht auf dem Aufkleber und in der Weboberfläche). Am Gerät eintragen:
             <b>Registrar/Proxy</b> = IP des Routers, Port 5060 · <b>Benutzername</b> = Rufnummer der
             Leitung · <b>Authentifizierungsname</b> und <b>Passwort</b> = SIP-Benutzer und SIP-Passwort von unten.
+          </div>
+          <div class="hint" id="jabber-hint" hidden>
+            Jabber wird über einen <b>Gerätenamen</b> erkannt, nicht über die MAC. Üblich ist ein Präfix plus
+            Benutzername: <b>CSF</b>… für Windows/Mac, <b>TCT</b>… für iPhone, <b>BOT</b>… für Android
+            (z. B. <span class="mono">CSFTHOMAS</span>). Denselben Namen in Jabber eintragen; als Server
+            die IP des Routers, Anmeldung mit SIP-Benutzer und SIP-Passwort von unten.
           </div>
           <div class="row">
             <div><label>Beschreibung</label><input name="description" maxlength="40" placeholder="Büro"></div>
@@ -344,8 +351,8 @@ function render() {
                : p.state === "UNBEKANNT" ? badge("neutral", "unbekannt") : badge("bad", "offline");
       const lines = p.lines.map(l => `<div><span class="muted">${esc(l.ln)}:</span> <span class="mono">${esc(l.number)}</span> ${l.name ? `<span class="muted">${esc(l.name)}</span>` : ""}</div>`).join("");
       return `<tr><td class="mono">${esc(p.tag)}</td><td>${esc(p.description) || '<span class="muted">–</span>'}</td>
-        <td>${p.type ? esc(p.type) : '<span class="muted">Fremdgerät</span>'}</td>
-        <td class="mono">${p.mac ? esc(p.mac) : (p.id_ip ? `<span class="muted">IP</span> ${esc(p.id_ip)}` : `<span class="bad-text">keine Kennung</span>`)}</td><td>${lines}</td>
+        <td>${p.type ? esc(TYPE_LABEL[p.type] ?? p.type) : '<span class="muted">Fremdgerät</span>'}</td>
+        <td class="mono">${p.mac ? esc(p.mac) : p.device_id ? esc(p.device_id) : (p.id_ip ? `<span class="muted">IP</span> ${esc(p.id_ip)}` : `<span class="bad-text">keine Kennung</span>`)}</td><td>${lines}</td>
         <td class="mono">${esc(p.ip) || '<span class="muted">–</span>'}</td><td>${st}</td>
         <td><div class="actions"><button class="small" data-edit="${esc(p.tag)}">Bearbeiten</button>
           <button class="small" data-restart="${esc(p.tag)}">Neustart</button>
@@ -633,6 +640,7 @@ function startEdit(tag) {
   f.reset();
   f.edit_tag.value = tag;
   f.mac.value = p.mac || "";
+  f.device_id.value = p.device_id || "";
   if (![...f.type.options].some(o => o.value === p.type)) f.type.add(new Option(p.type, p.type));
   f.type.value = p.type;
   updateTypeHint();
@@ -668,8 +676,20 @@ function endEdit(clearMsg = true) {
   if (clearMsg) $("#m-phone").className = "msg";
 }
 
+const TYPE_LABEL = {
+  "": "Fremdgerät (ohne Typ)",
+  "Jabber-CSF-Client": "Cisco Jabber (Windows/Mac)",
+  "Jabber-iPhone": "Cisco Jabber (iPhone)",
+  "Jabber-Android": "Cisco Jabber (Android)",
+};
 function updateTypeHint() {
-  $("#ip-hint").hidden = $("#f-phone").type.value !== "";
+  const f = $("#f-phone"), t = f.type.value, jabber = t.startsWith("Jabber-");
+  $("#ip-hint").hidden = t !== "";
+  $("#jabber-hint").hidden = !jabber;
+  $("#wrap-mac").hidden = jabber;
+  $("#wrap-device").hidden = !jabber;
+  f.mac.required = !jabber;
+  f.device_id.required = jabber;
 }
 $("#sel-type").addEventListener("change", updateTypeHint);
 
@@ -842,7 +862,7 @@ document.addEventListener("click", async (e) => {
   let url, question;
   if (ptag) {
     const p = data.phones.find(x => x.tag === ptag);
-    question = `Telefon „${p?.description || "Pool " + ptag}“ (${p?.mac || p?.id_ip || ""}) wirklich löschen?\n\n` +
+    question = `Telefon „${p?.description || "Pool " + ptag}“ (${p?.mac || p?.device_id || p?.id_ip || ""}) wirklich löschen?\n\n` +
                `Die Rufnummern bleiben erhalten.`;
     url = `/api/phones/${ptag}`;
   } else {
@@ -881,7 +901,7 @@ $("#raw-run").addEventListener("click", async () => {
   }
   $("#demo").hidden = !meta.demo;
   $("#sel-type").innerHTML = meta.phone_types.map(t =>
-    `<option value="${esc(t)}" ${t === "8851" ? "selected" : ""}>${t ? esc(t) : "Fremdgerät (ohne Typ)"}</option>`).join("");
+    `<option value="${esc(t)}" ${t === "8851" ? "selected" : ""}>${esc(TYPE_LABEL[t] ?? t)}</option>`).join("");
   refreshCodecSelect();
   $("#sel-codec").value = "g711alaw";
   $("#sel-hunt-type").innerHTML = (meta.hunt_types || []).map(t =>
