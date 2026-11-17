@@ -191,7 +191,7 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "", "device_id": "",
                                              "type": "", "description": "",
-                                             "username": "", "codec": "", "codec_list": "", "template": "",
+                                             "username": "", "codec": "", "codec_list": "", "template": "", "phone_mode": "",
                                              "numbers": []})
             cur["_kind"] = kind
             continue
@@ -235,6 +235,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["codec"] = s.split()[1]
             elif s.startswith("template "):
                 cur["template"] = s.split()[1]
+            elif s.startswith("phone-mode "):
+                cur["phone_mode"] = s.split()[1]
             elif s.startswith("voice-class codec "):
                 cur["codec_list"] = s.split()[2]
             else:
@@ -458,7 +460,7 @@ class DemoRouter:
     SINGLE = ("id mac", "id ip", "id device-id-name", "type", "description", "voice-class codec", "codec", "username",
               "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops",
               "mobility", "snr answer-too-soon", "snr calling-number", "snr ring-stop", "template",
-              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting")
+              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting", "phone-mode")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -1060,6 +1062,9 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         lines = [f"voice register pool {tag}", id_line(v)]
         if v["type"]:
             lines.append(f" type {v['type']}")
+        if v["id_kind"] == "device":
+            # Jabber ohne Presence-Server: nur als Telefon
+            lines.append(" phone-mode phone-only")
         lines += [f" number {i} dn {d}" for i, d in enumerate(v["dns"], 1)]
         lines += [" dtmf-relay rtp-nte", codec_line(v), f" username {username} password {password}"]
         if v["description"]:
@@ -1099,6 +1104,10 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines.append(id_line(v))
         if v["type"] != cur["type"]:
             lines.append(f" type {v['type']}" if v["type"] else f" no type {cur['type']}")
+        if v["id_kind"] == "device" and cur.get("phone_mode") != "phone-only":
+            lines.append(" phone-mode phone-only")
+        elif v["id_kind"] != "device" and cur.get("phone_mode"):
+            lines.append(f" no phone-mode {cur['phone_mode']}")
         if v["codec_list"]:
             if v["codec_list"] != cur.get("codec_list"):
                 lines.append(codec_line(v))
