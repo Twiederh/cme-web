@@ -139,8 +139,10 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
         if current_user() or basic_ok():
             # Schutz gegen CSRF: aendernde API-Aufrufe nur als JSON (Browser senden das
             # von fremden Seiten nicht ohne CORS-Freigabe).
+            # Datei-Uploads (multipart) tragen stattdessen den Kopf X-CME-Request, den fremde
+            # Seiten ebenfalls nicht ohne CORS-Freigabe setzen koennen.
             if request.method in ("POST", "PUT", "DELETE") and path.startswith("/api/") \
-                    and not request.is_json:
+                    and not request.is_json and request.headers.get("X-CME-Request") != "1":
                 return jsonify(ok=False, error="Anfrage muss JSON sein"), 415
             return None
         if path.startswith("/api/"):
