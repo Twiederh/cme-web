@@ -6,11 +6,15 @@ ENV PYTHONUNBUFFERED=1 \
     CME_WEB_PORT=8080
 
 WORKDIR /app
+# ffmpeg rechnet hochgeladene Klingeltoene ins Cisco-Format um
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install -r requirements.txt \
  && useradd --system --uid 10001 --create-home cme
 
-COPY cme_web.py auth.py ./
+COPY cme_web.py auth.py media.py ./
 COPY static ./static
 
 USER cme
