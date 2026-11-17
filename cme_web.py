@@ -49,6 +49,13 @@ SOFT_CLIENT_PREFIX = "Jabber-"
 CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8"]
 # Codecs fuer Codec-Listen (voice class codec); was der Router kennt, haengt von der IOS-Version ab
 LIST_CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8", "g729br8", "ilbc", "opus"]
+# Softkey-Template fuer die Mobility-Taste (SNR am Telefon ein-/ausschalten)
+MOBILITY_SOFTKEYS = {
+    "idle": "Redial Newcall Cfwdall Pickup DND Mobility",
+    "connected": "Hold Endcall Trnsfer Confrn Park Mobility",
+}
+# Telefone ohne frei belegbare Softkeys
+NO_SOFTKEY_TYPES = ("", "6901", "ATA190")
 # Arten von Sammelgruppen (voice hunt-group)
 HUNT_TYPES = ["parallel", "sequential", "peer", "longest-idle"]
 
@@ -184,7 +191,7 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "", "device_id": "",
                                              "type": "", "description": "",
-                                             "username": "", "codec": "", "codec_list": "",
+                                             "username": "", "codec": "", "codec_list": "", "template": "",
                                              "numbers": []})
             cur["_kind"] = kind
             continue
@@ -226,6 +233,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["username"] = s.split()[1]
             elif s.startswith("codec "):
                 cur["codec"] = s.split()[1]
+            elif s.startswith("template "):
+                cur["template"] = s.split()[1]
             elif s.startswith("voice-class codec "):
                 cur["codec_list"] = s.split()[2]
             else:
@@ -235,6 +244,31 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
     for d in list(dns.values()) + list(pools.values()):
         d.pop("_kind", None)
     return dns, pools
+
+
+def parse_templates(out: str) -> dict[str, dict]:
+    """show running-config | section voice register -> {tag: {tag, softkeys: {state: [keys]}, other: [...]}}"""
+    temps: dict[str, dict] = {}
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"^voice register template\s+(\d+)\s*$", line)
+        if m:
+            cur = temps.setdefault(m.group(1), {"tag": m.group(1), "softkeys": {}, "other": []})
+            continue
+        if not line.startswith(" "):
+            cur = None
+            continue
+        if cur is None:
+            continue
+        mm = re.match(r"^\s+softkeys (\S+) (.*)$", line)
+        if mm:
+            cur["softkeys"][mm.group(1)] = mm.group(2).split()
+        else:
+            cur["other"].append(line.strip())
+    for t in temps.values():
+        sk = t["softkeys"]
+        t["mobility"] = "Mobility" in sk.get("idle", []) and "Mobility" in sk.get("connected", [])
+    return temps
 
 
 def parse_snr_line(dn: dict, s: str) -> None:
@@ -423,7 +457,8 @@ class DemoRouter:
 
     SINGLE = ("id mac", "id ip", "id device-id-name", "type", "description", "voice-class codec", "codec", "username",
               "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops",
-              "mobility", "snr answer-too-soon", "snr calling-number", "snr ring-stop")
+              "mobility", "snr answer-too-soon", "snr calling-number", "snr ring-stop", "template",
+              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -530,7 +565,7 @@ class DemoRouter:
                         self.tftp.remove(line[3:])
                     block = None
                     continue
-                m = re.match(r"^no (voice register (?:dn|pool)|voice class codec|voice hunt-group)\s+(\d+)$",
+                m = re.match(r"^no (voice register (?:dn|pool|template)|voice class codec|voice hunt-group)\s+(\d+)$",
                              line.strip())
                 if m:
                     if m.group(1) == "voice hunt-group":
@@ -548,7 +583,7 @@ class DemoRouter:
                     block = None
                     continue
                 if not line.startswith(" "):
-                    m = re.match(r"^voice register (dn|pool)\s+(\d+)$", line.strip())
+                    m = re.match(r"^voice register (dn|pool|template)\s+(\d+)$", line.strip())
                     mc = re.match(r"^voice class codec\s+(\d+)$", line.strip())
                     mh = re.match(r"^voice hunt-group\s+(\d+)\s+(\S+)$", line.strip())
                     if mh:
@@ -643,7 +678,9 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         hostname = safe("show running-config | include ^hostname").replace("hostname", "").strip()
         reg = parse_register_status(safe("show sip-ua register status"))
         peers = parse_dial_peers(safe("show dial-peer voice summary"))
-        dns, pools = parse_voice_register_config(safe("show running-config | section voice register"))
+        vr_out = safe("show running-config | section voice register")
+        dns, pools = parse_voice_register_config(vr_out)
+        templates = parse_templates(vr_out)
         brief = parse_pool_brief(safe("show voice register pool all brief"))
         codec_lists = parse_codec_classes(safe("show running-config | section voice class codec"))
         dp_codecs = parse_dialpeer_codecs(safe("show running-config | section dial-peer voice"))
@@ -656,6 +693,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines = [{"ln": n["ln"], "dn": n["dn"],
                       "number": dn_by_tag.get(n["dn"], {}).get("number", ""),
                       "name": dn_by_tag.get(n["dn"], {}).get("name", "")} for n in p["numbers"]]
+            p["mobility_key"] = bool(p["template"]) and templates.get(p["template"], {}).get("mobility", False)
             phones.append({**p, "lines": lines, "ip": b.get("ip", ""),
                            "state": b.get("state", "UNBEKANNT" if not brief else "UNREGISTERED")})
         used = {}
@@ -680,6 +718,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                   for t, c in sorted(codec_lists.items(), key=lambda kv: int(kv[0]))]
         return {"hostname": hostname, "trunks": reg, "dialpeers": peers, "phones": phones,
                 "numbers": numbers, "codec_lists": clists, "huntgroups": huntgroups,
+                "templates": [templates[k] for k in sorted(templates, key=int)],
                 "errors": errors, "ts": time.time()}
 
     def get_status(force=False) -> dict:
@@ -942,7 +981,39 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                 raise InputError(f"Geraetename {device_id} ist schon Pool {other['tag']} zugeordnet.")
         return {"id_kind": id_kind, "mac": mac, "ip": ip, "mask": mask, "device_id": device_id, "type": ptype,
                 "description": desc, "codec": codec, "codec_list": codec_list,
-                "dns": dn_tags, "known": known}
+                "dns": dn_tags, "known": known, "mobility_key": mobility_key(data, ptype)}
+
+    def mobility_key(data: dict, ptype: str) -> bool:
+        want = bool(data.get("mobility_key"))
+        if want and (ptype in NO_SOFTKEY_TYPES or ptype.startswith(SOFT_CLIENT_PREFIX)):
+            raise InputError("Die Mobility-Taste gibt es nur bei Cisco-Tischtelefonen mit Softkeys "
+                             "(nicht bei 6901, ATA, Jabber oder Fremdgeraeten).")
+        return want
+
+    def mobility_template(st: dict) -> tuple[str, list[str]]:
+        """Template mit Mobility-Softkey: vorhandenes nehmen oder neu anlegen."""
+        for t in st.get("templates", []):
+            if t["mobility"]:
+                return t["tag"], []
+        used = {int(t["tag"]) for t in st.get("templates", [])}
+        tag = str(next(i for i in range(1, 11) if i not in used))
+        return tag, [f"voice register template {tag}"] + [
+            f" softkeys {state} {keys}" for state, keys in MOBILITY_SOFTKEYS.items()]
+
+    def template_lines(v: dict, st: dict, cur: dict | None) -> tuple[list[str], list[str]]:
+        """-> (Befehle vor dem Pool, Befehle im Pool)"""
+        cur_t = (cur or {}).get("template", "")
+        if v["mobility_key"]:
+            if cur and cur.get("mobility_key"):
+                return [], []
+            if cur_t:
+                raise InputError(f"Das Telefon nutzt schon Template {cur_t}. Bitte dort den Softkey "
+                                 "Mobility ergaenzen oder das Template am Router entfernen.")
+            tag, pre = mobility_template(st)
+            return pre, [f" template {tag}"]
+        if cur and cur.get("mobility_key"):
+            return [], [f" no template {cur_t}"]
+        return [], []
 
     def codec_line(v: dict) -> str:
         return f" voice-class codec {v['codec_list']}" if v["codec_list"] else f" codec {v['codec']}"
@@ -968,6 +1039,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             problem = f"In Pool {tag} fehlt danach der Geraetename {v['device_id']}."
         elif sorted(l["dn"] for l in pool["lines"]) != sorted(v["dns"]):
             problem = f"In Pool {tag} fehlen danach Leitungen."
+        elif bool(pool.get("mobility_key")) != v["mobility_key"]:
+            problem = f"Die Mobility-Taste fuer Pool {tag} wurde nicht {'gesetzt' if v['mobility_key'] else 'entfernt'}."
         if problem:
             res.update(ok=False, error=(f"{problem} Der Router hat die Befehle nicht übernommen. "
                                         f"Ausgabe des Routers:\n\n{output_tail(res['output'], 40)}"))
@@ -991,6 +1064,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         lines += [" dtmf-relay rtp-nte", codec_line(v), f" username {username} password {password}"]
         if v["description"]:
             lines.append(f" description {v['description']}")
+        pre, tpl = template_lines(v, st, None)
+        lines = pre + lines + tpl
         lines += ["voice register global", " create profile"]
         res = apply(lines)
         res.update(tag=tag, username=username, password=password)
@@ -1050,9 +1125,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines.append(f" username {username} password {password}")
         elif username and username != cur["username"]:
             raise InputError("Fuer einen neuen SIP-Benutzer bitte auch ein Passwort angeben.")
+        pre, tpl = template_lines(v, st, cur)
+        lines += tpl
 
         if len(lines) == 1:
             return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
+        lines = pre + lines
 
         lines += ["voice register global", " create profile"]
         if data.get("restart", True):
