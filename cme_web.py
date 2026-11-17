@@ -37,6 +37,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
+import media
+
 BASE = Path(__file__).resolve().parent
 
 # "" = Fremdgeraet (z.B. Gigaset): kein "type" in der Konfiguration
@@ -67,6 +69,7 @@ RAW_COMMANDS = [
     "show running-config | section voice hunt-group",
     "show voice hunt-group",
     "show running-config | section sip-ua",
+    "show running-config | include ^tftp-server",
     "show version | include uptime|IOS",
 ]
 
@@ -423,6 +426,7 @@ class DemoRouter:
                           " session protocol sipv2\n session target sip-server\n voice-class codec 1\n"
                           "dial-peer voice 200 voip\n description Telefone\n destination-pattern 1..\n")
         self.registered = {"1": "192.168.1.31", "2": "192.168.1.32", "4": "192.168.1.60"}
+        media.demo_seed(self)     # self.files, self.tftp
 
     def show(self, cmd: str) -> str:
         time.sleep(0.2)
@@ -434,6 +438,8 @@ class DemoRouter:
             return "\n".join(l for l in self._blocks("voice hunt-group"))
         if cmd.startswith("show running-config | section dial-peer"):
             return self.dialpeers
+        if cmd.startswith("show running-config | include ^tftp-server"):
+            return "\n".join(self.tftp)
         if cmd.startswith("show running-config | include ^hostname"):
             return "hostname cme-demo"
         if cmd == "show sip-ua register status":
@@ -483,6 +489,16 @@ class DemoRouter:
         with self.lock:
             block = None
             for line in lines:
+                if line.startswith("tftp-server "):
+                    if line not in self.tftp:
+                        self.tftp.append(line)
+                    block = None
+                    continue
+                if line.startswith("no tftp-server "):
+                    if line[3:] in self.tftp:
+                        self.tftp.remove(line[3:])
+                    block = None
+                    continue
                 m = re.match(r"^no (voice register (?:dn|pool)|voice class codec|voice hunt-group)\s+(\d+)$",
                              line.strip())
                 if m:
@@ -651,6 +667,9 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     def output_tail(out: str, n: int = 25) -> str:
         rows = [l for l in (out or "").splitlines() if l.strip()]
         return "\n".join(rows[-n:])
+
+    # Hintergrundbilder und Klingeltoene (media.py)
+    media.register(app, router, apply, isinstance(router, DemoRouter))
 
     @app.get("/")
     def index():
