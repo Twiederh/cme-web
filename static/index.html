@@ -77,6 +77,14 @@
   section.card.editing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #codec-rows select { max-width: 260px; }
   #hunt-rows select { max-width: 380px; }
+  .walls { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 14px 16px; }
+  .wall { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .wall .img { width: 100%; aspect-ratio: 139 / 109; background: var(--line); display: flex;
+               align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+  .wall img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .wall .cap { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12px; }
+  .wall .cap span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  input[type=file] { padding: 4px; }
   .hint { font-size: 12px; color: var(--muted); background: var(--bg); border: 1px dashed var(--line);
           border-radius: 7px; padding: 8px 10px; margin-bottom: 10px; }
   .actions { display: flex; gap: 8px; align-items: center; }
@@ -257,6 +265,49 @@
             <button type="button" id="edit-cancel" class="small" hidden>Abbrechen</button>
           </div>
           <div class="msg" id="m-phone"></div>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Hintergrundbilder <span class="count" id="c-walls"></span>
+        <span class="right muted" style="font-weight:400;font-size:12px">88xx · 800×480</span></h2>
+      <div class="walls" id="walls"><div class="muted">Lädt …</div></div>
+      <div class="body" style="border-top: 1px solid var(--line)">
+        <form id="f-wall">
+          <div class="row">
+            <div><label>Bild (JPG, PNG, WebP …) *</label><input type="file" name="file" accept="image/*" required></div>
+            <div><label>Name</label><input name="name" maxlength="40" placeholder="aus dem Dateinamen"></div>
+          </div>
+          <div class="hint">Das Bild wird mittig auf 800×480 zugeschnitten, dazu entsteht ein Vorschaubild
+            in 139×109. Am Telefon unter <b>Einstellungen → Hintergrundbild</b> auswählen; nach dem
+            Festlegen dauert es ein paar Sekunden, bis es erscheint.</div>
+          <div class="actions"><button class="primary" type="submit" id="wall-submit">Hochladen</button></div>
+          <div class="msg" id="m-wall"></div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Klingeltöne <span class="count" id="c-rings"></span></h2>
+      <table><thead><tr><th>Name</th><th>Datei</th><th>Anhören</th><th></th></tr></thead>
+        <tbody id="t-rings"></tbody></table>
+      <div class="body" style="border-top: 1px solid var(--line)">
+        <form id="f-ring">
+          <div class="row">
+            <div><label>Ton (MP3, WAV, M4A, MP4 …) *</label><input type="file" name="file" accept="audio/*,video/*" required></div>
+            <div><label>Name am Telefon</label><input name="name" maxlength="40" placeholder="aus dem Dateinamen"></div>
+          </div>
+          <div class="row">
+            <div><label>Start ab Sekunde</label><input name="start" type="number" min="0" max="600" step="0.1" placeholder="0"></div>
+            <div></div>
+          </div>
+          <div class="hint">Wird auf das Cisco-Format umgerechnet (8 kHz, µ-law, mono). Stille am Anfang
+            wird abgeschnitten; erlaubt sind höchstens <b>2 Sekunden</b>, die das Telefon in Schleife spielt.</div>
+          <div class="actions"><button class="primary" type="submit" id="ring-submit">Hochladen</button></div>
+          <div class="msg" id="m-ring"></div>
         </form>
       </div>
     </section>
@@ -885,6 +936,84 @@ document.addEventListener("click", async (e) => {
   load(true);
 });
 
+// ---------------- Hintergrundbilder und Klingeltöne ----------------
+let MEDIA = { wallpapers: [], ringtones: [] };
+
+async function loadMedia(force = false) {
+  const j = await api("/api/media" + (force ? "?force=1" : ""));
+  if (!j.ok) {
+    $("#walls").innerHTML = `<div class="bad-text">${esc(j.error || "Fehler beim Laden")}</div>`;
+    return;
+  }
+  MEDIA = j;
+  $("#c-walls").textContent = `(${j.wallpapers.length})`;
+  $("#walls").innerHTML = j.wallpapers.length ? j.wallpapers.map(w => `<div class="wall">
+      <div class="img"><img loading="lazy" alt="" src="/api/media/thumb/${encodeURIComponent(w.thumb)}"
+        onerror="this.replaceWith(document.createTextNode('keine Vorschau'))"></div>
+      <div class="cap"><span title="${esc(w.file)}">${esc(w.name)}</span>
+        ${w.alias_ok ? "" : badge("warn", "kein Alias")}
+        <button class="small danger" data-del-wall="${esc(w.name)}" title="Löschen">✕</button></div></div>`).join("")
+    : `<div class="muted">Noch keine Hintergrundbilder.</div>`;
+  $("#c-rings").textContent = `(${j.ringtones.length})`;
+  $("#t-rings").innerHTML = j.ringtones.length ? j.ringtones.map(r => `<tr>
+      <td>${esc(r.display)}</td><td class="mono">${esc(r.file)} ${r.alias_ok ? "" : badge("warn", "kein Alias")}</td>
+      <td><button class="small" data-play="${esc(r.file)}">▶</button></td>
+      <td><button class="small danger" data-del-ring="${esc(r.file)}">Löschen</button></td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">Noch keine Klingeltöne.</td></tr>`;
+}
+
+async function uploadMedia(form, url, btn, msg, okText) {
+  const fd = new FormData(form);
+  btn.disabled = true;
+  showMsg(msg, true, "Wird umgerechnet und übertragen … das kann eine halbe Minute dauern.");
+  let j;
+  try {
+    const r = await fetch(url, { method: "POST", body: fd, headers: { "X-CME-Request": "1" } });
+    if (r.status === 401) { location.href = "/login"; return; }
+    if (r.status === 413) j = { ok: false, error: "Datei zu groß (höchstens 30 MB)." };
+    else { try { j = await r.json(); } catch { j = { ok: false, error: `HTTP ${r.status}` }; } }
+  } catch (e) { j = { ok: false, error: e.message }; }
+  btn.disabled = false;
+  if (!j.ok) { showMsg(msg, false, j.error || "Fehler"); return; }
+  showMsg(msg, true, okText(j) + (j.config.length ? `\n\n${j.config.join("\n")}` : ""));
+  form.reset();
+  await loadMedia(true);
+  load(true);
+}
+
+$("#f-wall").addEventListener("submit", (e) => {
+  e.preventDefault();
+  uploadMedia(e.target, "/api/media/wallpapers", $("#wall-submit"), $("#m-wall"),
+    j => `Hintergrundbild „${j.name}“ hochgeladen (${Math.round(j.size / 1024)} KB).`);
+});
+$("#f-ring").addEventListener("submit", (e) => {
+  e.preventDefault();
+  uploadMedia(e.target, "/api/media/ringtones", $("#ring-submit"), $("#m-ring"),
+    j => `Klingelton ${j.file} hochgeladen (${j.seconds} s).`);
+});
+
+let player = null;
+document.addEventListener("click", async (e) => {
+  const play = e.target.dataset?.play;
+  if (play) {
+    if (player) player.pause();
+    player = new Audio(`/api/media/ring/${encodeURIComponent(play)}`);
+    player.play().catch(() => alert("Abspielen nicht möglich."));
+    return;
+  }
+  const wall = e.target.dataset?.delWall, ring = e.target.dataset?.delRing;
+  if (!wall && !ring) return;
+  if (!confirm(wall ? `Hintergrundbild „${wall}“ löschen?\n\nTelefone, die es gerade nutzen, behalten es bis zum Neustart.`
+                    : `Klingelton ${ring} löschen?`)) return;
+  e.target.disabled = true;
+  const j = await api(wall ? `/api/media/wallpapers/${encodeURIComponent(wall)}`
+                           : `/api/media/ringtones/${encodeURIComponent(ring)}`, { method: "DELETE" });
+  e.target.disabled = false;
+  if (!j.ok) { alert(j.error || "Fehler"); return; }
+  await loadMedia(true);
+  load(true);
+});
+
 $("#raw-run").addEventListener("click", async () => {
   const out = $("#raw-out"); out.textContent = "Lädt …";
   const j = await api("/api/raw?cmd=" + encodeURIComponent($("#raw-cmd").value));
@@ -909,6 +1038,7 @@ $("#raw-run").addEventListener("click", async () => {
   updateHuntHint();
   $("#raw-cmd").innerHTML = meta.raw_commands.map(c => `<option>${esc(c)}</option>`).join("");
   await load();
+  loadMedia();
   setInterval(() => { if (!document.hidden) load(); }, 30000);
 })();
 </script>
