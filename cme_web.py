@@ -40,7 +40,10 @@ from flask import Flask, jsonify, request, send_from_directory
 BASE = Path(__file__).resolve().parent
 
 # "" = Fremdgeraet (z.B. Gigaset): kein "type" in der Konfiguration
-PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "ATA190", "7821", "7841", "7861"]
+PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "8945", "ATA190", "7821", "7841", "7861",
+               "Jabber-CSF-Client", "Jabber-iPhone", "Jabber-Android"]
+# Softclients werden in CME ueber einen Geraetenamen (id device-id-name) erkannt, nicht ueber die MAC
+SOFT_CLIENT_PREFIX = "Jabber-"
 CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8"]
 # Codecs fuer Codec-Listen (voice class codec); was der Router kennt, haengt von der IOS-Version ab
 LIST_CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8", "g729br8", "ilbc", "opus"]
@@ -75,7 +78,8 @@ RAW_COMMANDS = [
 RE_NUMBER = re.compile(r"^\+?[0-9*#]{1,32}$")
 RE_TEXT = re.compile(r"^[A-Za-z0-9 äöüÄÖÜß_.,()/+\-]{0,40}$")
 RE_CRED = re.compile(r"^[A-Za-z0-9._\-]{1,32}$")
-RE_TYPE = re.compile(r"^[A-Za-z0-9\-]{2,12}$")
+RE_TYPE = re.compile(r"^[A-Za-z0-9\-]{2,24}$")
+RE_DEVICE = re.compile(r"^[A-Za-z0-9_\-]{3,50}$")
 
 
 class InputError(ValueError):
@@ -146,7 +150,7 @@ def parse_pool_brief(out: str) -> dict[str, dict]:
     mac_re = r"[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
     for line in out.splitlines():
         ip_re = r"\d+\.\d+\.\d+\.\d+"
-        m = re.match(rf"^\s*(\d+)\s+({mac_re}|{ip_re})\s+(?:({ip_re})\s+)?(\d+)\s+(\d+)\s+(\S+)\s+(\S+)", line)
+        m = re.match(rf"^\s*(\d+)\s+({mac_re}|{ip_re}|[A-Za-z][\w-]+)\s+(?:({ip_re})\s+)?(\d+)\s+(\d+)\s+(\S+)\s+(\S+)", line)
         if m:
             last = m.group(1)
             pools[last] = {"mac": m.group(2).upper(), "ip": m.group(3) or "",
@@ -174,7 +178,7 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur = dns.setdefault(tag, {"tag": tag, "number": "", "name": "", "label": "",
                                            "shared": False, "max_calls": ""})
             else:
-                cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "",
+                cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "", "device_id": "",
                                              "type": "", "description": "",
                                              "username": "", "codec": "", "codec_list": "",
                                              "numbers": []})
@@ -198,6 +202,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
         else:
             if s.startswith("id mac "):
                 cur["mac"] = s.split()[2].upper()
+            elif s.startswith("id device-id-name "):
+                cur["device_id"] = s.split()[2]
             elif s.startswith("id ip ") or s.startswith("id network "):
                 parts = s.split()
                 cur["id_ip"] = parts[2]
@@ -384,7 +390,7 @@ class Router:
 class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
-    SINGLE = ("id mac", "id ip", "type", "description", "voice-class codec", "codec", "username",
+    SINGLE = ("id mac", "id ip", "id device-id-name", "type", "description", "voice-class codec", "codec", "username",
               "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops")
 
     def __init__(self):
@@ -750,14 +756,19 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
     def phone_input(data: dict, st: dict, own_tag: str | None) -> dict:
         """Prueft die Formulardaten fuer Anlegen und Bearbeiten."""
-        id_kind = data.get("id_kind") or "mac"
-        if id_kind != "mac":
-            raise InputError("CME erkennt Telefone nur an der MAC-Adresse, auch Fremdgeraete. "
-                             "Bei Gigaset die MAC der Basis eintragen.")
-        mac = norm_mac(data.get("mac"))
-        ip = ""
-        mask = "255.255.255.255"
         ptype = check(data.get("type"), RE_TYPE, "Telefontyp", required=False)
+        mac = ip = device_id = ""
+        mask = "255.255.255.255"
+        if ptype.startswith(SOFT_CLIENT_PREFIX):
+            # Jabber & Co.: Erkennung ueber den Geraetenamen (z.B. CSFTHOMAS)
+            id_kind = "device"
+            device_id = check(data.get("device_id"), RE_DEVICE, "Geraetename").upper()
+        else:
+            id_kind = data.get("id_kind") or "mac"
+            if id_kind != "mac":
+                raise InputError("CME erkennt Telefone nur an der MAC-Adresse, auch Fremdgeraete. "
+                                 "Bei Gigaset die MAC der Basis eintragen.")
+            mac = norm_mac(data.get("mac"))
         desc = check(data.get("description"), RE_TEXT, "Beschreibung", required=False)
         codec = data.get("codec") or "g711alaw"
         codec_list = ""
@@ -791,7 +802,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             other = next((p for p in st["phones"] if p.get("id_ip") == ip and p["tag"] != own_tag), None)
             if other:
                 raise InputError(f"IP {ip} ist schon Pool {other['tag']} zugeordnet.")
-        return {"id_kind": id_kind, "mac": mac, "ip": ip, "mask": mask, "type": ptype,
+        if device_id:
+            other = next((p for p in st["phones"]
+                          if p.get("device_id", "").upper() == device_id and p["tag"] != own_tag), None)
+            if other:
+                raise InputError(f"Geraetename {device_id} ist schon Pool {other['tag']} zugeordnet.")
+        return {"id_kind": id_kind, "mac": mac, "ip": ip, "mask": mask, "device_id": device_id, "type": ptype,
                 "description": desc, "codec": codec, "codec_list": codec_list,
                 "dns": dn_tags, "known": known}
 
@@ -799,6 +815,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         return f" voice-class codec {v['codec_list']}" if v["codec_list"] else f" codec {v['codec']}"
 
     def id_line(v: dict) -> str:
+        if v["id_kind"] == "device":
+            return f" id device-id-name {v['device_id']}"
         return f" id mac {v['mac']}" if v["id_kind"] == "mac" else f" id ip {v['ip']} mask {v['mask']}"
 
     def verify_pool(res: dict, tag: str, v: dict) -> None:
@@ -813,6 +831,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             problem = f"In Pool {tag} fehlt danach die IP-Kennung {v['ip']}."
         elif v["id_kind"] == "mac" and pool.get("mac") != v["mac"]:
             problem = f"In Pool {tag} fehlt danach die MAC {v['mac']}."
+        elif v["id_kind"] == "device" and pool.get("device_id", "").upper() != v["device_id"]:
+            problem = f"In Pool {tag} fehlt danach der Geraetename {v['device_id']}."
         elif sorted(l["dn"] for l in pool["lines"]) != sorted(v["dns"]):
             problem = f"In Pool {tag} fehlen danach Leitungen."
         if problem:
@@ -856,12 +876,15 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         v = phone_input(data, st, tag)
 
         lines = [f"voice register pool {tag}"]
-        cur_kind = "ip" if cur.get("id_ip") else "mac"
+        cur_kind = "device" if cur.get("device_id") else ("ip" if cur.get("id_ip") else "mac")
         changed_id = (v["id_kind"] != cur_kind
                       or (cur_kind == "mac" and v["mac"] != cur["mac"].upper())
+                      or (cur_kind == "device" and v["device_id"] != cur["device_id"].upper())
                       or (cur_kind == "ip" and (v["ip"], v["mask"]) != (cur["id_ip"], cur.get("id_mask") or v["mask"])))
         if changed_id:
-            if cur.get("id_ip"):
+            if cur.get("device_id"):
+                lines.append(f" no id device-id-name {cur['device_id']}")
+            elif cur.get("id_ip"):
                 lines.append(f" no id ip {cur['id_ip']} mask {cur.get('id_mask') or '255.255.255.255'}")
             elif cur["mac"]:
                 lines.append(f" no id mac {cur['mac']}")
