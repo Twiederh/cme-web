@@ -226,6 +226,45 @@ voice register pool <tag>
 Benutzername. In Jabber denselben Gerätenamen, als Server die IP des Routers sowie
 SIP-Benutzer und SIP-Passwort eintragen.
 
+### Single Number Reach (SNR)
+
+Beim Anlegen oder Bearbeiten einer Rufnummer lässt sich **Single Number Reach** einschalten: Klingelt die
+Nummer, ruft CME nach einer einstellbaren Verzögerung zusätzlich ein externes Telefon (Handy) über den
+SIP-Trunk an. Die Oberfläche setzt dafür in `voice register dn`:
+
+```
+ mobility
+ snr 01701234567 delay 5 timeout 20 [cfwd-noan <nummer>]
+ snr ring-stop                 # Tischtelefon verstummt, wenn das Handy abnimmt
+ snr calling-number local      # am Handy die eigene Nummer statt des Anrufers zeigen
+ snr answer-too-soon 2         # sofort "abgenommene" Anrufe (Handy-Mailbox) verwerfen
+```
+
+Die Handynummer muss so eingetragen werden, wie ein Telefon sie wählen würde, also passend zu einem
+ausgehenden Dial-Peer. Viele Provider lehnen eine fremde Absendernummer ab; dann
+„eigene Rufnummer anzeigen“ aktivieren. Am Handy angenommene Gespräche lassen sich am Tischtelefon mit
+*Fortsetzen* zurückholen.
+
+### Hintergrundbilder und Klingeltöne
+
+Die Karten **Hintergrundbilder** und **Klingeltöne** zeigen, was die Telefone per TFTP
+angeboten bekommen (aus `Desktops/800x480x24/List.xml` bzw. `RingList.xml`), mit
+Vorschaubild bzw. Anhören, und laden neue Dateien hoch:
+
+- **Bilder** (JPG, PNG, …) werden mittig auf 800×480 zugeschnitten und als PNG
+  (8 Bit RGB, ohne Metadaten) gespeichert, dazu ein Vorschaubild 139×109. Passend für
+  8811/8841/8845/8851/8861/8865.
+- **Klingeltöne** (MP3, WAV, M4A, auch die Tonspur eines Videos) werden ins Cisco-Format
+  umgerechnet: 8 kHz, µ-law, mono, höchstens 16080 Byte (gut 2 Sekunden). Stille am
+  Anfang wird abgeschnitten; mit *Start ab Sekunde* lässt sich ein Ausschnitt wählen.
+
+Die Seite lädt die Dateien per SCP in den Flash (`ip scp server enable` nötig), setzt
+die `tftp-server`-Aliase und schreibt die Listen neu (`RingList.xml`,
+`Ringlist-wb.xml` und – falls vorhanden – `DistinctiveRingList.xml`). Die Verzeichnisse
+werden aus den vorhandenen Aliasen der Listen ermittelt; gibt es keine, gilt
+`bootflash:/its` (änderbar mit `CME_MEDIA_DIR`). Beim Löschen werden Eintrag, Datei und
+Alias entfernt. Danach wie immer „Konfiguration speichern“.
+
 ### Codec-Listen
 
 In der Karte **Codec-Listen** werden `voice class codec`-Listen angelegt, sortiert,

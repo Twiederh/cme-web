@@ -216,6 +216,27 @@
             <div><label>Max. gleichzeitige Anrufe (Shared Line)</label><input name="max_calls" type="number" min="1" max="50" placeholder="Standard" disabled></div>
           </div>
           <label class="check"><input type="checkbox" name="shared" id="cb-shared"> Shared Line – Nummer kann auf mehreren Telefonen liegen</label>
+          <label class="check"><input type="checkbox" name="snr_enabled" id="cb-snr"> Single Number Reach – Anrufe zusätzlich auf dem Handy</label>
+          <div id="snr-box" hidden>
+            <div class="row">
+              <div><label>Handynummer * (so, wie das Telefon sie wählt)</label><input name="snr_number" placeholder="01701234567" pattern="\+?[0-9*#]{1,32}"></div>
+              <div><label>Nach Ablauf weiter an</label><input name="snr_cfwd" placeholder="z. B. Mailbox" pattern="\+?[0-9*#]{1,32}"></div>
+            </div>
+            <div class="row">
+              <div><label>Handy klingelt nach (s)</label><input name="snr_delay" type="number" min="0" max="30" placeholder="0"></div>
+              <div><label>Handy klingelt für (s)</label><input name="snr_timeout" type="number" min="5" max="60" placeholder="20"></div>
+            </div>
+            <div class="row">
+              <div><label>„Zu früh angenommen“ (s, gegen Handy-Mailbox)</label><input name="snr_ats" type="number" min="1" max="5" placeholder="aus"></div>
+              <div></div>
+            </div>
+            <label class="check"><input type="checkbox" name="snr_ring_stop" checked> Tischtelefon hört auf zu klingeln, wenn das Handy abnimmt</label>
+            <label class="check"><input type="checkbox" name="snr_calling_local"> Am Handy die eigene Rufnummer statt der des Anrufers anzeigen</label>
+            <div class="hint">Klingelt der Anschluss, ruft die Anlage nach der Verzögerung zusätzlich das Handy über den
+              SIP-Trunk an. Wer zuerst abnimmt, hat das Gespräch; ein Gespräch am Handy lässt sich am Tischtelefon mit
+              <b>Fortsetzen</b> zurückholen. Die Nummer muss zu einem ausgehenden Dial-Peer passen (ggf. mit Amtsziffer).
+              Viele Provider lehnen eine fremde Absendernummer ab – dann „eigene Rufnummer anzeigen“ einschalten.</div>
+          </div>
           <label class="check" id="number-restart-row" hidden><input type="checkbox" name="restart" checked> Betroffene Telefone nach dem Speichern neu starten</label>
           <div class="actions">
             <button class="primary" type="submit" id="number-submit">Anlegen</button>
@@ -415,7 +436,8 @@ function render() {
   const poolName = Object.fromEntries(d.phones.map(p => [p.tag, p.description || `Pool ${p.tag}`]));
   $("#t-numbers").innerHTML = d.numbers.length ? d.numbers.map(n => `<tr>
       <td class="mono">${esc(n.tag)}</td>
-      <td><span class="mono">${esc(n.number)}</span> ${n.shared ? badge("warn", "Shared" + (n.max_calls ? ` · max ${n.max_calls}` : "")) : ""}</td>
+      <td><span class="mono">${esc(n.number)}</span> ${n.shared ? badge("warn", "Shared" + (n.max_calls ? ` · max ${n.max_calls}` : "")) : ""}
+        ${n.snr && n.snr.number ? badge(n.mobility ? "ok" : "neutral", `SNR → ${n.snr.number}` + (n.mobility ? "" : " (aus)")) : ""}</td>
       <td>${esc(n.name)}</td><td>${esc(n.label)}</td>
       <td>${n.pools.length ? n.pools.map(t => esc(poolName[t] || `Pool ${t}`)).join(", ") : '<span class="muted">keinem Telefon zugeordnet</span>'}
         ${(n.huntgroups || []).map(t => badge("neutral", `Sammelgruppe ${t}`)).join(" ")}</td>
@@ -589,6 +611,9 @@ $("#f-number").addEventListener("submit", async (e) => {
   const body = {
     number: f.number.value, name: f.name.value, label: f.label.value,
     shared: f.shared.checked, max_calls: f.shared.checked ? f.max_calls.value : "",
+    snr: { enabled: f.snr_enabled.checked, number: f.snr_number.value, cfwd_noan: f.snr_cfwd.value,
+           delay: f.snr_delay.value, timeout: f.snr_timeout.value, answer_too_soon: f.snr_ats.value,
+           ring_stop: f.snr_ring_stop.checked, calling_local: f.snr_calling_local.checked },
     restart: f.restart.checked,
   };
   btn.disabled = true;
@@ -610,7 +635,14 @@ $("#f-number").addEventListener("submit", async (e) => {
 function resetNumberForm() {
   const f = $("#f-number");
   f.reset(); f.edit_tag.value = ""; f.max_calls.disabled = true;
+  updateSnrBox();
 }
+function updateSnrBox() {
+  const f = $("#f-number"), on = f.snr_enabled.checked;
+  $("#snr-box").hidden = !on;
+  f.snr_number.required = on;
+}
+$("#cb-snr").addEventListener("change", updateSnrBox);
 
 function startNumberEdit(tag) {
   const n = data.numbers.find(x => x.tag === tag);
@@ -624,6 +656,16 @@ function startNumberEdit(tag) {
   f.shared.checked = !!n.shared;
   f.max_calls.value = n.max_calls || "";
   f.max_calls.disabled = !n.shared;
+  const snr = n.snr || {};
+  f.snr_enabled.checked = !!(n.mobility && snr.number);
+  f.snr_number.value = snr.number || "";
+  f.snr_cfwd.value = snr.cfwd_noan || "";
+  f.snr_delay.value = snr.delay || "";
+  f.snr_timeout.value = snr.timeout || "";
+  f.snr_ats.value = snr.answer_too_soon || "";
+  f.snr_ring_stop.checked = snr.number ? !!snr.ring_stop : true;
+  f.snr_calling_local.checked = !!snr.calling_local;
+  updateSnrBox();
   $("#number-title").textContent = `Rufnummer bearbeiten · DN ${tag}` + (n.name ? ` (${n.name})` : "");
   $("#number-submit").textContent = "Änderungen speichern";
   $("#number-restart-row").hidden = !n.pools.length;
