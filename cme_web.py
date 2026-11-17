@@ -179,7 +179,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
             kind, tag = m.groups()
             if kind == "dn":
                 cur = dns.setdefault(tag, {"tag": tag, "number": "", "name": "", "label": "",
-                                           "shared": False, "max_calls": ""})
+                                           "shared": False, "max_calls": "", "mobility": False,
+                                           "snr": None, "snr_raw": ""})
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "", "device_id": "",
                                              "type": "", "description": "",
@@ -198,6 +199,12 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["shared"] = True
                 mc = re.search(r"max-calls (\d+)", s)
                 cur["max_calls"] = mc.group(1) if mc else ""
+                continue
+            if s == "mobility":
+                cur["mobility"] = True
+                continue
+            if s.startswith("snr "):
+                parse_snr_line(cur, s)
                 continue
             for key in ("number", "name", "label"):
                 if s.startswith(key + " "):
@@ -228,6 +235,27 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
     for d in list(dns.values()) + list(pools.values()):
         d.pop("_kind", None)
     return dns, pools
+
+
+def parse_snr_line(dn: dict, s: str) -> None:
+    """Single Number Reach in voice register dn:
+    snr <nummer> delay <s> timeout <s> [cfwd-noan <nummer>] / snr ring-stop /
+    snr calling-number local / snr answer-too-soon <s>"""
+    snr = dn["snr"] or {"number": "", "delay": "", "timeout": "", "cfwd_noan": "",
+                        "ring_stop": False, "calling_local": False, "answer_too_soon": ""}
+    m = re.match(r"^snr (\+?[0-9*#]+) delay (\d+) timeout (\d+)(?: cfwd-noan (\S+))?", s)
+    if m:
+        snr.update(number=m.group(1), delay=m.group(2), timeout=m.group(3), cfwd_noan=m.group(4) or "")
+        dn["snr_raw"] = s
+    elif s == "snr ring-stop":
+        snr["ring_stop"] = True
+    elif s.startswith("snr calling-number local"):
+        snr["calling_local"] = True
+    elif s.startswith("snr answer-too-soon "):
+        snr["answer_too_soon"] = s.split()[2]
+    else:
+        return
+    dn["snr"] = snr
 
 
 def parse_codec_classes(out: str) -> dict[str, dict]:
@@ -394,7 +422,8 @@ class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
     SINGLE = ("id mac", "id ip", "id device-id-name", "type", "description", "voice-class codec", "codec", "username",
-              "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops")
+              "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops",
+              "mobility", "snr answer-too-soon", "snr calling-number", "snr ring-stop")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -406,6 +435,8 @@ class DemoRouter:
             "voice register dn  3", " number 103", " name Flur",
             "voice register dn  4", " number 100", " name Zentrale", " label Zentrale",
             " shared-line max-calls 4",
+            "voice register dn  6", " number 105", " name Thomas mobil", " mobility",
+            " snr 017012345678 delay 5 timeout 20 cfwd-noan 101", " snr ring-stop", " snr calling-number local",
             "voice register pool  1", " id mac 70DB.98A1.0C11", " type 8851", " number 1 dn 1",
             " number 2 dn 4", " description Buero Thomas", " username 101 password x",
             " codec g711alaw", " voice-class codec 2",
@@ -554,10 +585,12 @@ class DemoRouter:
                         key = " ".join(s.split()[:2])
                     if s.startswith("codec preference "):      # "codec preference 2 g711alaw"
                         key = " ".join(s.split()[:3])
-                    if key:
+                    snr_main = re.match(r"^snr \+?[0-9*#]", s) is not None
+                    if key or snr_main:
                         for j in range(start, end):
                             t = self.cfg[j].strip()
-                            if t == key or t.startswith(key + " "):
+                            if (re.match(r"^snr \+?[0-9*#]", t) if snr_main
+                                    else (t == key or t.startswith(key + " "))):
                                 del self.cfg[j]
                                 end -= 1
                                 break
@@ -695,7 +728,84 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         if max_calls and (not max_calls.isdigit() or not 1 <= int(max_calls) <= 50):
             raise InputError("Max. Anrufe muss eine Zahl zwischen 1 und 50 sein.")
         return {"number": number, "name": name, "label": label, "shared": shared,
-                "max_calls": max_calls if shared else ""}
+                "max_calls": max_calls if shared else "", "snr": snr_input(data.get("snr"), number)}
+
+    def snr_input(d, own_number: str) -> dict | None:
+        """Single Number Reach: parallel bzw. verzoegert ein externes Telefon (Handy) anrufen."""
+        if not isinstance(d, dict) or not d.get("enabled"):
+            return None
+        target = check(d.get("number"), RE_NUMBER, "SNR-Zielnummer")
+        if target == own_number:
+            raise InputError("Die SNR-Zielnummer darf nicht die eigene Rufnummer sein.")
+
+        def num(key, lo, hi, default, what):
+            v = str(d.get(key) if d.get(key) not in (None, "") else default).strip()
+            if not v.isdigit() or not lo <= int(v) <= hi:
+                raise InputError(f"{what} muss zwischen {lo} und {hi} Sekunden liegen.")
+            return str(int(v))
+        delay = num("delay", 0, 30, 0, "Verzoegerung")
+        timeout = num("timeout", 5, 60, 20, "Klingeldauer am Handy")
+        ats = str(d.get("answer_too_soon") or "").strip()
+        if ats and (not ats.isdigit() or not 1 <= int(ats) <= 5):
+            raise InputError("'Zu frueh angenommen' muss zwischen 1 und 5 Sekunden liegen.")
+        return {"number": target, "delay": delay, "timeout": timeout,
+                "cfwd_noan": check(d.get("cfwd_noan"), RE_NUMBER, "Weiterleitung nach SNR", required=False),
+                "ring_stop": bool(d.get("ring_stop")), "calling_local": bool(d.get("calling_local")),
+                "answer_too_soon": ats}
+
+    def snr_main_line(s: dict) -> str:
+        line = f" snr {s['number']} delay {s['delay']} timeout {s['timeout']}"
+        return line + (f" cfwd-noan {s['cfwd_noan']}" if s["cfwd_noan"] else "")
+
+    def snr_lines(new: dict | None, cur: dict | None) -> list[str]:
+        """Befehle fuer SNR; cur = bisherige DN (oder None beim Anlegen)."""
+        old = (cur or {}).get("snr")
+        old_mob = bool((cur or {}).get("mobility"))
+        out = []
+        if new is None:
+            if old:
+                if old["ring_stop"]:
+                    out.append(" no snr ring-stop")
+                if old["calling_local"]:
+                    out.append(" no snr calling-number local")
+                if old["answer_too_soon"]:
+                    out.append(f" no snr answer-too-soon {old['answer_too_soon']}")
+                if cur.get("snr_raw"):
+                    out.append(f" no {cur['snr_raw']}")
+            if old_mob:
+                out.append(" no mobility")
+            return out
+        if not old_mob:
+            out.append(" mobility")
+        old = old or {"number": "", "delay": "", "timeout": "", "cfwd_noan": "",
+                      "ring_stop": False, "calling_local": False, "answer_too_soon": ""}
+        if any(new[k] != old[k] for k in ("number", "delay", "timeout", "cfwd_noan")):
+            if old["cfwd_noan"] and not new["cfwd_noan"] and cur and cur.get("snr_raw"):
+                out.append(f" no {cur['snr_raw']}")      # cfwd-noan entfernen
+            out.append(snr_main_line(new))
+        if new["ring_stop"] != old["ring_stop"]:
+            out.append(" snr ring-stop" if new["ring_stop"] else " no snr ring-stop")
+        if new["calling_local"] != old["calling_local"]:
+            out.append(" snr calling-number local" if new["calling_local"] else " no snr calling-number local")
+        if new["answer_too_soon"] != old["answer_too_soon"]:
+            out.append(f" snr answer-too-soon {new['answer_too_soon']}" if new["answer_too_soon"]
+                       else f" no snr answer-too-soon {old['answer_too_soon']}")
+        return out
+
+    def verify_snr(res: dict, tag: str, v: dict) -> None:
+        if not res["ok"]:
+            return
+        dn = next((n for n in get_status(force=True)["numbers"] if n["tag"] == tag), None)
+        if dn is None:
+            return
+        want, have = v["snr"], dn.get("snr")
+        problem = None
+        if want and (not have or have["number"] != want["number"] or not dn.get("mobility")):
+            problem = f"Single Number Reach fuer DN {tag} wurde vom Router nicht uebernommen."
+        elif not want and (dn.get("mobility") or (have and have["number"])):
+            problem = f"Single Number Reach fuer DN {tag} ist danach noch aktiv."
+        if problem:
+            res.update(ok=False, error=f"{problem} Ausgabe des Routers:\n\n{output_tail(res['output'], 40)}")
 
     def shared_line_cmd(max_calls: str) -> str:
         return f" shared-line max-calls {max_calls}" if max_calls else " shared-line"
@@ -716,12 +826,14 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines.append(f" label {v['label']}")
         if v["shared"]:
             lines.append(shared_line_cmd(v["max_calls"]))
+        lines += snr_lines(v["snr"], None)
         res = apply(lines)
         res["tag"] = tag
         if res["ok"] and not any(n["tag"] == tag for n in get_status(force=True)["numbers"]):
             res.update(ok=False, error=(
                 f"Der Router hat voice register dn {tag} nicht übernommen. "
                 f"Ausgabe des Routers:\n\n{output_tail(res['output'])}"))
+        verify_snr(res, tag, v)
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.put("/api/numbers/<tag>")
@@ -755,6 +867,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                     "Die Nummer liegt auf mehreren Telefonen (Pool " + ", ".join(cur["pools"]) +
                     "). Erst dort entfernen, dann Shared Line ausschalten.")
             lines.append(" no shared-line")
+        lines += snr_lines(v["snr"], cur)
 
         if len(lines) == 1:
             return jsonify(ok=True, error=None, config=[], tag=tag, unchanged=True)
@@ -771,6 +884,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                 lines += [f"voice register pool {p}", " restart"]
         res = apply(lines)
         res.update(tag=tag, restarted=cur["pools"] if data.get("restart", True) else [])
+        verify_snr(res, tag, v)
         return jsonify(res), (200 if res["ok"] else 400)
 
     def phone_input(data: dict, st: dict, own_tag: str | None) -> dict:
