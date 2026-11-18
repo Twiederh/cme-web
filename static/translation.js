@@ -21,6 +21,11 @@
           <div></div>
         </div>
         <div class="lines" id="trule-rows"></div>
+        <div class="row" style="margin-top:8px">
+          <div><label>Vorschau: Testnummer</label><input id="tprev-num" class="mono" placeholder="061871234567" autocomplete="off"></div>
+          <div><label>Nummerntyp der Testnummer</label><select id="tprev-type"></select></div>
+        </div>
+        <div id="tprev-out" class="mono" style="min-height:20px;margin:4px 0 8px"></div>
         <div class="hint">Muster und Ersetzung sind IOS-Regex ohne Leerzeichen: <span class="mono">^</span> Anfang,
           <span class="mono">$</span> Ende, <span class="mono">.</span> beliebige Ziffer, <span class="mono">*</span> beliebig oft,
           <span class="mono">\\(…\\)</span> merken und <span class="mono">\\1</span> wieder einsetzen.
@@ -37,7 +42,7 @@
     </div>
     <div class="body" style="border-top: 1px solid var(--line)">
       <form id="f-ttest">
-        <label style="font-weight:600;color:var(--text);font-size:13px;margin-bottom:8px">Regel testen</label>
+        <label style="font-weight:600;color:var(--text);font-size:13px;margin-bottom:8px">Gespeicherten Regelsatz testen (am Router)</label>
         <div class="row">
           <div><label>Regelsatz</label><select name="tag" id="ttest-tag"></select></div>
           <div><label>Nummer</label><input name="number" placeholder="061871234567" required></div>
@@ -69,6 +74,21 @@
         </div>
         <div class="msg" id="m-tprofile"></div>
       </form>
+    </div>
+    <div class="body" style="border-top: 1px solid var(--line)">
+      <form id="f-tptest">
+        <label style="font-weight:600;color:var(--text);font-size:13px;margin-bottom:8px">Profil testen (am Router)</label>
+        <div class="row">
+          <div><label>Profil</label><select name="name" id="tptest-name"></select></div>
+          <div><label>Anrufer (calling)</label><input name="calling" class="mono" placeholder="061871234567"></div>
+        </div>
+        <div class="row">
+          <div><label>Ziel (called)</label><input name="called" class="mono" placeholder="0301234567"></div>
+          <div><label>Umleitung (redirect-called)</label><input name="redirect-called" class="mono" placeholder="optional"></div>
+        </div>
+        <div class="actions"><button type="submit" id="tptest-submit">Testen</button></div>
+        <div id="tptest-out" style="margin-top:8px"></div>
+      </form>
     </div>`;
   const anchor = document.getElementById("raw-out")?.closest("section.card");
   (anchor ? anchor.parentNode.insertBefore(card, anchor) : document.querySelector("main").appendChild(card));
@@ -97,6 +117,14 @@
     tsel.innerHTML = T.rulesets.map(rs => `<option value="${esc(rs.tag)}">Regelsatz ${esc(rs.tag)}</option>`).join("");
     if ([...tsel.options].some(o => o.value === tv)) tsel.value = tv;
 
+    const psel = $("#tptest-name"), pv = psel.value;
+    psel.innerHTML = T.profiles.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("");
+    if ([...psel.options].some(o => o.value === pv)) psel.value = pv;
+    const ty = $("#tprev-type");
+    if (!ty.options.length) {
+      ty.innerHTML = T.number_types.filter(t => t !== "any").map(t => `<option ${t === "unknown" ? "selected" : ""}>${esc(t)}</option>`).join("");
+    }
+
     $("#c-tprofiles").textContent = `(${T.profiles.length})`;
     const cell = (p, k) => p.translate[k] ? `<span class="mono">${esc(p.translate[k])}</span>` : '<span class="muted">–</span>';
     $("#t-tprofiles").innerHTML = T.profiles.length ? T.profiles.map(p => `<tr>
@@ -116,6 +144,7 @@
         `<option value="${esc(rs.tag)}">Regelsatz ${esc(rs.tag)}</option>`).join("")}</select></div>`).join("");
     box.querySelectorAll("select").forEach(s => { if (keep[s.name]) s.value = keep[s.name]; });
     if (!$("#trule-rows").children.length) addRuleRow();
+    preview();
   }
 
   async function loadT() {
@@ -150,13 +179,14 @@
       <label class="check" style="margin:0" title="Anruf abweisen statt umschreiben"><input type="checkbox" name="reject" ${r?.reject ? "checked" : ""}> abweisen</label>
       <select name="type_from" title="Nummerntyp vorher" style="width:auto">${typeOptions(r?.type_from)}</select>
       <select name="type_to" title="Nummerntyp nachher" style="width:auto">${typeOptions(r?.type_to)}</select>
-      <button type="button" class="small" title="entfernen">✕</button>`;
+      <button type="button" class="small" title="entfernen">✕</button>
+      <span class="tprev-hit" style="width:auto"></span>`;
     const sync = () => {
       const rej = div.querySelector("[name=reject]").checked;
       ["replace", "type_from", "type_to"].forEach(n => div.querySelector(`[name=${n}]`).disabled = rej);
     };
     div.querySelector("[name=reject]").addEventListener("change", sync);
-    div.querySelector("button").addEventListener("click", () => div.remove());
+    div.querySelector("button").addEventListener("click", () => { div.remove(); preview(); });
     box.appendChild(div);
     sync();
   }
@@ -169,12 +199,73 @@
                type_from: v("type_from"), type_to: v("type_to"), plan_from, plan_to };
     }).filter(r => r.match || r.replace);
   }
+  // ---------------- Vorschau im Browser (IOS-Regex nachgebildet) ----------------
+
+  // IOS: \( \) bilden Gruppen fuer \1..\9, einfache Klammern nur Gruppierung
+  function iosRegex(p) {
+    let out = "";
+    for (let i = 0; i < p.length; i++) {
+      const c = p[i];
+      if (c === "\\" && i + 1 < p.length) {
+        const n = p[++i];
+        out += (n === "(" || n === ")") ? n : "\\" + n;
+      } else out += c === "(" ? "(?:" : c;
+    }
+    return new RegExp(out);
+  }
+  function iosReplace(m, repl) {
+    let out = "";
+    for (let i = 0; i < repl.length; i++) {
+      const c = repl[i];
+      if (c === "\\" && i + 1 < repl.length) {
+        const n = repl[++i];
+        out += /[0-9]/.test(n) ? (m[+n] ?? "") : n;
+      } else out += c;
+    }
+    return out;
+  }
+  // Wendet die Regeln wie IOS an: nach Nummer sortiert, die erste passende gewinnt
+  function simulate(rules, number, type) {
+    const sorted = [...rules].sort((a, b) => +a.prec - +b.prec);
+    for (const r of sorted) {
+      if (!r.match) continue;
+      if (r.type_from && r.type_from !== "any" && r.type_from !== type) continue;
+      let re;
+      try { re = iosRegex(r.match); } catch (err) { return { error: `Regel ${r.prec}: ungültiges Muster`, rule: r.prec }; }
+      const m = re.exec(number);
+      if (!m) continue;
+      if (r.reject) return { rule: r.prec, rejected: true };
+      const res = number.slice(0, m.index) + iosReplace(m, r.replace) + number.slice(m.index + m[0].length);
+      return { rule: r.prec, translated: res,
+               type: r.type_to && r.type_to !== "any" ? r.type_to : type };
+    }
+    return { rule: null };
+  }
+  function preview() {
+    const num = $("#tprev-num").value.trim(), out = $("#tprev-out");
+    const rows = [...$("#trule-rows").children];
+    rows.forEach(d => d.querySelector(".tprev-hit").innerHTML = "");
+    if (!num) { out.innerHTML = '<span class="muted">Nummer eingeben, um die Regeln schon vor dem Speichern auszuprobieren.</span>'; return; }
+    const res = simulate(readRules(), num, $("#tprev-type").value);
+    const row = rows.find(d => d.querySelector("[name=prec]").value.trim() === String(res.rule));
+    if (row) row.querySelector(".tprev-hit").innerHTML = badge(res.error ? "bad" : "ok", res.error ? "Fehler" : "trifft");
+    out.innerHTML = res.error ? `<span class="bad-text">${esc(res.error)}</span>`
+      : res.rejected ? `${esc(num)} → ${badge("bad", `abgewiesen (Regel ${res.rule})`)}`
+      : res.rule ? `${esc(num)} → <b>${esc(res.translated)}</b> <span class="muted">(Regel ${esc(res.rule)}` +
+                   `${res.type !== $("#tprev-type").value ? `, Typ ${esc(res.type)}` : ""})</span>`
+      : `${esc(num)} → ${badge("neutral", "keine Regel passt, Nummer bleibt")}`;
+    out.innerHTML += ' <span class="muted" style="font-family:inherit">· Vorschau im Browser, maßgeblich ist der Test am Router</span>';
+  }
+  $("#f-trule").addEventListener("input", preview);
+  $("#f-trule").addEventListener("change", preview);
+
   function resetRuleForm() {
     const f = $("#f-trule");
     f.reset(); f.edit_tag.value = "";
     $("#trule-rows").innerHTML = ""; addRuleRow();
     $("#trule-tag-row").hidden = false;
     $("#trule-warn").hidden = true;
+    preview();
   }
   function startRuleEdit(tag) {
     const rs = T.rulesets.find(x => x.tag === tag);
@@ -193,6 +284,7 @@
     warn.textContent = users.length ? `Achtung: Der Regelsatz steckt in Profil ${[...new Set(users)].join(", ")}. ` +
       `Eine Änderung wirkt sofort auf alle Anrufe, die darüber laufen.` : "";
     $("#m-trule").className = "msg";
+    preview();
     card.classList.add("editing");
     f.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -240,6 +332,28 @@
       : j.translated ? `${esc(f.number.value)} → <b>${esc(j.translated)}</b> <span class="muted">(Regel ${esc(j.rule)})</span>`
       : badge("neutral", "keine Regel passt");
     out.textContent = j.output; out.hidden = false;
+  });
+
+  // ---------------- Profil testen ----------------
+
+  $("#f-tptest").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, out = $("#tptest-out");
+    if (!f.name.value) { out.textContent = "Erst ein Profil anlegen."; return; }
+    const body = Object.fromEntries(["calling", "called", "redirect-called"].map(k => [k, f[k].value.trim()]));
+    $("#tptest-submit").disabled = true;
+    out.innerHTML = '<span class="muted">…</span>';
+    const j = await api(`/api/translation/profiles/${encodeURIComponent(f.name.value)}/test`,
+                        { method: "POST", body: JSON.stringify(body) });
+    $("#tptest-submit").disabled = false;
+    if (!j.ok) { out.innerHTML = `<span class="bad-text">${esc(j.error)}</span>`; return; }
+    out.innerHTML = `<table><tbody>${j.results.map(r => `<tr>
+        <td>${esc(KIND_LABEL[r.kind] || r.kind)}</td>
+        <td class="mono">${esc(r.number)} → ${!r.tag ? '<span class="muted">bleibt (kein Regelsatz im Profil)</span>'
+          : r.rejected ? badge("bad", `abgewiesen (Regelsatz ${r.tag}, Regel ${r.rule})`)
+          : r.translated ? `<b>${esc(r.translated)}</b> <span class="muted">(Regelsatz ${esc(r.tag)}, Regel ${esc(r.rule)}${r.type && r.type !== "none" ? `, Typ ${esc(r.type)}` : ""})</span>`
+          : `${badge("neutral", "keine Regel passt")} <span class="muted">(Regelsatz ${esc(r.tag)})</span>`}</td></tr>`).join("")}
+      </tbody></table>`;
   });
 
   // ---------------- Profil-Formular ----------------

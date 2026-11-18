@@ -338,6 +338,20 @@ def register(app, router, apply) -> None:
         res["tag"] = tag
         return jsonify(res), (200 if res["ok"] else 400)
 
+    def run_test(tag: str, number: str) -> dict:
+        """test voice translation-rule am Router ausfuehren und auswerten."""
+        if not RE_TESTNUM.match(number):
+            raise TranslationError("Testnummer: nur Ziffern, *, # und ein + am Anfang.")
+        out = router.show(f"test voice translation-rule {tag} {number}")
+        if "% " in out and "Matched" not in out:
+            raise TranslationError(out.strip())
+        m = re.search(r"Translated number:\s*(\S+)", out)
+        t = re.search(r"Translated number type:\s*(\S+)", out)
+        matched = re.search(r"Matched with rule (\d+)", out)
+        return {"tag": tag, "number": number, "output": out.strip(), "translated": m.group(1) if m else None,
+                "type": t.group(1) if t else None, "rule": matched.group(1) if matched else None,
+                "rejected": "reject" in out.lower()}
+
     @app.post("/api/translation/test")
     def test_rule():
         data = request.get_json(force=True) or {}
@@ -345,14 +359,27 @@ def register(app, router, apply) -> None:
         number = str(data.get("number") or "").strip()
         if not tag.isdigit():
             raise TranslationError("Regelsatz auswaehlen.")
-        if not RE_TESTNUM.match(number):
-            raise TranslationError("Testnummer: nur Ziffern, *, # und ein + am Anfang.")
-        out = router.show(f"test voice translation-rule {tag} {number}")
-        m = re.search(r"Translated number:\s*(\S+)", out)
-        rejected = "reject" in out.lower()
-        matched = re.search(r"Matched with rule (\d+)", out)
-        return jsonify(ok=True, output=out.strip(), translated=m.group(1) if m else None,
-                       rule=matched.group(1) if matched else None, rejected=rejected)
+        return jsonify(ok=True, **run_test(tag, number))
+
+    @app.post("/api/translation/profiles/<name>/test")
+    def test_profile(name):
+        """Testet ein Profil: je Nummernart den zugeordneten Regelsatz am Router."""
+        if not RE_PROFILE.match(name):
+            raise TranslationError("Ungueltiger Profilname")
+        p = next((x for x in load()["profiles"] if x["name"] == name), None)
+        if not p:
+            raise TranslationError(f"Profil {name} gibt es nicht.")
+        data = request.get_json(force=True) or {}
+        results = []
+        for kind in TRANSLATE_KINDS:
+            number = str(data.get(kind) or "").strip()
+            if not number:
+                continue
+            tag = p["translate"].get(kind)
+            results.append({"kind": kind, "number": number, **(run_test(tag, number) if tag else {"tag": None})})
+        if not results:
+            raise TranslationError("Mindestens eine Nummer eingeben.")
+        return jsonify(ok=True, name=name, results=results)
 
     # ---------------- Profile ----------------
 
