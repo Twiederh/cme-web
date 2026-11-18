@@ -32,7 +32,7 @@
     { id: "phones", label: "Telefone & Rufnummern",
       parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#t-hunts"), top("#t-codecs")] },
     { id: "translation", label: "Übersetzungen", parts: [top("#translation-card")] },
-    { id: "voicemail", label: "Voicemail", parts: [top("#voicemail-card")] },
+    { id: "voicemail", label: "Voicemail, Fax & IVR", parts: [top("#voicemail-card")] },
     { id: "user", label: "Benutzereinstellungen", parts: [top("#walls")] },
   ];
 

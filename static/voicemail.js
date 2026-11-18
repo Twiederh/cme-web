@@ -12,6 +12,10 @@
     <div id="vm-body"><div class="empty">Lädt …</div></div>`;
   const anchor = document.getElementById("raw-out")?.closest("section.card");
   (anchor ? anchor.parentNode.insertBefore(card, anchor) : document.querySelector("main").appendChild(card));
+  // Fax und Sprachmenues (static/vmapps.js) haengen sich in diese Karte ein
+  const apps = document.createElement("script");
+  apps.src = "/static/vmapps.js";
+  document.body.appendChild(apps);
 
   const fmtTime = (t) => t ? new Date(t * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–";
   const fmtDur = (s) => s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`;
