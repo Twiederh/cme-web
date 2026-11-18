@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from flask import jsonify, request, send_file
@@ -26,6 +27,14 @@ RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 RE_NAME = re.compile(r"^[A-Za-z0-9 äöüÄÖÜß_.,()/+\-]{1,40}$")
 KEYS = [*"1234567890", "*", "#"]
 ACTIONS = ["dial", "ivr", "voicemail", "repeat", "hangup"]
+# Stimmen fuer die Sprachausgabe (Piper, laeuft lokal; Modelle werden beim ersten Gebrauch geladen)
+TTS_VOICES = {
+    "de_DE-thorsten-medium": "Thorsten (männlich)",
+    "de_DE-thorsten-high": "Thorsten (männlich, beste Qualität, langsamer)",
+    "de_DE-kerstin-low": "Kerstin (weiblich)",
+    "de_DE-ramona-low": "Ramona (weiblich)",
+    "de_DE-eva_k-x_low": "Eva (weiblich, einfach)",
+}
 FAX_DESC = "Fax (Asterisk)"
 IVR_DESC = "IVR (Asterisk)"
 
@@ -40,6 +49,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
     sounds = cfgdir / "sounds"
     host_ip = ctx["host_ip"]
     ami = ctx["ami"]
+    tts_dir = cfgdir / "tts-voices"
+    tts_lock = threading.Lock()
+    tts_cache: dict = {}
 
     # ---------------- Daten ----------------
 
@@ -254,8 +266,11 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             i["dialpeer"] = ps.get(i.get("number", ""), "")
             i["greeting"] = (sounds / f"ivr-{i['id']}.wav").exists()
         boxes = [{"number": n, "id": ctx["mbid"](n)} for n in ctx["settings"]()["mailboxes"]]
+        voices = [{"id": v, "label": label, "installed": (tts_dir / f"{v}.onnx").exists()}
+                  for v, label in TTS_VOICES.items()]
         return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(),
-                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS)
+                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS,
+                       tts={"available": tts_available(), "voices": voices})
 
     # Fax-Nummern
 
@@ -404,6 +419,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         cur = find_ivr(d, iid)
         new = ivr_input(request.get_json(force=True) or {}, d, cur)
         new["id"] = cur["id"]
+        if cur.get("tts"):
+            new["tts"] = cur["tts"]
         d["ivrs"] = [new if i is cur else i for i in d["ivrs"]]
         res = apply_change(old, d)
         res["id"] = cur["id"]
@@ -437,24 +454,105 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         raw = f.read()
         if not raw or len(raw) > 30 * 1024 * 1024:
             raise AppError("Datei leer oder groesser als 30 MB.")
+        sounds.mkdir(parents=True, exist_ok=True)
+        (sounds / f"ivr-{ivr['id']}.wav").write_bytes(to_phone(raw))
+        ivr["greeting"] = True
+        ivr.pop("tts", None)
+        save(d)
+        return jsonify(ok=True)
+
+    @app.post("/api/vmapps/ivr/<iid>/greeting/tts")
+    def tts_greeting(iid):
+        need()
+        d = data()
+        ivr = find_ivr(d, iid)
+        text, voice, speed = tts_input(request.get_json(force=True) or {})
+        audio = to_phone(synthesize(text, voice, speed))
+        sounds.mkdir(parents=True, exist_ok=True)
+        (sounds / f"ivr-{ivr['id']}.wav").write_bytes(audio)
+        ivr["greeting"] = True
+        ivr["tts"] = {"text": text, "voice": voice, "speed": speed}
+        save(d)
+        return jsonify(ok=True)
+
+    @app.post("/api/vmapps/tts/preview")
+    def tts_preview():
+        need()
+        text, voice, speed = tts_input(request.get_json(force=True) or {})
+        return to_phone(synthesize(text, voice, speed)), 200, {"Content-Type": "audio/wav", "Cache-Control": "no-store"}
+
+    # ---------------- Sprachausgabe ----------------
+
+    def to_phone(raw: bytes) -> bytes:
+        """Beliebige Audiodatei -> WAV 8 kHz mono 16 bit (fuer Asterisk), Lautstaerke angeglichen."""
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             raise AppError("ffmpeg fehlt auf dem Server.")
-        sounds.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "in"
+            src, dst = Path(tmp) / "in", Path(tmp) / "out.wav"
             src.write_bytes(raw)
-            dst = Path(tmp) / "out.wav"
             r = subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(src), "-t", "300", "-ac", "1", "-ar", "8000",
                                 "-c:a", "pcm_s16le", "-af", "loudnorm=I=-18:TP=-2", str(dst)],
                                capture_output=True, timeout=120)
             if r.returncode != 0 or not dst.exists():
                 raise AppError("Die Datei konnte nicht umgewandelt werden: " +
                                r.stderr.decode(errors="replace")[-300:])
-            shutil.move(str(dst), sounds / f"ivr-{ivr['id']}.wav")
-        ivr["greeting"] = True
-        save(d)
-        return jsonify(ok=True)
+            return dst.read_bytes()
+
+    def tts_available() -> bool:
+        try:
+            import piper  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def tts_input(body: dict) -> tuple[str, str, float]:
+        text = " ".join(str(body.get("text") or "").split())
+        if not text:
+            raise AppError("Text fehlt.")
+        if len(text) > 1500:
+            raise AppError("Höchstens 1500 Zeichen.")
+        voice = str(body.get("voice") or "de_DE-thorsten-medium")
+        if voice not in TTS_VOICES:
+            raise AppError("Unbekannte Stimme.")
+        try:
+            speed = float(body.get("speed") or 1.0)
+        except ValueError:
+            raise AppError("Ungültiges Tempo.")
+        if not 0.7 <= speed <= 1.4:
+            raise AppError("Tempo zwischen 0,7 und 1,4.")
+        return text, voice, round(speed, 2)
+
+    def synthesize(text: str, voice: str, speed: float) -> bytes:
+        """Text mit Piper vorlesen; die Stimme wird beim ersten Mal heruntergeladen (60-110 MB)."""
+        try:
+            import wave
+            from piper import PiperVoice, SynthesisConfig
+            from piper.download_voices import download_voice
+        except ImportError:
+            raise AppError("Die Sprachausgabe (piper-tts) ist auf dem Server nicht installiert.")
+        with tts_lock:
+            model = tts_dir / f"{voice}.onnx"
+            if not model.exists() or not model.with_suffix(".onnx.json").exists():
+                tts_dir.mkdir(parents=True, exist_ok=True)
+                part = Path(tempfile.mkdtemp(dir=tts_dir, prefix=".dl-"))
+                try:
+                    download_voice(voice, part)
+                    for f in part.iterdir():
+                        f.replace(tts_dir / f.name)
+                except Exception as e:
+                    raise AppError(f"Die Stimme konnte nicht geladen werden: {type(e).__name__}: {e}")
+                finally:
+                    shutil.rmtree(part, ignore_errors=True)
+            if voice not in tts_cache:
+                tts_cache.clear()      # nur eine Stimme im Speicher halten
+                tts_cache[voice] = PiperVoice.load(str(model))
+            pv = tts_cache[voice]
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "tts.wav"
+                with wave.open(str(out), "wb") as w:
+                    pv.synthesize_wav(text, w, syn_config=SynthesisConfig(length_scale=1.0 / speed))
+                return out.read_bytes()
 
     @app.get("/api/vmapps/ivr/<iid>/greeting")
     def get_greeting(iid):
@@ -472,5 +570,6 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         ivr = find_ivr(d, iid)
         (sounds / f"ivr-{ivr['id']}.wav").unlink(missing_ok=True)
         ivr["greeting"] = False
+        ivr.pop("tts", None)
         save(d)
         return jsonify(ok=True)
