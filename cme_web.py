@@ -39,6 +39,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import media
 import translation
+import voicemail
 
 BASE = Path(__file__).resolve().parent
 
@@ -463,7 +464,8 @@ class DemoRouter:
     SINGLE = ("id mac", "id ip", "id device-id-name", "type", "description", "voice-class codec", "codec", "username",
               "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops",
               "mobility", "snr answer-too-soon", "snr calling-number", "snr ring-stop", "template",
-              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting", "phone-mode")
+              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting", "phone-mode",
+              "mwi", "call-forward b2bua noan", "call-forward b2bua busy")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -760,9 +762,10 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     # Hintergrundbilder und Klingeltoene (media.py), Uebersetzungsregeln (translation.py)
     media.register(app, router, apply, isinstance(router, DemoRouter))
     translation.register(app, router, apply)
+    voicemail.register(app, router, apply, isinstance(router, DemoRouter))
 
     # Oberflaechen-Module, die in index.html eingehaengt werden
-    extra_scripts = ["/static/translation.js"]
+    extra_scripts = ["/static/voicemail.js", "/static/translation.js"]
 
     @app.get("/")
     def index():
