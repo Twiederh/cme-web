@@ -14,7 +14,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt \
  && useradd --system --uid 10001 --create-home cme
 
-COPY cme_web.py auth.py media.py ./
+COPY *.py ./
 COPY static ./static
 
 USER cme
