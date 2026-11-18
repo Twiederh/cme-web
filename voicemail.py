@@ -559,3 +559,10 @@ def register(app, router, apply, demo: bool) -> None:
         need_enabled()
         to = "Old" if folder == "INBOX" else "INBOX"
         return jsonify(msg_action(box, folder, file, {"Action": "VoicemailMove", "ToFolder": to}))
+
+    # Fax-Empfang und Sprachmenues (vmapps.py) nutzen denselben Asterisk
+    import vmapps
+    vmapps.register(app, router, apply, demo, {
+        "ami": ami, "cfgdir": cfgdir, "spool": spool, "host_ip": host_ip, "enabled": enabled,
+        "mail_ready": mail_ready, "numbers": numbers, "mbid": mbid, "codec_line": codec_line,
+        "settings": settings})
