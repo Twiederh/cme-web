@@ -31,3 +31,34 @@ services:
       OIDC_POCKETID_SCOPES: ${OIDC_POCKETID_SCOPES:-openid email profile groups}
       OIDC_ALLOWED_GROUPS: ${OIDC_ALLOWED_GROUPS:-}
       OIDC_ALLOWED_USERS: ${OIDC_ALLOWED_USERS:-}
+      # Voicemail (Container cme-voicemail, siehe README)
+      VM_HOST_IP: ${VM_HOST_IP:-}
+      VM_AMI_SECRET: ${VM_AMI_SECRET:-}
+      VM_AMI_HOST: asterisk
+    volumes:
+      - vm-config:/data/asterisk
+      - vm-spool:/data/voicemail
+    depends_on:
+      - asterisk
+
+  # Asterisk als Voicemail fuer CME. Braucht auf dem Docker-Host UDP 5060 und 10000-10049.
+  asterisk:
+    build: ./asterisk
+    image: cme-voicemail:latest
+    container_name: cme-voicemail
+    restart: unless-stopped
+    environment:
+      HOST_IP: ${VM_HOST_IP:-}
+      CME_IP: ${CME_HOST}
+      AMI_SECRET: ${VM_AMI_SECRET:-}
+      TZ: Europe/Berlin
+    ports:
+      - "5060:5060/udp"
+      - "10000-10049:10000-10049/udp"
+    volumes:
+      - vm-config:/etc/asterisk/cme
+      - vm-spool:/var/spool/asterisk/voicemail
+
+volumes:
+  vm-config:
+  vm-spool:
