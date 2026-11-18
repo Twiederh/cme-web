@@ -1,0 +1,495 @@
+"""
+recording.py - Gespraechsaufzeichnung ueber den CUBE (SIPREC) fuer cme_web
+
+Router:  media profile recorder / media class ... siprec an den gewaehlten Trunk-Dial-Peers,
+         Dial-Peer zum Recorder (Container cme-recorder, UDP 5070),
+         Dial-Peer fuer Anrufe von Asterisk (incoming uri via), damit Gespraeche ueber Asterisk
+         nicht doppelt aufgezeichnet werden,
+         optional Dial-Peer <prefix>T -> Asterisk fuer die Ansage vor eingehenden Gespraechen.
+Asterisk: cme/extensions_rec.conf mit [cme-recnotice]: Ansage als Early Media, dann zur Nummer.
+Recorder: liest cme-recording.json (Einstellungen, interne und eigene Rufnummern),
+          schreibt Aufnahmen und .status.json nach VM_REC_DIR.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import time
+import wave
+from pathlib import Path
+
+from flask import jsonify, request, send_file
+
+RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+RE_NUM = re.compile(r"^\+?[0-9]{1,32}$")
+RE_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
+REC_PORT = 5070
+REC_PATTERN = "89990001"          # Rufnummer des Recorders (nur fuer die SIP-Anfrage)
+REC_DESC = "Aufzeichnung (cme-recorder)"
+AST_DESC = "Von Asterisk (cme-web)"
+NOTICE_DESC = "Aufzeichnungshinweis (Asterisk)"
+DEFAULT_NOTICE = ("Dieses Gespräch wird aufgezeichnet. Wenn Sie damit nicht einverstanden sind, "
+                  "beenden Sie bitte jetzt den Anruf.")
+
+
+class RecError(ValueError):
+    pass
+
+
+def register(app, router, apply, demo: bool, ctx: dict) -> None:
+    cfgdir: Path = ctx["cfgdir"]
+    host_ip: str = ctx["host_ip"]
+    ami = ctx["ami"]
+    tools = ctx["tools"]          # Sprachausgabe aus vmapps.py
+    sounds = cfgdir / "sounds"
+    notice_wav = sounds / "rec-notice.wav"
+    recdir = Path(os.environ.get("VM_REC_DIR", "/data/recordings"))
+    if demo:
+        recdir = Path(tempfile.gettempdir()) / "cme-web-demo-rec"
+        demo_seed(recdir)
+
+    # ---------------- Einstellungen ----------------
+
+    def settings() -> dict:
+        s = {"enabled": True, "transcript": True, "mail": False, "emails": {}, "default_email": "",
+             "retention_days": 90, "min_secs": 3, "notice": True, "prefix": "8199", "notice_tts": None,
+             "peers": [], "internal": [], "own": []}
+        try:
+            s.update(json.loads((cfgdir / "cme-recording.json").read_text()))
+        except (FileNotFoundError, ValueError):
+            pass
+        return s
+
+    def own_numbers() -> list[str]:
+        """Eigene Rufnummern aus den Registrierungen am Provider (show sip-ua register status)."""
+        try:
+            out = router.show("show sip-ua register status")
+        except Exception:
+            return []
+        return sorted({m.group(1) for m in re.finditer(r"^\s*(\+?\d{6,})\s", out, re.M)})
+
+    def asterisk_conf(s: dict) -> str:
+        p = s["prefix"]
+        out = ["; Von cme-web erzeugt (Aufzeichnung) - Aenderungen hier gehen verloren.", "",
+               "; Eingehende Gespraeche mit vorangestellter Nummer: Hinweis abspielen, dann zur Nummer",
+               "[cme-recnotice]",
+               f"exten => _{p}X.,1,Verbose(1,Aufzeichnungshinweis fuer ${{EXTEN:{len(p)}}} von ${{CALLERID(num)}})",
+               " same => n,Set(CHANNEL(tonezone)=de)"]
+        if s.get("notice") and notice_wav.exists():
+            out += [" same => n,Progress()", " same => n,Wait(0.3)",
+                    f" same => n,Playback({notice_wav.with_suffix('')},noanswer)"]
+        out += [f" same => n,Dial(PJSIP/${{EXTEN:{len(p)}}}@cme,180,r)", " same => n,Hangup()"]
+        return "\n".join(out) + "\n"
+
+    def save(s: dict, refresh: bool = True) -> None:
+        if refresh:
+            try:
+                s["internal"] = [n["number"] for n in ctx["numbers"]()]
+                s["own"] = own_numbers()
+                s["vm_emails"] = {k: v["email"] for k, v in ctx["settings"]()["mailboxes"].items() if v.get("email")}
+            except Exception:
+                pass
+        cfgdir.mkdir(parents=True, exist_ok=True)
+        for name, text in (("cme-recording.json", json.dumps(s, indent=2, ensure_ascii=False)),
+                           ("extensions_rec.conf", asterisk_conf(s))):
+            tmp = cfgdir / f".{name}.tmp"
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(cfgdir / name)
+        if not demo and ami is not None:
+            try:
+                ami.command("dialplan reload")
+            except Exception:
+                pass
+
+    # ---------------- Router ----------------
+
+    def parse_peers(out: str) -> list[dict]:
+        res, cur = [], None
+        for line in out.splitlines():
+            m = re.match(r"^dial-peer voice (\d+) (\w+)", line)
+            if m:
+                cur = {"tag": m.group(1), "kind": m.group(2), "desc": "", "pattern": "", "target": "",
+                       "media_class": "", "incoming": "", "codec": ""}
+                res.append(cur)
+                continue
+            if cur is None or not line.startswith(" "):
+                cur = None if not line.startswith(" ") else cur
+                continue
+            t = line.strip()
+            if t.startswith("description "):
+                cur["desc"] = t[12:]
+            elif t.startswith("destination-pattern "):
+                cur["pattern"] = t.split()[1]
+            elif t.startswith("session target "):
+                cur["target"] = t.split()[2]
+            elif t.startswith("media-class "):
+                cur["media_class"] = t.split()[1]
+            elif t.startswith(("incoming called-number", "incoming uri", "incoming calling")):
+                cur["incoming"] = (cur["incoming"] + ", " if cur["incoming"] else "") + t[9:]
+            elif t.startswith("voice-class codec "):
+                cur["codec"] = t.split()[2]
+        return res
+
+    def parse_media(out: str) -> tuple[dict, dict]:
+        profiles, classes, cur = {}, {}, None
+        for line in out.splitlines():
+            m = re.match(r"^media profile recorder (\d+)", line)
+            mc = re.match(r"^media class (\d+)", line)
+            if m:
+                cur = profiles.setdefault(m.group(1), {"peers": []})
+            elif mc:
+                cur = classes.setdefault(mc.group(1), {"profile": "", "siprec": False})
+            elif line.startswith(" ") and cur is not None:
+                t = line.split()
+                if t[:1] == ["media-recording"]:
+                    cur["peers"] = t[1:]
+                elif t[:2] == ["recorder", "profile"] and len(t) > 2:
+                    cur["profile"], cur["siprec"] = t[2], "siprec" in t
+            else:
+                cur = None
+        return profiles, classes
+
+    def codec_lists() -> dict[int, list[str]]:
+        out = router.show("show running-config | section voice class codec")
+        lists, cur = {}, None
+        for line in out.splitlines():
+            m = re.match(r"^voice class codec\s+(\d+)", line)
+            if m:
+                cur = lists.setdefault(int(m.group(1)), [])
+                continue
+            mm = re.match(r"^\s+codec preference \d+ (\S+)", line)
+            if cur is not None and mm:
+                cur.append(mm.group(1))
+        return lists
+
+    def router_state(s: dict) -> dict:
+        if demo:
+            st = s.get("demo_router") or {}
+            peers = parse_peers(router.dialpeers)
+            for p in peers:
+                p["media_class"] = st.get("mclass", "") if p["tag"] in st.get("peers", []) else ""
+            return {"peers": [dict(p, recorded=bool(p["media_class"])) for p in peers if p["kind"] == "voip"],
+                    "rec_peer": st.get("rec_peer", ""), "ast_peer": st.get("ast_peer", ""),
+                    "notice_peer": st.get("notice_peer", ""), "mclass": st.get("mclass", ""),
+                    "profile": st.get("mclass", ""), "codec": "", "uri": "", "configured": bool(st)}
+        peers = parse_peers(router.show("show running-config | section dial-peer voice"))
+        profiles, classes = parse_media(router.show("show running-config | section ^media"))
+        rec = next((p for p in peers if p["target"] == f"ipv4:{host_ip}:{REC_PORT}"), None)
+        ast = next((p for p in peers if p["desc"] == AST_DESC), None)
+        notice = next((p for p in peers if p["desc"] == NOTICE_DESC), None)
+        profile = next((t for t, p in profiles.items() if rec and rec["tag"] in p["peers"]), "")
+        mclass = next((t for t, c in classes.items() if profile and c["profile"] == profile), "")
+        uri = ""
+        if ast:
+            m = re.search(r"uri via (\d+)", ast["incoming"])
+            uri = m.group(1) if m else ""
+        ours = {x["tag"] for x in (rec, ast, notice) if x}
+        cand = [dict(p, recorded=bool(mclass) and p["media_class"] == mclass) for p in peers
+                if p["kind"] == "voip" and p["tag"] not in ours and host_ip not in p["target"]]
+        return {"peers": cand, "rec_peer": rec["tag"] if rec else "", "ast_peer": ast["tag"] if ast else "",
+                "notice_peer": notice["tag"] if notice else "", "mclass": mclass, "profile": profile,
+                "codec": rec["codec"] if rec else "", "uri": uri,
+                "configured": bool(rec and mclass and classes[mclass]["siprec"])}
+
+    def free_tag(used: set[int], start: int, stop: int, step: int = 1) -> int:
+        t = next((t for t in range(start, stop, step) if t not in used), None)
+        if t is None:
+            raise RecError("Keine freie Nummer (Tag) mehr frei.")
+        used.add(t)
+        return t
+
+    def setup_lines(s: dict, st: dict, peers: list[str]) -> list[str]:
+        used_peers = {int(t) for t in re.findall(r"^dial-peer voice (\d+)", router.show(
+            "show running-config | section dial-peer voice"), re.M)}
+        codecs = codec_lists()
+        rec = st["rec_peer"] or str(free_tag(used_peers, 8190, 9000))
+        ast = st["ast_peer"] or str(free_tag(used_peers, 8190, 9000))
+        codec = st["codec"] or str(free_tag(set(codecs), 8999, 8000, -1))
+        uri = st["uri"] or "8999"
+        mtag = st["mclass"] or st["profile"] or "8999"
+        cl = ctx["codec_line"]()
+        lines = [f"voice class codec {codec}", " codec preference 1 g711alaw", " codec preference 2 g711ulaw",
+                 " codec preference 3 g722-64",
+                 f"voice class uri {uri} sip", f" host ipv4:{host_ip}",
+                 f"dial-peer voice {rec} voip", f" description {REC_DESC}", f" destination-pattern {REC_PATTERN}",
+                 " session protocol sipv2", f" session target ipv4:{host_ip}:{REC_PORT}",
+                 " session transport udp", f" voice-class codec {codec}", " no vad",
+                 f"dial-peer voice {ast} voip", f" description {AST_DESC}", " session protocol sipv2",
+                 f" incoming uri via {uri}", " dtmf-relay rtp-nte", cl, " no vad"]
+        if s.get("notice"):
+            notice = st["notice_peer"] or str(free_tag(used_peers, 8190, 9000))
+            lines += [f"dial-peer voice {notice} voip", f" description {NOTICE_DESC}",
+                      f" destination-pattern {s['prefix']}T", " session protocol sipv2",
+                      f" session target ipv4:{host_ip}:5060", " dtmf-relay rtp-nte", cl, " no vad"]
+        elif st["notice_peer"]:
+            lines.append(f"no dial-peer voice {st['notice_peer']} voip")
+        lines += [f"media profile recorder {mtag}", " media-type audio", f" media-recording {rec}",
+                  f"media class {mtag}", f" recorder profile {mtag} siprec"]
+        for p in st["peers"]:
+            if p["tag"] in peers:
+                lines += [f"dial-peer voice {p['tag']} voip", f" media-class {mtag}"]
+            elif p["recorded"]:
+                lines += [f"dial-peer voice {p['tag']} voip", f" no media-class {mtag}"]
+        return lines
+
+    def remove_lines(st: dict) -> list[str]:
+        lines = []
+        for p in st["peers"]:
+            if p["recorded"]:
+                lines += [f"dial-peer voice {p['tag']} voip", f" no media-class {st['mclass']}"]
+        if st["mclass"]:
+            lines.append(f"no media class {st['mclass']}")
+        if st["profile"]:
+            lines.append(f"no media profile recorder {st['profile']}")
+        for t in (st["rec_peer"], st["ast_peer"], st["notice_peer"]):
+            if t:
+                lines.append(f"no dial-peer voice {t} voip")
+        if st["uri"]:
+            lines.append(f"no voice class uri {st['uri']}")
+        if st["codec"]:
+            lines.append(f"no voice class codec {st['codec']}")
+        return lines
+
+    # ---------------- Aufnahmen ----------------
+
+    def recorder_status() -> dict:
+        try:
+            st = json.loads((recdir / ".status.json").read_text())
+        except (FileNotFoundError, ValueError):
+            return {"online": False}
+        st["online"] = time.time() - st.get("time", 0) < 90
+        return st
+
+    def recordings(q: str = "", limit: int = 300) -> list[dict]:
+        out = []
+        files = sorted(recdir.glob("*.json"), reverse=True) if recdir.is_dir() else []
+        q = q.strip().lower()
+        for p in files:
+            try:
+                m = json.loads(p.read_text())
+            except (ValueError, OSError):
+                continue
+            if q and q not in json.dumps(m, ensure_ascii=False).lower():
+                continue
+            m["id"] = p.stem
+            out.append(m)
+            if len(out) >= limit:
+                break
+        return out
+
+    def rec_file(rid: str) -> Path:
+        if not RE_ID.match(rid):
+            raise RecError("Ungültige Aufnahme.")
+        return recdir / rid
+
+    # ---------------- API ----------------
+
+    @app.errorhandler(RecError)
+    def on_err(e):
+        return jsonify(ok=False, error=str(e)), 400
+
+    def need():
+        if not ctx["enabled"]:
+            raise RecError("Asterisk/Voicemail ist nicht eingerichtet (VM_HOST_IP, VM_AMI_SECRET).")
+
+    @app.get("/static/recording.js")
+    def rec_recording_js():
+        return send_file(Path(__file__).resolve().parent / "static" / "recording.js",
+                         mimetype="text/javascript", max_age=0)
+
+    @app.get("/api/recording")
+    def rec_get_recording():
+        if not ctx["enabled"]:
+            return jsonify(ok=True, enabled=False)
+        s = settings()
+        err = ""
+        try:
+            st = router_state(s)
+            nums = ctx["numbers"]()
+            if [n["number"] for n in nums] != s.get("internal"):
+                save(s)       # neue Rufnummern an den Recorder weitergeben
+        except Exception as e:
+            st, nums, err = {"peers": [], "configured": False}, [], f"{type(e).__name__}: {e}"
+        vm = ctx["settings"]()["mailboxes"]
+        s.pop("demo_router", None)
+        return jsonify(ok=True, enabled=True, settings=s, router=st, router_error=err, host_ip=host_ip,
+                       recorder=recorder_status(), numbers=nums, mail_ready=ctx["mail_ready"],
+                       vm_emails={k: v.get("email", "") for k, v in vm.items() if v.get("email")},
+                       notice={"exists": notice_wav.exists()}, tts=tools["tts_info"](),
+                       recordings=recordings(request.args.get("q", "")))
+
+    @app.put("/api/recording/settings")
+    def rec_put_settings():
+        need()
+        b = request.get_json(force=True) or {}
+        s = settings()
+        try:
+            days, mins = int(b.get("retention_days") or 0), int(b.get("min_secs") or 0)
+        except ValueError:
+            raise RecError("Aufbewahrung und Mindestlänge müssen Zahlen sein.")
+        if not 0 <= days <= 3650 or not 0 <= mins <= 60:
+            raise RecError("Aufbewahrung 0–3650 Tage (0 = unbegrenzt), Mindestlänge 0–60 s.")
+        emails = {}
+        for num, mail in (b.get("emails") or {}).items():
+            num, mail = str(num).strip(), str(mail or "").strip()
+            if not mail:
+                continue
+            if not RE_NUM.match(num):
+                raise RecError(f"Ungültige Rufnummer: {num}")
+            if not RE_EMAIL.match(mail):
+                raise RecError(f"Ungültige E-Mail-Adresse: {mail}")
+            emails[num] = mail
+        default = str(b.get("default_email") or "").strip()
+        if default and not RE_EMAIL.match(default):
+            raise RecError("Ungültige Standard-E-Mail-Adresse.")
+        prefix = str(b.get("prefix") or s["prefix"]).strip()
+        if not re.fullmatch(r"[0-9]{2,6}", prefix):
+            raise RecError("Vorwahl für die Ansage: 2–6 Ziffern.")
+        if any(n["number"].startswith(prefix) for n in ctx["numbers"]()):
+            raise RecError(f"Mit {prefix} beginnt schon eine interne Rufnummer.")
+        router_change = prefix != s["prefix"] or bool(b.get("notice")) != bool(s.get("notice"))
+        s.update(enabled=bool(b.get("enabled")), transcript=bool(b.get("transcript")), mail=bool(b.get("mail")),
+                 emails=emails, default_email=default, retention_days=days, min_secs=mins,
+                 notice=bool(b.get("notice")), prefix=prefix)
+        save(s)
+        return jsonify(ok=True, router_change=router_change and router_state(s)["configured"])
+
+    @app.post("/api/recording/router")
+    def rec_setup_router():
+        need()
+        s = settings()
+        b = request.get_json(force=True) or {}
+        st = router_state(s)
+        tags = {p["tag"] for p in st["peers"]}
+        peers = [str(t) for t in b.get("peers") or [] if str(t) in tags]
+        if not peers:
+            raise RecError("Mindestens einen Dial-Peer zum Provider auswählen.")
+        lines = setup_lines(s, st, peers)
+        if demo:
+            res = apply(lines)
+            s["demo_router"] = {"peers": peers, "mclass": "8999", "rec_peer": "8190", "ast_peer": "8191",
+                                "notice_peer": "8192" if s.get("notice") else ""}
+        else:
+            res = apply(lines)
+        if res["ok"]:
+            s["peers"] = peers
+            save(s)
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.delete("/api/recording/router")
+    def rec_remove_router():
+        need()
+        s = settings()
+        st = router_state(s)
+        lines = remove_lines(st) if not demo else ["no media class 8999"]
+        res = apply(lines) if lines else {"ok": True, "error": None, "config": []}
+        if res["ok"]:
+            s.pop("demo_router", None)
+            s["peers"] = []
+            save(s)
+        return jsonify(res), (200 if res["ok"] else 400)
+
+    @app.get("/api/recording/files/<rid>")
+    def rec_get_file(rid):
+        need()
+        base = rec_file(rid)
+        p = next((base.with_suffix(x) for x in (".mp3", ".wav") if base.with_suffix(x).exists()), None)
+        if not p:
+            return jsonify(ok=False, error="Aufnahme nicht gefunden"), 404
+        return send_file(p, mimetype="audio/mpeg" if p.suffix == ".mp3" else "audio/wav", max_age=0,
+                         conditional=True, download_name=f"gespraech-{rid}{p.suffix}",
+                         as_attachment=request.args.get("download") == "1")
+
+    @app.delete("/api/recording/files/<rid>")
+    def rec_delete_file(rid):
+        need()
+        base = rec_file(rid)
+        for x in (".mp3", ".wav", ".json", ".txt"):
+            base.with_suffix(x).unlink(missing_ok=True)
+        return jsonify(ok=True)
+
+    # Ansage
+
+    @app.post("/api/recording/notice/tts")
+    def rec_notice_tts():
+        need()
+        text, voice, speed = tools["tts_input"](request.get_json(force=True) or {})
+        audio = tools["to_phone"](tools["synthesize"](text, voice, speed))
+        sounds.mkdir(parents=True, exist_ok=True)
+        notice_wav.write_bytes(audio)
+        s = settings()
+        s["notice_tts"] = {"text": text, "voice": voice, "speed": speed}
+        save(s, refresh=False)
+        return jsonify(ok=True)
+
+    @app.post("/api/recording/notice")
+    def rec_notice_upload():
+        need()
+        f = request.files.get("file")
+        raw = f.read() if f else b""
+        if not raw or len(raw) > 30 * 1024 * 1024:
+            raise RecError("Datei fehlt oder ist größer als 30 MB.")
+        sounds.mkdir(parents=True, exist_ok=True)
+        notice_wav.write_bytes(tools["to_phone"](raw))
+        s = settings()
+        s["notice_tts"] = None
+        save(s, refresh=False)
+        return jsonify(ok=True)
+
+    @app.get("/api/recording/notice")
+    def rec_notice_get():
+        need()
+        if not notice_wav.exists():
+            return jsonify(ok=False, error="Keine Ansage"), 404
+        return send_file(notice_wav, mimetype="audio/wav", max_age=0)
+
+    @app.delete("/api/recording/notice")
+    def rec_notice_delete():
+        need()
+        notice_wav.unlink(missing_ok=True)
+        s = settings()
+        s["notice_tts"] = None
+        save(s, refresh=False)
+        return jsonify(ok=True)
+
+    # Asterisk-Datei beim Start anlegen (z. B. nach einem Update)
+    if ctx["enabled"] and not (cfgdir / "extensions_rec.conf").exists():
+        try:
+            save(settings(), refresh=False)
+        except Exception:
+            pass
+
+
+def demo_seed(recdir: Path) -> None:
+    """Zwei Beispielaufnahmen (Ton) fuer den Demo-Modus."""
+    recdir.mkdir(parents=True, exist_ok=True)
+    if any(recdir.glob("*.json")):
+        return
+    import math
+    now = time.time()
+    rows = [("in", "101", "+4917012345678", 95, "Thomas", "Mobil Anna",
+             "[0:00] Thomas: Guten Tag, Wiederhold.\n[0:02] Mobil Anna: Hallo, hier ist Anna, ich wollte kurz "
+             "wegen des Termins morgen anrufen.\n[0:07] Thomas: Ja gerne, passt zehn Uhr?"),
+            ("out", "102", "06151123456", 42, "Küche", "06151123456", "")]
+    for i, (direction, internal, external, dur, a, b, text) in enumerate(rows):
+        start = now - 3600 * (i * 20 + 2)
+        rid = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + f"-{i:06x}"
+        with wave.open(str(recdir / f"{rid}.wav"), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(8000)
+            frames = bytearray()
+            for n in range(8000 * 3):
+                l = int(4000 * math.sin(2 * math.pi * 440 * n / 8000))
+                r = int(4000 * math.sin(2 * math.pi * 660 * n / 8000))
+                frames += l.to_bytes(2, "little", signed=True) + r.to_bytes(2, "little", signed=True)
+            w.writeframes(bytes(frames))
+        meta = {"id": rid, "start": start, "duration": dur, "direction": direction, "internal": internal,
+                "external": external, "parties": [], "channels": [a, b], "codec": "G722", "file": f"{rid}.wav",
+                "size": (recdir / f"{rid}.wav").stat().st_size, "transcript": text,
+                "transcript_status": "ok" if text else "off", "mailed": "thomas@example.de" if text else "",
+                "mail_error": ""}
+        (recdir / f"{rid}.json").write_text(json.dumps(meta, ensure_ascii=False))
