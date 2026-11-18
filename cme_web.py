@@ -375,6 +375,9 @@ def parse_dialpeer_codecs(out: str) -> dict[str, list[str]]:
 # CME meldet viele Fehler ohne "%", z.B. "Failed: CME mode only accept mac address ..."
 # oder "Error: The password you have entered is invalid."
 ERROR_PREFIXES = ("%", "failed", "error")
+# Harmlos: "create profile" will alte Dateien loeschen, die es nicht gibt
+# (z.B. "%Error deleting flash:/its/jabber-config.xml (No such file or directory)")
+IGNORED_ERRORS = (re.compile(r"^%Error deleting \S+ \(No such file or directory\)$", re.I),)
 
 
 def config_errors(out: str) -> list[str]:
@@ -383,6 +386,8 @@ def config_errors(out: str) -> list[str]:
     for i, l in enumerate(lines):
         t = l.strip()
         if t.lower().startswith(ERROR_PREFIXES):
+            if any(p.match(t) for p in IGNORED_ERRORS):
+                continue
             errs.append(t)
             # Erlaeuterungen direkt darunter mitnehmen (z.B. Passwortregeln)
             for nxt in lines[i + 1:i + 6]:
