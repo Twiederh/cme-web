@@ -218,7 +218,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                  " session protocol sipv2", f" session target ipv4:{host_ip}:{REC_PORT}",
                  " session transport udp", f" voice-class codec {codec}", " no vad",
                  f"dial-peer voice {ast} voip", f" description {AST_DESC}", " session protocol sipv2",
-                 f" incoming uri via {uri}", " dtmf-relay rtp-nte", cl, " no vad"]
+                 f" incoming uri via {uri}", " dtmf-relay rtp-nte", cl, " no vad",
+                 # Umleitungen (z. B. auf die Voicemail) selbst ausfuehren statt 302/REFER an Asterisk
+                 " no supplementary-service sip moved-temporarily", " no supplementary-service sip refer"]
         if s.get("notice"):
             notice = st["notice_peer"] or str(free_tag(used_peers, 8190, 9000))
             lines += [f"dial-peer voice {notice} voip", f" description {NOTICE_DESC}",
