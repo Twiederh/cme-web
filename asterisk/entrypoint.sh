@@ -11,6 +11,9 @@ if [ -n "$missing" ]; then
   echo "Voicemail nicht eingerichtet, es fehlt:$missing (im Stack setzen und neu deployen)"
   exec sleep infinity
 fi
+# Neuere Docker-Versionen geben Containern ein riesiges Datei-Limit (~1 Mrd.).
+# Asterisk bleibt damit beim Start nach den Codecs haengen -> Limit senken.
+ulimit -n "${ASTERISK_NOFILE:-65536}" 2>/dev/null || true
 RTP_START="${RTP_START:-10000}"
 RTP_END="${RTP_END:-10049}"
 # Eigenes Docker-Netz: dort spricht Asterisk direkt, sonst mit HOST_IP

@@ -47,6 +47,10 @@ services:
     image: cme-voicemail:latest
     container_name: cme-voicemail
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       HOST_IP: ${VM_HOST_IP:-}
       CME_IP: ${CME_HOST}
