@@ -7,8 +7,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends asterisk asterisk-modules asterisk-core-sounds-en \
       asterisk-prompt-de iproute2 tzdata \
  && rm -rf /var/lib/apt/lists/* \
+ && OLD_UID=$(id -u asterisk) && OLD_GID=$(id -g asterisk) \
  && groupmod -g 10001 asterisk && usermod -u 10001 -g 10001 asterisk \
- && chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk
+ && { find / -xdev \( -uid "$OLD_UID" -o -gid "$OLD_GID" \) -exec chown -h asterisk:asterisk {} + || true; } \
+ && chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk
 
 COPY etc/ /opt/cme-asterisk/
 COPY entrypoint.sh /entrypoint.sh

@@ -30,10 +30,11 @@ for src in /opt/cme-asterisk/*.conf; do
       -e "s|@AMI_SECRET@|${AMI_SECRET}|g" -e "s|@LOCAL_NET@|${LOCAL_NET}|g" \
       -e "s|@RTP_START@|${RTP_START}|g" -e "s|@RTP_END@|${RTP_END}|g" \
       "$src" > "/etc/asterisk/$(basename "$src")"
+  chmod 640 "/etc/asterisk/$(basename "$src")"
 done
 
 mkdir -p /var/spool/asterisk/voicemail/default /run/asterisk
-chown -R asterisk:asterisk /etc/asterisk/cme /var/spool/asterisk /var/lib/asterisk /var/log/asterisk /run/asterisk
+chown -R asterisk:asterisk /etc/asterisk /var/spool/asterisk /var/lib/asterisk /var/log/asterisk /run/asterisk
 chmod -R g+rwX,u+rwX /etc/asterisk/cme /var/spool/asterisk/voicemail
 
 echo "Asterisk-Voicemail: HOST_IP=${HOST_IP} CME_IP=${CME_IP} LOCAL_NET=${LOCAL_NET} RTP ${RTP_START}-${RTP_END}"
