@@ -155,17 +155,38 @@
           <button type="button" class="small" id="ivr-close">Schließen</button></div>
         <div class="msg" id="m-ivr"></div>
       </form>
-      ${ivr ? `<form id="f-ivr-greet" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      ${ivr ? `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
         <label style="font-weight:600;color:var(--text);font-size:13px;margin-bottom:8px">Ansage</label>
+        <div class="actions" style="margin-bottom:10px">${ivr.greeting ? `<button type="button" class="small" data-ivr-play="${id}">▶ Aktuelle Ansage anhören</button>
+          <button type="button" class="small danger" id="ivr-greet-del">Ansage löschen</button>` : '<span class="muted">Noch keine Ansage – es ertönt nur ein Piepton.</span>'}</div>
+      </div>
+      ${A.tts?.available ? `<form id="f-ivr-tts">
+        <label>Text vorlesen lassen</label>
+        <textarea name="text" rows="4" maxlength="1500" style="width:100%;font:inherit;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--bg2, transparent);color:inherit"
+          placeholder="Willkommen bei … Für … drücken Sie die 1. Für … drücken Sie die 2.">${esc(ivr.tts?.text || "")}</textarea>
+        <div class="row" style="margin-top:8px">
+          <div><label>Stimme</label><select name="voice">${A.tts.voices.map(v =>
+            `<option value="${esc(v.id)}" ${v.id === (ivr.tts?.voice || "de_DE-thorsten-medium") ? "selected" : ""}>${esc(v.label)}${v.installed ? "" : " – wird beim ersten Mal geladen"}</option>`).join("")}</select></div>
+          <div><label>Tempo: <span id="tts-speed-v">${Math.round((ivr.tts?.speed || 1) * 100)} %</span></label>
+            <input name="speed" type="range" min="0.7" max="1.4" step="0.05" value="${ivr.tts?.speed || 1}" style="width:100%"></div>
+        </div>
+        <div class="hint">Satzzeichen steuern die Pausen. Zahlen und Abkürzungen am besten ausschreiben („eins“, „zum Beispiel“).
+          Beim ersten Gebrauch einer Stimme lädt der Server sie einmalig herunter (60–110 MB), das dauert etwas.</div>
+        <div class="actions"><button type="button" id="tts-preview">▶ Probehören</button>
+          <button type="submit" class="primary" id="tts-save">Als Ansage speichern</button></div>
+        <div class="msg" id="m-ivr-tts"></div>
+      </form>` : '<div class="hint">Die Sprachausgabe ist auf dem Server nicht installiert (piper-tts). Nach dem nächsten Neubau von cme-web ist sie da.</div>'}
+      <form id="f-ivr-greet" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
         <div class="row">
-          <div><label>Audiodatei (MP3, WAV, M4A …) – wird für das Telefon umgerechnet</label><input type="file" name="file" accept="audio/*" required></div>
-          <div class="actions" style="align-items:flex-end">${ivr.greeting ? `<button type="button" class="small" data-ivr-play="${id}">▶ Anhören</button>
-            <button type="button" class="small danger" id="ivr-greet-del">Ansage löschen</button>` : '<span class="muted">Noch keine Ansage – es ertönt nur ein Piepton.</span>'}</div>
+          <div><label>… oder eigene Aufnahme hochladen (MP3, WAV, M4A …)</label><input type="file" name="file" accept="audio/*" required></div>
+          <div></div>
         </div>
         <div class="actions"><button type="submit" id="ivr-greet-submit">Hochladen</button></div>
         <div class="msg" id="m-ivr-greet"></div>
       </form>` : '<div class="hint" style="margin-top:12px">Die Ansage kannst du nach dem Anlegen hochladen.</div>'}`;
     ed.hidden = false;
+    const sp = ed.querySelector("#f-ivr-tts [name=speed]");
+    if (sp) sp.addEventListener("input", () => { $("#tts-speed-v").textContent = `${Math.round(sp.value * 100)} %`; });
     ed.querySelectorAll(".ln[data-act] select[name=action]").forEach(sel => sel.addEventListener("change", () => {
       sel.closest(".ln").querySelector(".tgt").innerHTML = targetField(sel.value, "", id);
     }));
@@ -183,6 +204,8 @@
     });
     return body;
   }
+
+  const ttsBody = (f) => ({ text: f.text.value, voice: f.voice.value, speed: f.speed.value });
 
   // ---------------- Laden ----------------
 
@@ -219,6 +242,15 @@
       await loadApps(j.id);
       showMsg($("#m-ivr"), true, "Gespeichert." + (j.config?.length ? `\n\n${j.config.join("\n")}` : "") +
         (id ? "" : "\n\nJetzt kannst du unten die Ansage hochladen."));
+    } else if (f.id === "f-ivr-tts") {
+      const m = $("#m-ivr-tts"), id = +$("#f-ivr").dataset.id, btn = $("#tts-save");
+      btn.disabled = true;
+      showMsg(m, true, "Wird gesprochen …");
+      const j = await api(`/api/vmapps/ivr/${id}/greeting/tts`, { method: "POST", body: JSON.stringify(ttsBody(f)) });
+      btn.disabled = false;
+      if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
+      await loadApps(id);
+      showMsg($("#m-ivr-tts"), true, "Ansage gespeichert.");
     } else if (f.id === "f-ivr-greet") {
       const m = $("#m-ivr-greet"), id = +$("#f-ivr").dataset.id, btn = $("#ivr-greet-submit");
       btn.disabled = true;
@@ -237,6 +269,23 @@
 
   box.addEventListener("click", async (e) => {
     const d = e.target.dataset || {};
+    if (e.target.id === "tts-preview") {
+      const f = $("#f-ivr-tts"), m = $("#m-ivr-tts");
+      e.target.disabled = true;
+      showMsg(m, true, "Wird gesprochen …");
+      try {
+        const r = await fetch("/api/vmapps/tts/preview", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                           body: JSON.stringify(ttsBody(f)) });
+        if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || `HTTP ${r.status}`); }
+        const url = URL.createObjectURL(await r.blob());
+        if (player) player.pause();
+        player = new Audio(url);
+        m.className = "msg";
+        await player.play();
+      } catch (err) { showMsg(m, false, err.message); }
+      e.target.disabled = false;
+      return;
+    }
     if (d.faxEdit) {
       const fx = A.fax.find(x => x.number === d.faxEdit), f = $("#f-fax");
       f.edit.value = fx.number; f.number.value = fx.number; f.name.value = fx.name; f.email.value = fx.email;
