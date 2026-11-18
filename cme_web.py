@@ -38,6 +38,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
 import media
+import translation
 
 BASE = Path(__file__).resolve().parent
 
@@ -77,6 +78,8 @@ RAW_COMMANDS = [
     "show voice hunt-group",
     "show running-config | section sip-ua",
     "show running-config | include ^tftp-server",
+    "show running-config | section voice translation",
+    "show voice translation-rule",
     "show version | include uptime|IOS",
 ]
 
@@ -495,9 +498,13 @@ class DemoRouter:
                           "dial-peer voice 200 voip\n description Telefone\n destination-pattern 1..\n")
         self.registered = {"1": "192.168.1.31", "2": "192.168.1.32", "4": "192.168.1.60"}
         media.demo_seed(self)     # self.files, self.tftp
+        translation.demo_seed(self)
 
     def show(self, cmd: str) -> str:
         time.sleep(0.2)
+        out = translation.demo_show(self, cmd)
+        if out is not None:
+            return out
         if cmd.startswith("show running-config | section voice register"):
             return "\n".join(l for l in self._blocks("voice register"))
         if cmd.startswith("show running-config | section voice class codec"):
@@ -567,8 +574,8 @@ class DemoRouter:
                         self.tftp.remove(line[3:])
                     block = None
                     continue
-                m = re.match(r"^no (voice register (?:dn|pool|template)|voice class codec|voice hunt-group)\s+(\d+)$",
-                             line.strip())
+                m = re.match(r"^no (voice register (?:dn|pool|template)|voice class codec|voice hunt-group"
+                             r"|voice translation-rule|voice translation-profile)\s+(\S+)$", line.strip())
                 if m:
                     if m.group(1) == "voice hunt-group":
                         head = next((l for l in self.cfg
@@ -588,6 +595,12 @@ class DemoRouter:
                     m = re.match(r"^voice register (dn|pool|template)\s+(\d+)$", line.strip())
                     mc = re.match(r"^voice class codec\s+(\d+)$", line.strip())
                     mh = re.match(r"^voice hunt-group\s+(\d+)\s+(\S+)$", line.strip())
+                    mt = re.match(r"^(voice translation-(?:rule|profile))\s+(\S+)$", line.strip())
+                    if mt:
+                        block = f"{mt.group(1)} {mt.group(2)}"
+                        if block not in self.cfg:
+                            self.cfg.append(block)
+                        continue
                     if mh:
                         old = next((l for l in self.cfg if re.match(rf"^voice hunt-group {mh.group(1)} ", l)), None)
                         block = f"voice hunt-group {mh.group(1)} {mh.group(2)}"
@@ -622,6 +635,8 @@ class DemoRouter:
                         key = " ".join(s.split()[:2])
                     if s.startswith("codec preference "):      # "codec preference 2 g711alaw"
                         key = " ".join(s.split()[:3])
+                    if s.startswith(("rule ", "translate ")):   # "rule 1 ...", "translate called 1"
+                        key = " ".join(s.split()[:2])
                     snr_main = re.match(r"^snr \+?[0-9*#]", s) is not None
                     if key or snr_main:
                         for j in range(start, end):
@@ -742,12 +757,19 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         rows = [l for l in (out or "").splitlines() if l.strip()]
         return "\n".join(rows[-n:])
 
-    # Hintergrundbilder und Klingeltoene (media.py)
+    # Hintergrundbilder und Klingeltoene (media.py), Uebersetzungsregeln (translation.py)
     media.register(app, router, apply, isinstance(router, DemoRouter))
+    translation.register(app, router, apply)
+
+    # Oberflaechen-Module, die in index.html eingehaengt werden
+    extra_scripts = ["/static/translation.js"]
 
     @app.get("/")
     def index():
-        return send_from_directory(BASE / "static", "index.html")
+        html = (BASE / "static" / "index.html").read_text(encoding="utf-8")
+        tags = "".join(f'<script src="{src}"></script>\n' for src in extra_scripts)
+        return html.replace("</body>", tags + "</body>", 1), 200, {
+            "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
     @app.get("/api/meta")
     def meta():
