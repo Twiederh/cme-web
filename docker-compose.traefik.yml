@@ -37,9 +37,11 @@ services:
       VM_AMI_SECRET: ${VM_AMI_SECRET:-}
       VM_AMI_HOST: asterisk
       VM_SMTP_USER: ${VM_SMTP_USER:-}
+      VM_REC_DIR: /data/recordings
     volumes:
       - vm-config:/data/asterisk
       - vm-spool:/data/voicemail
+      - recordings:/data/recordings
     depends_on:
       - asterisk
     networks:
@@ -99,6 +101,31 @@ services:
       - vm-config:/etc/asterisk/cme
       - vm-spool:/var/spool/asterisk/voicemail
 
+  # Gespraechsaufzeichnung: nimmt die vom Router (SIPREC) kopierten Gespraeche an.
+  # Braucht auf dem Docker-Host UDP/TCP 5070 und UDP 10100-10139.
+  recorder:
+    build: ./recorder
+    image: cme-recorder:latest
+    container_name: cme-recorder
+    restart: unless-stopped
+    environment:
+      HOST_IP: ${VM_HOST_IP:-}
+      CME_IP: ${CME_HOST}
+      TZ: Europe/Berlin
+      WHISPER_URL: http://whisper:9000
+      SMTP_HOST: ${VM_SMTP_HOST:-smtp.mail.me.com}
+      SMTP_PORT: ${VM_SMTP_PORT:-587}
+      SMTP_USER: ${VM_SMTP_USER:-}
+      SMTP_PASSWORD: ${VM_SMTP_PASSWORD:-}
+      SMTP_FROM: ${VM_SMTP_FROM:-}
+    ports:
+      - "5070:5070/udp"
+      - "5070:5070/tcp"
+      - "10100-10139:10100-10139/udp"
+    volumes:
+      - vm-config:/config:ro
+      - recordings:/recordings
+
   # Spracherkennung fuer die Abschrift der Voicemails (lokal, nur im Docker-Netz erreichbar)
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
@@ -119,3 +146,4 @@ volumes:
   vm-config:
   vm-spool:
   whisper-cache:
+  recordings:
