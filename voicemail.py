@@ -234,7 +234,7 @@ def register(app, router, apply, demo: bool) -> None:
             ep = f"vm-{mbid(number)}"
             mwi += [f"[{ep}]", "type=aor", f"contact=sip:{number}@{cme_ip}:5060", "",
                     f"[{ep}]", "type=endpoint", "transport=transport-udp", f"aors={ep}",
-                    f"mailboxes={mbid(number)}@default", "context=from-cme", "disallow=all", "allow=alaw,ulaw", ""]
+                    f"mailboxes={mbid(number)}@default", "context=from-cme", "disallow=all", "allow=g722,alaw,ulaw", ""]
         files = {
             "mailboxes.conf": "\n".join(mb_lines) + "\n",
             "pjsip_mwi.conf": "\n".join(mwi) + "\n",
@@ -409,7 +409,7 @@ def register(app, router, apply, demo: bool) -> None:
         tag = st["dialpeer"] or str(next(t for t in range(8000, 9000) if t not in used_peer_tags()))
         lines += [f"dial-peer voice {tag} voip", " description Voicemail (Asterisk)",
                   f" destination-pattern {s['pilot']}", " session protocol sipv2",
-                  f" session target ipv4:{host_ip}:5060", " dtmf-relay rtp-nte", " codec g711alaw", " no vad"]
+                  f" session target ipv4:{host_ip}:5060", " dtmf-relay rtp-nte", codec_line(), " no vad"]
         # Tastentoene: ohne RTP-Events kommen Tastendruecke nicht bei Asterisk an
         pools, cur, need = router.show("show running-config | section voice register pool"), None, []
         for line in pools.splitlines() + [""]:
@@ -433,6 +433,24 @@ def register(app, router, apply, demo: bool) -> None:
         res = apply(lines)
         res["dtmf_pools"] = need
         return res
+
+    def codec_line() -> str:
+        """G.722 bevorzugt: erste Codec-Liste (voice class codec), die mit G.722 beginnt;
+        sonst G.711 a-law."""
+        out = router.show("show running-config | section voice class codec")
+        lists, cur = {}, None
+        for line in out.splitlines():
+            m = re.match(r"^voice class codec\s+(\d+)", line)
+            if m:
+                cur = lists.setdefault(int(m.group(1)), {})
+                continue
+            mm = re.match(r"^\s+codec preference (\d+) (\S+)", line)
+            if cur is not None and mm:
+                cur[int(mm.group(1))] = mm.group(2)
+        for t in sorted(lists):
+            if lists[t] and lists[t][min(lists[t])].startswith("g722"):
+                return f" voice-class codec {t}"
+        return " codec g711alaw"
 
     def dn_lines(tag: str, b: dict | None, pilot: str, cur: dict | None) -> list[str]:
         out = [f"voice register dn {tag}"]
