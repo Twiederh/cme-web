@@ -67,7 +67,8 @@
             : (c.mwi && c.noan === s.pilot) ? `nach ${esc(c.timeout || b.timeout)} s${c.busy === s.pilot ? ", bei besetzt sofort" : ""}`
             : badge("warn", "am Router nicht gesetzt");
           return `<tr data-row="${esc(b.tag)}"><td><span class="mono">${esc(b.number)}</span> <span class="muted">${esc(b.name)}</span></td>
-            <td>${b.enabled ? `${badge("ok", "aktiv")} <span class="muted mono">PIN ${esc(b.pin)}</span>` : '<span class="muted">aus</span>'}</td>
+            <td>${b.enabled ? `${badge("ok", "aktiv")} <span class="muted mono">PIN ${esc(b.pin)}</span>` +
+              (b.email ? `<br><span class="muted">✉ ${esc(b.email)}</span>` : "") : '<span class="muted">aus</span>'}</td>
             <td>${fwd}</td>
             <td>${b.enabled ? (b.new ? badge("warn", `${b.new} neu`) : "") + (b.old ? ` <span class="muted">${b.old} gehört</span>` : "") || '<span class="muted">keine</span>' : ""}</td>
             <td><button class="small" data-vm-edit="${esc(b.tag)}">${b.enabled ? "Bearbeiten" : "Einrichten"}</button></td></tr>
@@ -80,6 +81,11 @@
                     <div><label>Klingeln bis Voicemail (s)</label><input name="timeout" type="number" min="5" max="120" value="${esc(b.timeout)}"></div>
                   </div>
                 </div>
+                <div><label>E-Mail mit Abschrift und Aufnahme (leer = keine Mail)</label>
+                  <input name="email" type="email" value="${esc(b.email || "")}" placeholder="name@icloud.com"></div>
+                ${V.mail ? "" : `<div class="hint">E-Mail-Versand ist noch nicht eingerichtet: im Stack
+                  <span class="mono">VM_SMTP_USER</span>, <span class="mono">VM_SMTP_PASSWORD</span> und ggf.
+                  <span class="mono">VM_SMTP_FROM</span> setzen.</div>`}
                 <label class="check"><input type="checkbox" name="busy" ${b.busy ? "checked" : ""}> Bei besetzt sofort auf die Voicemail</label>
                 <div class="actions"><button class="primary small" type="submit">Speichern</button>
                   <button type="button" class="small" data-vm-cancel="${esc(b.tag)}">Abbrechen</button></div>
@@ -122,7 +128,8 @@
       const m = f.querySelector(".msg"), btn = f.querySelector("button[type=submit]");
       btn.disabled = true;
       const j = await api(`/api/voicemail/mailboxes/${f.dataset.tag}`, { method: "PUT", body: JSON.stringify({
-        enabled: f.enabled.checked, pin: f.pin.value, timeout: f.timeout.value, busy: f.busy.checked }) });
+        enabled: f.enabled.checked, pin: f.pin.value, timeout: f.timeout.value, busy: f.busy.checked,
+        email: f.email.value }) });
       btn.disabled = false;
       if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
       if (j.asterisk_restart) {

@@ -32,6 +32,7 @@ from flask import jsonify, request, send_file
 BASE = Path(__file__).resolve().parent
 RE_NUM = re.compile(r"^\+?[0-9*#]{1,32}$")
 RE_PIN = re.compile(r"^[0-9]{4,10}$")
+RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 FOLDERS = {"INBOX": "Neu", "Old": "Gehört"}
 
 
@@ -211,6 +212,8 @@ def register(app, router, apply, demo: bool) -> None:
         ami = AMI(os.environ.get("VM_AMI_HOST", "asterisk"), int(os.environ.get("VM_AMI_PORT", "5038")),
                   os.environ.get("VM_AMI_USER", "cmeweb"), secret) if secret else None
     enabled = ami is not None and bool(host_ip)
+    # E-Mail-Versand eingerichtet (SMTP-Zugang im Stack)?
+    mail_ready = demo or bool(os.environ.get("VM_SMTP_USER"))
 
     def settings() -> dict:
         s = {"pilot": "8000", "maxsecs": 180, "maxmsg": 100, "skip_pin": True, "mailboxes": {}}
@@ -230,7 +233,8 @@ def register(app, router, apply, demo: bool) -> None:
         mb_lines, mwi = [], []
         for number, b in sorted(boxes.items()):
             name = re.sub(r"[,|]", " ", names.get(number, "") or number)
-            mb_lines.append(f"{mbid(number)} => {b['pin']},{name},,,")
+            email = b.get("email", "")
+            mb_lines.append(f"{mbid(number)} => {b['pin']},{name},{email},,{'attach=yes' if email else ''}")
             ep = f"vm-{mbid(number)}"
             mwi += [f"[{ep}]", "type=aor", f"contact=sip:{number}@{cme_ip}:5060", "",
                     f"[{ep}]", "type=endpoint", "transport=transport-udp", f"aors={ep}",
@@ -370,10 +374,11 @@ def register(app, router, apply, demo: bool) -> None:
             msgs = list_messages(spool, mbid(n["number"])) if b else []
             boxes.append({"tag": n["tag"], "number": n["number"], "name": n["name"], "enabled": bool(b),
                           "pin": (b or {}).get("pin", ""), "timeout": (b or {}).get("timeout", 20),
-                          "busy": (b or {}).get("busy", True), "id": mbid(n["number"]),
+                          "busy": (b or {}).get("busy", True), "email": (b or {}).get("email", ""),
+                          "id": mbid(n["number"]),
                           "cme": dn, "new": sum(m["folder"] == "INBOX" for m in msgs),
                           "old": sum(m["folder"] == "Old" for m in msgs), "messages": msgs})
-        return jsonify(ok=True, enabled=True, host_ip=host_ip, settings={k: v for k, v in s.items() if k != "mailboxes"},
+        return jsonify(ok=True, enabled=True, host_ip=host_ip, mail=mail_ready, settings={k: v for k, v in s.items() if k != "mailboxes"},
                        status=status, cme=cme, mailboxes=boxes)
 
     @app.put("/api/voicemail/settings")
@@ -496,7 +501,10 @@ def register(app, router, apply, demo: bool) -> None:
                 raise VMError("Klingeldauer 5-120 Sekunden.")
             if mbid(n["number"]) in {mbid(k) for k in s["mailboxes"] if k != n["number"]}:
                 raise VMError("Ein anderes Postfach hat dieselbe Nummer (ohne +).")
-            b = {"pin": pin, "timeout": timeout, "busy": bool(d.get("busy"))}
+            email = str(d.get("email") or "").strip()
+            if email and not RE_EMAIL.match(email):
+                raise VMError("Ungueltige E-Mail-Adresse.")
+            b = {"pin": pin, "timeout": timeout, "busy": bool(d.get("busy")), "email": email}
             s["mailboxes"][n["number"]] = b
         else:
             b = None

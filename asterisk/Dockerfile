@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive TZ=Europe/Berlin
 # Benutzer asterisk bekommt die UID von cme-web (10001), damit beide die Volumes teilen koennen
 RUN apt-get update \
  && apt-get install -y --no-install-recommends asterisk asterisk-modules asterisk-core-sounds-en \
-      asterisk-prompt-de iproute2 tzdata \
+      asterisk-prompt-de iproute2 tzdata python3 ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && OLD_UID=$(id -u asterisk) && OLD_GID=$(id -g asterisk) \
  && groupmod -g 10001 asterisk && usermod -u 10001 -g 10001 asterisk \
@@ -14,6 +14,8 @@ RUN apt-get update \
 
 COPY etc/ /opt/cme-asterisk/
 COPY entrypoint.sh /entrypoint.sh
+COPY vm-mail.py /usr/local/bin/vm-mail.py
+RUN chmod 755 /usr/local/bin/vm-mail.py
 
 EXPOSE 5060/udp 10000-10049/udp
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD asterisk -rx "core show uptime" >/dev/null || exit 1

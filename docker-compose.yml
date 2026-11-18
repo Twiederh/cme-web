@@ -35,6 +35,7 @@ services:
       VM_HOST_IP: ${VM_HOST_IP:-}
       VM_AMI_SECRET: ${VM_AMI_SECRET:-}
       VM_AMI_HOST: asterisk
+      VM_SMTP_USER: ${VM_SMTP_USER:-}
     volumes:
       - vm-config:/data/asterisk
       - vm-spool:/data/voicemail
@@ -56,6 +57,13 @@ services:
       CME_IP: ${CME_HOST}
       AMI_SECRET: ${VM_AMI_SECRET:-}
       TZ: Europe/Berlin
+      # Mail mit Abschrift (Standard: iCloud)
+      SMTP_HOST: ${VM_SMTP_HOST:-smtp.mail.me.com}
+      SMTP_PORT: ${VM_SMTP_PORT:-587}
+      SMTP_USER: ${VM_SMTP_USER:-}
+      SMTP_PASSWORD: ${VM_SMTP_PASSWORD:-}
+      SMTP_FROM: ${VM_SMTP_FROM:-}
+      WHISPER_URL: http://whisper:9000
     ports:
       - "5060:5060/udp"
       - "10000-10049:10000-10049/udp"
@@ -63,6 +71,18 @@ services:
       - vm-config:/etc/asterisk/cme
       - vm-spool:/var/spool/asterisk/voicemail
 
+  # Spracherkennung fuer die Abschrift der Voicemails (lokal, nur im Docker-Netz erreichbar)
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: cme-whisper
+    restart: unless-stopped
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: ${VM_WHISPER_MODEL:-small}
+    volumes:
+      - whisper-cache:/root/.cache
+
 volumes:
   vm-config:
   vm-spool:
+  whisper-cache:
