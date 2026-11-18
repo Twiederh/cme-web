@@ -43,7 +43,7 @@ class AppError(ValueError):
     pass
 
 
-def register(app, router, apply, demo: bool, ctx: dict) -> None:
+def register(app, router, apply, demo: bool, ctx: dict) -> dict:
     cfgdir: Path = ctx["cfgdir"]
     faxdir: Path = ctx["spool"] / "fax"
     sounds = cfgdir / "sounds"
@@ -266,11 +266,13 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             i["dialpeer"] = ps.get(i.get("number", ""), "")
             i["greeting"] = (sounds / f"ivr-{i['id']}.wav").exists()
         boxes = [{"number": n, "id": ctx["mbid"](n)} for n in ctx["settings"]()["mailboxes"]]
+        return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(),
+                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS, tts=tts_info())
+
+    def tts_info() -> dict:
         voices = [{"id": v, "label": label, "installed": (tts_dir / f"{v}.onnx").exists()}
                   for v, label in TTS_VOICES.items()]
-        return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(),
-                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS,
-                       tts={"available": tts_available(), "voices": voices})
+        return {"available": tts_available(), "voices": voices}
 
     # Fax-Nummern
 
@@ -573,3 +575,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         ivr.pop("tts", None)
         save(d)
         return jsonify(ok=True)
+
+    # Gespraechsaufzeichnung (recording.py) nutzt denselben Asterisk und die Sprachausgabe
+    tools = {"tts_info": tts_info, "tts_input": tts_input, "synthesize": synthesize, "to_phone": to_phone}
+    import recording
+    recording.register(app, router, apply, demo, {**ctx, "tools": tools})
+    return tools

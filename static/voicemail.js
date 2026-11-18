@@ -16,6 +16,14 @@
   const apps = document.createElement("script");
   apps.src = "/static/vmapps.js";
   document.body.appendChild(apps);
+  // Gespraechsaufzeichnung: eigene Karte (Tab "Aufzeichnung"), static/recording.js fuellt sie
+  const recCard = document.createElement("section");
+  recCard.className = "card";
+  recCard.id = "recording-card";
+  card.parentNode.insertBefore(recCard, card.nextSibling);
+  const rec = document.createElement("script");
+  rec.src = "/static/recording.js";
+  document.body.appendChild(rec);
 
   const fmtTime = (t) => t ? new Date(t * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–";
   const fmtDur = (s) => s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`;
