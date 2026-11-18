@@ -319,3 +319,10 @@
 
   loadT();
 })();
+
+// Tab-Aufteilung der Seite (static/tabs.js) erst laden, wenn diese Karte eingehaengt ist
+(() => {
+  const s = document.createElement("script");
+  s.src = "/static/tabs.js";
+  document.body.appendChild(s);
+})();

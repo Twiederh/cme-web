@@ -270,9 +270,9 @@ def register(app, router, apply) -> None:
     def on_err(e):
         return fail(str(e))
 
-    @app.get("/static/translation.js")
-    def translation_js():
-        return send_file(BASE / "static" / "translation.js", mimetype="text/javascript", max_age=0)
+    @app.get("/static/<any('translation.js', 'tabs.js'):name>")
+    def module_js(name):
+        return send_file(BASE / "static" / name, mimetype="text/javascript", max_age=0)
 
     @app.get("/api/translation")
     def get_all():
