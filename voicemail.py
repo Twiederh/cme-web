@@ -410,13 +410,29 @@ def register(app, router, apply, demo: bool) -> None:
         lines += [f"dial-peer voice {tag} voip", " description Voicemail (Asterisk)",
                   f" destination-pattern {s['pilot']}", " session protocol sipv2",
                   f" session target ipv4:{host_ip}:5060", " dtmf-relay rtp-nte", " codec g711alaw", " no vad"]
+        # Tastentoene: ohne RTP-Events kommen Tastendruecke nicht bei Asterisk an
+        pools, cur, need = router.show("show running-config | section voice register pool"), None, []
+        for line in pools.splitlines() + [""]:
+            m = re.match(r"^voice register pool\s+(\d+)", line)
+            if m or not line.startswith(" "):
+                if cur and not cur[1]:
+                    need.append(cur[0])
+                cur = [m.group(1), False] if m else None
+            elif cur and line.split()[:1] == ["dtmf-relay"] and {"rtp-nte", "sip-notify"} <= set(line.split()):
+                cur[1] = True
+        for p in need:
+            lines += [f"voice register pool {p}", " dtmf-relay rtp-nte sip-notify"]
         # Umleitungen der Postfaecher auf die (neue) Nummer
         for n in numbers():
             b = s["mailboxes"].get(n["number"])
             if b:
                 lines += dn_lines(n["tag"], b, s["pilot"], None)
         lines += ["voice register global", " create profile"]
-        return apply(lines)
+        for p in need:      # Telefone laden die neue Einstellung erst nach einem Neustart
+            lines += [f"voice register pool {p}", " restart"]
+        res = apply(lines)
+        res["dtmf_pools"] = need
+        return res
 
     def dn_lines(tag: str, b: dict | None, pilot: str, cur: dict | None) -> list[str]:
         out = [f"voice register dn {tag}"]

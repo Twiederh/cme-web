@@ -58,6 +58,8 @@ MOBILITY_SOFTKEYS = {
 }
 # Telefone ohne frei belegbare Softkeys
 NO_SOFTKEY_TYPES = ("", "6901", "ATA190")
+# Tastentoene (DTMF) im Pool: RTP-Events fuer SIP-Ziele wie Asterisk, NOTIFY fuer CME selbst
+DTMF_RELAY = "rtp-nte sip-notify"
 # Arten von Sammelgruppen (voice hunt-group)
 HUNT_TYPES = ["parallel", "sequential", "peer", "longest-idle"]
 
@@ -195,7 +197,7 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
             else:
                 cur = pools.setdefault(tag, {"tag": tag, "mac": "", "id_ip": "", "id_mask": "", "device_id": "",
                                              "type": "", "description": "",
-                                             "username": "", "codec": "", "codec_list": "", "template": "", "phone_mode": "",
+                                             "username": "", "codec": "", "codec_list": "", "template": "", "phone_mode": "", "dtmf_relay": "",
                                              "numbers": []})
             cur["_kind"] = kind
             continue
@@ -241,6 +243,8 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["template"] = s.split()[1]
             elif s.startswith("phone-mode "):
                 cur["phone_mode"] = s.split()[1]
+            elif s.startswith("dtmf-relay "):
+                cur["dtmf_relay"] = " ".join(s.split()[1:])
             elif s.startswith("voice-class codec "):
                 cur["codec_list"] = s.split()[2]
             else:
@@ -469,7 +473,7 @@ class DemoRouter:
     SINGLE = ("id mac", "id ip", "id device-id-name", "type", "description", "voice-class codec", "codec", "username",
               "number", "name", "label", "shared-line", "pilot", "list", "timeout", "final", "hops",
               "mobility", "snr answer-too-soon", "snr calling-number", "snr ring-stop", "template",
-              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting", "phone-mode",
+              "softkeys idle", "softkeys connected", "softkeys hold", "softkeys alerting", "phone-mode", "dtmf-relay",
               "mwi", "call-forward b2bua noan", "call-forward b2bua busy")
 
     def __init__(self):
@@ -1096,7 +1100,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             # Jabber ohne Presence-Server: nur als Telefon
             lines.append(" phone-mode phone-only")
         lines += [f" number {i} dn {d}" for i, d in enumerate(v["dns"], 1)]
-        lines += [" dtmf-relay rtp-nte", codec_line(v), f" username {username} password {password}"]
+        lines += [f" dtmf-relay {DTMF_RELAY}", codec_line(v), f" username {username} password {password}"]
         if v["description"]:
             lines.append(f" description {v['description']}")
         pre, tpl = template_lines(v, st, None)
@@ -1138,6 +1142,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             lines.append(" phone-mode phone-only")
         elif v["id_kind"] != "device" and cur.get("phone_mode"):
             lines.append(f" no phone-mode {cur['phone_mode']}")
+        if set(cur.get("dtmf_relay", "").split()) != set(DTMF_RELAY.split()):
+            lines.append(f" dtmf-relay {DTMF_RELAY}")
         if v["codec_list"]:
             if v["codec_list"] != cur.get("codec_list"):
                 lines.append(codec_line(v))
