@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -127,7 +128,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                 q.append(f"musicclass=cme-{moh}")
             for num in qu["members"]:
                 # bei "der Reihe nach" zaehlt die Reihenfolge der member-Zeilen
-                q.append(f"member => PJSIP/{num}@cme,0,{num}")
+                # Status vom Endpunkt "cme" nehmen: "PJSIP/<nr>@cme" selbst gilt als Invalid,
+                # dann klingelt die Warteschlange nie bei diesem Mitglied
+                q.append(f"member => PJSIP/{num}@cme,0,{num},PJSIP/cme")
             opts = "r" if moh == "ring" else ""
             wait = int(qu.get("maxwait") or 0)
             e += [f"exten => q{qid},1,Verbose(1,Warteschlange {ascii_text(qu['name'])} von ${{CALLERID(num)}})",
@@ -157,6 +160,17 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                     ami.command(c)
                 except Exception:
                     pass
+
+    # Beim Start die Asterisk-Dateien in der aktuellen Form neu schreiben (z. B. nach einem Update)
+    def regenerate():
+        time.sleep(15)      # Asterisk braucht nach einem gemeinsamen Neustart etwas laenger
+        try:
+            save(data())
+        except Exception as e:
+            print(f"Warteschlangen: Dateien nicht neu geschrieben ({type(e).__name__}: {e})", flush=True)
+
+    if not demo and (cfgdir / "cme-queues.json").exists():
+        threading.Thread(target=regenerate, daemon=True, name="queues-regen").start()
 
     # ---------------- Router ----------------
 
