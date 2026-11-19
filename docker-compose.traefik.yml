@@ -35,6 +35,7 @@ services:
       OIDC_POCKETID_SCOPES: ${OIDC_POCKETID_SCOPES:-openid email profile groups}
       OIDC_ALLOWED_GROUPS: ${OIDC_ALLOWED_GROUPS:-}
       OIDC_ALLOWED_USERS: ${OIDC_ALLOWED_USERS:-}
+      CME_ADMIN_GROUPS: ${CME_ADMIN_GROUPS:-cme-admins}
       # Voicemail (Container cme-voicemail, siehe README)
       VM_HOST_IP: ${VM_HOST_IP:-}
       VM_AMI_SECRET: ${VM_AMI_SECRET:-}
