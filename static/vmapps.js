@@ -1,4 +1,4 @@
-// Fax-Empfang und Sprachmenues (IVR) mit Asterisk. Haengt sich in die Voicemail-Karte ein
+// Fax (Empfang und Senden) und Sprachmenues (IVR) mit Asterisk. Haengt sich in die Voicemail-Karte ein
 // (wird von voicemail.js nachgeladen) und nutzt die Helfer aus index.html ($, esc, badge, api, showMsg).
 (() => {
   const vmCard = document.getElementById("voicemail-card");
@@ -11,7 +11,7 @@
     <span class="count" id="${id}" style="color:var(--muted);font-weight:400"></span></h2>`;
   const box = document.createElement("div");
   box.id = "vmapps";
-  box.innerHTML = `${h2("Fax-Empfang", "c-fax")}<div id="fax-body"></div>
+  box.innerHTML = `${h2("Fax", "c-fax")}<div id="fax-body"></div>
     ${h2("Sprachmenüs (IVR)", "c-ivr")}<div id="ivr-body"></div>`;
   vmCard.appendChild(box);
 
@@ -53,6 +53,35 @@
           <div class="msg" id="m-fax"></div>
         </form>
       </div>
+      <h2 style="font-size:14px;margin:0;padding:12px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Fax senden</h2>
+      <div class="body">
+        <form id="f-faxsend">
+          <div class="row">
+            <div><label>An (Faxnummer) *</label><input name="to" class="mono" required placeholder="069123456"></div>
+            <div><label>Absender *</label><select name="from">${senders()}</select></div>
+          </div>
+          <div class="row">
+            <div><label>PDF *</label><input name="file" type="file" accept="application/pdf,.pdf" required></div>
+            <div><label>Kopfzeile <span class="muted">(oben auf jeder Seite)</span></label>
+              <input name="header" maxlength="50" placeholder="z. B. Thomas Wiederhold"></div>
+          </div>
+          <div class="hint">Die Zielnummer so eingeben, wie man sie am Telefon wählt. Asterisk ruft über den Router an
+            (G.711, Absender wie gewählt) – am Provider-Dial-Peer muss Fax durchgereicht werden
+            (<span class="mono">fax protocol pass-through g711alaw</span>), sonst bricht die Übertragung ab.</div>
+          <div class="actions"><button class="primary" type="submit" id="faxsend-submit">Senden</button></div>
+          <div class="msg" id="m-faxsend"></div>
+        </form>
+      </div>
+      ${(A.sent || []).length ? `<table><thead><tr><th>Zeit</th><th>An</th><th>Von</th><th>Datei</th><th>Seiten</th><th>Status</th><th></th></tr></thead><tbody>
+        ${A.sent.map(j => `<tr><td>${fmtTime(j.time)}</td><td class="mono">${esc(j.to)}</td><td class="mono">${esc(j.from)}</td>
+          <td>${esc(j.file)}</td><td>${j.status === "SUCCESS" ? esc(j.sent || j.pages) : esc(j.pages)}</td>
+          <td>${j.status === "calling" ? badge("neutral", "wird gesendet …") : j.status === "SUCCESS" ? badge("ok", "gesendet")
+                : badge("bad", "fehlgeschlagen")} ${j.error && j.status !== "SUCCESS" ? `<span class="muted">${esc(j.error)}</span>` : ""}
+            ${j.tries > 1 ? `<span class="muted">(${j.tries}. Versuch)</span>` : ""}</td>
+          <td><div class="actions">${j.pdf ? `<a class="btn" style="text-decoration:none;padding:2px 8px;font-size:12px" target="_blank" href="/api/vmapps/fax/sent/${esc(j.id)}.pdf">PDF</a>` : ""}
+            ${j.status === "FAILED" ? `<button class="small" data-faxsent-retry="${esc(j.id)}">Nochmal</button>` : ""}
+            ${j.status !== "calling" ? `<button class="small danger" data-faxsent-del="${esc(j.id)}">Löschen</button>` : ""}</div></td></tr>`).join("")}
+        </tbody></table>` : ""}
       <h2 style="font-size:14px;margin:0;padding:12px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">Empfangene Faxe</h2>
       ${A.received.length ? `<table><thead><tr><th>Zeit</th><th>An</th><th>Von</th><th>Seiten</th><th>Status</th><th></th></tr></thead><tbody>
         ${A.received.map(r => `<tr><td>${fmtTime(r.time)}</td><td>${esc(r.name || r.number)}</td>
@@ -64,6 +93,14 @@
             <button class="small danger" data-faxfile-del="${esc(r.id)}">Löschen</button></div></td></tr>`).join("")}
         </tbody></table>` : `<div class="empty">Noch keine Faxe.</div>`}`;
   }
+
+  function senders() {
+    const seen = new Set(), opts = [];
+    for (const f of A.fax) if (!seen.has(f.number)) { seen.add(f.number); opts.push([f.number, `Fax ${f.number}${f.name ? " – " + f.name : ""}`]); }
+    for (const n of A.numbers) if (!seen.has(n.number)) { seen.add(n.number); opts.push([n.number, `${n.number}${n.name ? " – " + n.name : ""}`]); }
+    return opts.map(([v, l]) => `<option value="${esc(v)}" ${v === lastSender ? "selected" : ""}>${esc(l)}</option>`).join("");
+  }
+  let lastSender = "", pollTimer = null;
 
   function endFaxEdit() {
     const f = $("#f-fax");
@@ -219,10 +256,25 @@
     box.hidden = false;
     A = j;
     renderFax(); renderIvr();
+    clearTimeout(pollTimer);
+    if ((A.sent || []).some(j => j.status === "calling")) pollTimer = setTimeout(refreshFax, 5000);
     if (keepEditor !== null) {
       const ivr = A.ivrs.find(i => i.id === keepEditor);
       if (ivr) openEditor(ivr);
     }
+  }
+
+  // Nur die Fax-Liste nachladen, solange ein Fax unterwegs ist (Eingaben im Sende-Formular bleiben erhalten)
+  async function refreshFax() {
+    const j = await api("/api/vmapps");
+    if (!j.ok || !j.enabled) return;
+    const f = $("#f-faxsend"), keep = f ? { to: f.to.value, from: f.from.value, header: f.header.value } : null;
+    const file = f && f.file.files.length ? f.file.files : null;
+    A = j;
+    renderFax();
+    const g = $("#f-faxsend");
+    if (keep && g) { g.to.value = keep.to; g.from.value = keep.from; g.header.value = keep.header; if (file) g.file.files = file; }
+    if ((A.sent || []).some(x => x.status === "calling")) pollTimer = setTimeout(refreshFax, 5000);
   }
 
   // ---------------- Ereignisse ----------------
@@ -238,6 +290,20 @@
       if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
       await loadApps();
       showMsg($("#m-fax"), true, "Gespeichert." + (j.config?.length ? `\n\n${j.config.join("\n")}` : ""));
+    } else if (f.id === "f-faxsend") {
+      const m = $("#m-faxsend"), btn = $("#faxsend-submit");
+      lastSender = f.from.value;
+      btn.disabled = true;
+      showMsg(m, true, "PDF wird umgerechnet …");
+      let j;
+      try {
+        const r = await fetch("/api/vmapps/fax/send", { method: "POST", body: new FormData(f), headers: { "X-CME-Request": "1" } });
+        j = r.status === 413 ? { ok: false, error: "Datei zu groß." } : await r.json();
+      } catch (err) { j = { ok: false, error: err.message }; }
+      btn.disabled = false;
+      if (!j.ok) { showMsg(m, false, j.error || "Fehler"); await loadApps(); showMsg($("#m-faxsend"), false, j.error || "Fehler"); return; }
+      await loadApps();
+      showMsg($("#m-faxsend"), true, `Fax an ${j.job.to} (${j.job.pages} Seite${j.job.pages === 1 ? "" : "n"}) wird gesendet.`);
     } else if (f.id === "f-ivr") {
       const m = $("#m-ivr"), id = f.dataset.id;
       const j = id ? await api(`/api/vmapps/ivr/${id}`, { method: "PUT", body: JSON.stringify(readIvr(f)) })
@@ -302,6 +368,16 @@
     } else if (d.faxDel) {
       if (!confirm(`Faxnummer ${d.faxDel} löschen? Der Dial-Peer am Router wird entfernt.`)) return;
       const j = await api(`/api/vmapps/fax/${encodeURIComponent(d.faxDel)}`, { method: "DELETE" });
+      if (!j.ok) { alert(j.error || "Fehler"); return; }
+      loadApps();
+    } else if (d.faxsentRetry) {
+      e.target.disabled = true;
+      const j = await api(`/api/vmapps/fax/sent/${encodeURIComponent(d.faxsentRetry)}/retry`, { method: "POST" });
+      if (!j.ok) { e.target.disabled = false; alert(j.error || "Fehler"); return; }
+      loadApps();
+    } else if (d.faxsentDel) {
+      if (!confirm("Gesendetes Fax aus der Liste löschen?")) return;
+      const j = await api(`/api/vmapps/fax/sent/${encodeURIComponent(d.faxsentDel)}`, { method: "DELETE" });
       if (!j.ok) { alert(j.error || "Fehler"); return; }
       loadApps();
     } else if (d.faxfileDel) {
