@@ -267,7 +267,11 @@ def register(app, router, apply, demo: bool, cfgdir: Path, host_ip: str) -> None
             dcache["t"] = time.time()
         return dcache["v"]
 
-    app.config["PHONEBOOK"] = {"name": name_for}
+    def pools() -> list[dict]:
+        cfg = router.show("show running-config | section voice register")
+        return parse_pools(cfg, parse_dns(cfg))
+
+    app.config["PHONEBOOK"] = {"name": name_for, "entries": lambda: load()["entries"], "pools": pools}
 
     # ---------------- Rueckwaertssuche ----------------
 
