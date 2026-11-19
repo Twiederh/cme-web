@@ -378,3 +378,7 @@ def register(app, router, apply) -> None:
             router.files[f"bootflash:/{n}"] = b"\0" * 1024
             cfg.append(f"tftp-server bootflash:/{n} alias {n}")
         router.tftp.extend(cfg)
+
+    # Konfigurationsdateien der Telefone anpassen (phonecfg.py)
+    import phonecfg
+    phonecfg.register(app, router, apply)
