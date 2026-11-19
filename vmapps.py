@@ -518,6 +518,10 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             (outdir / f"{jid}{suffix}").unlink(missing_ok=True)
         return jsonify(ok=True)
 
+    # fuer die Benutzerseite (portal.py)
+    app.config["FAX"] = {"received": received, "sent": sent_list, "numbers": lambda: data()["fax"],
+                         "faxdir": faxdir, "outdir": outdir, "enabled": ctx["enabled"]}
+
     # Sprachmenues
 
     def ivr_input(body: dict, d: dict, own: dict | None) -> dict:
