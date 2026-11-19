@@ -80,7 +80,9 @@
             : badge("warn", "am Router nicht gesetzt");
           return `<tr data-row="${esc(b.tag)}"><td><span class="mono">${esc(b.number)}</span> <span class="muted">${esc(b.name)}</span></td>
             <td>${b.enabled ? `${badge("ok", "aktiv")} <span class="muted mono">PIN ${esc(b.pin)}</span>` +
-              (b.email ? `<br><span class="muted">✉ ${esc(b.email)}</span>` : "") : '<span class="muted">aus</span>'}</td>
+              (b.email ? `<br><span class="muted">✉ ${esc(b.email)}</span>` : "") +
+              ((b.remote || []).length ? `<br><span class="muted">Fernabfrage: <span class="mono">${b.remote.map(esc).join(", ")}</span>${b.remote_pin === false ? " (ohne PIN)" : ""}</span>` : "")
+              : '<span class="muted">aus</span>'}</td>
             <td>${fwd}</td>
             <td>${b.enabled ? (b.new ? badge("warn", `${b.new} neu`) : "") + (b.old ? ` <span class="muted">${b.old} gehört</span>` : "") || '<span class="muted">keine</span>' : ""}</td>
             <td><button class="small" data-vm-edit="${esc(b.tag)}">${b.enabled ? "Bearbeiten" : "Einrichten"}</button></td></tr>
@@ -99,6 +101,12 @@
                   <span class="mono">VM_SMTP_USER</span>, <span class="mono">VM_SMTP_PASSWORD</span> und ggf.
                   <span class="mono">VM_SMTP_FROM</span> setzen.</div>`}
                 <label class="check"><input type="checkbox" name="busy" ${b.busy ? "checked" : ""}> Bei besetzt sofort auf die Voicemail</label>
+                <div style="margin-top:8px"><label>Fernabfrage von (z. B. Handynummer; mehrere mit Komma)</label>
+                  <input name="remote" value="${esc((b.remote || []).join(", "))}" placeholder="0170 1234567" style="width:100%"></div>
+                <label class="check"><input type="checkbox" name="remote_pin" ${b.remote_pin !== false ? "checked" : ""}> Bei der Fernabfrage nach der PIN fragen (empfohlen)</label>
+                <div class="hint">Ruft eine dieser Nummern die Voicemail-Nummer an – oder die eigene Rufnummer, und der Anruf landet nach der
+                  Klingeldauer auf der Voicemail –, kommt sie direkt in dieses Postfach zum Abhören statt eine Nachricht zu hinterlassen.
+                  Anrufernummern lassen sich fälschen; ohne PIN-Abfrage kann im Zweifel jemand anderes mithören.</div>
                 <div class="actions"><button class="primary small" type="submit">Speichern</button>
                   <button type="button" class="small" data-vm-cancel="${esc(b.tag)}">Abbrechen</button></div>
                 <div class="msg"></div>
@@ -141,7 +149,7 @@
       btn.disabled = true;
       const j = await api(`/api/voicemail/mailboxes/${f.dataset.tag}`, { method: "PUT", body: JSON.stringify({
         enabled: f.enabled.checked, pin: f.pin.value, timeout: f.timeout.value, busy: f.busy.checked,
-        email: f.email.value }) });
+        email: f.email.value, remote: f.remote.value, remote_pin: f.remote_pin.checked }) });
       btn.disabled = false;
       if (!j.ok) { showMsg(m, false, j.error || "Fehler"); return; }
       if (j.asterisk_restart) {
