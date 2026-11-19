@@ -54,13 +54,26 @@
     document.body.appendChild(s);
   }
 
+  // Rufuebernahme und Berechtigungen (Tab Telefone), Konferenzraeume (Tab Voicemail): static/features.js
+  if (!document.getElementById("conf-card")) {
+    for (const id of ["pickup-card", "cor-card", "conf-card"]) {
+      const c = document.createElement("section");
+      c.className = "card";
+      c.id = id;
+      main.appendChild(c);
+    }
+    const s = document.createElement("script");
+    s.src = "/static/features.js";
+    document.body.appendChild(s);
+  }
+
   const TABS = [
     { id: "overview", label: "Übersicht",
       parts: [top(".kpis"), devices, top("#t-trunks"), top("#raw-out")] },
     { id: "phones", label: "Telefone & Rufnummern",
-      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#firmware-card"), top("#phonecfg-card")] },
+      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#pickup-card"), top("#cor-card"), top("#firmware-card"), top("#phonecfg-card")] },
     { id: "translation", label: "Übersetzungen", parts: [top("#translation-card"), top("#e164-card")] },
-    { id: "voicemail", label: "Voicemail, IVR & Warteschlangen", parts: [top("#voicemail-card"), top("#vvm-card"), top("#queue-card")] },
+    { id: "voicemail", label: "Voicemail, IVR & Konferenzen", parts: [top("#voicemail-card"), top("#vvm-card"), top("#queue-card"), top("#conf-card")] },
     { id: "phonebook", label: "Telefonbuch", parts: [top("#phonebook-card")] },
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },
     { id: "user", label: "Hintergründe & Klingeltöne", parts: [top("#walls")] },
