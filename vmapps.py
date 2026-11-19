@@ -6,6 +6,7 @@ Asterisk-Seite (Container cme-voicemail):
                             je IVR ein Kontext [ivr-<id>]
   cme/sounds/ivr-<id>.wav   Ansagen (hochgeladen, mit ffmpeg auf 8 kHz mono umgerechnet)
   voicemail/fax/            empfangene Faxe als PDF + JSON (fax-mail.py), per Mail verschickt
+  voicemail/fax/out/        zu sendende Faxe (PDF, Fax-TIFF, Auftrag als JSON, Ergebnis vom Dialplan)
 
 Router-Seite: je Fax- und IVR-Nummer ein Dial-Peer zu Asterisk.
 """
@@ -15,9 +16,12 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
+import time
+import uuid
 from pathlib import Path
 
 from flask import jsonify, request, send_file
@@ -46,6 +50,7 @@ class AppError(ValueError):
 def register(app, router, apply, demo: bool, ctx: dict) -> dict:
     cfgdir: Path = ctx["cfgdir"]
     faxdir: Path = ctx["spool"] / "fax"
+    outdir: Path = faxdir / "out"         # gesendete Faxe
     sounds = cfgdir / "sounds"
     host_ip = ctx["host_ip"]
     ami = ctx["ami"]
@@ -275,7 +280,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             i["dialpeer"] = ps.get(i.get("number", ""), "")
             i["greeting"] = (sounds / f"ivr-{i['id']}.wav").exists()
         boxes = [{"number": n, "id": ctx["mbid"](n)} for n in ctx["settings"]()["mailboxes"]]
-        return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(),
+        return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(), sent=sent_list(),
                        ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS, tts=tts_info(),
                        queues=[{"id": q["id"], "name": q["name"]} for q in queue_list()])
 
@@ -348,6 +353,169 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
         need()
         for suffix in (".pdf", ".json", ".tif"):
             fax_file(fid).with_suffix(suffix).unlink(missing_ok=True)
+        return jsonify(ok=True)
+
+    # ---------------- Fax senden ----------------
+    # cme-web rechnet das PDF mit Ghostscript in ein Fax-TIFF um (voicemail/fax/out/<id>.tif) und laesst
+    # Asterisk per AMI anrufen (Kontext cme-faxout). Das Ergebnis schreibt der Dialplan nach <id>.result.
+
+    def sent_list() -> list[dict]:
+        out = []
+        for meta in sorted(outdir.glob("*.json"), reverse=True) if outdir.is_dir() else []:
+            try:
+                job = json.loads(meta.read_text())
+            except Exception:
+                continue
+            out.append(job_state(job))
+        return out
+
+    def job_state(job: dict) -> dict:
+        """Ergebnis aus <id>.result (Status|Seiten|Fehler|Kennung) uebernehmen."""
+        res = outdir / f"{job['id']}.result"
+        if job["status"] in ("calling",) and res.exists():
+            try:
+                st, pages, err, station = (res.read_text().strip().split("|") + ["", "", "", ""])[:4]
+            except OSError:
+                st = pages = err = station = ""
+            reason = {"0": "Anruf fehlgeschlagen", "1": "aufgelegt", "3": "keine Antwort", "5": "besetzt",
+                      "8": "Leitung überlastet"}
+            if st.startswith("REASON_"):
+                job.update(status="FAILED", error=reason.get(st[7:], f"nicht verbunden ({st[7:]})"))
+            else:
+                job.update(status="SUCCESS" if st == "SUCCESS" else "FAILED", sent=int(pages) if pages.isdigit() else 0,
+                           error="" if st == "SUCCESS" else (err or st or "Gegenstelle hat kein Fax angenommen"),
+                           station=station.strip())
+            job["done"] = int(res.stat().st_mtime)
+            res.unlink(missing_ok=True)
+            (outdir / f"{job['id']}.json").write_text(json.dumps(job, ensure_ascii=False))
+        elif job["status"] == "calling" and time.time() - job.get("started", 0) > 3600:
+            job.update(status="FAILED", error="kein Ergebnis von Asterisk")
+            (outdir / f"{job['id']}.json").write_text(json.dumps(job, ensure_ascii=False))
+        job["pdf"] = (outdir / f"{job['id']}.pdf").exists()
+        return job
+
+    def tiff_pages(path: Path) -> int:
+        b = path.read_bytes()
+        if b[:2] not in (b"II", b"MM"):
+            return 0
+        e = "<" if b[:2] == b"II" else ">"
+        off, n = struct.unpack(e + "I", b[4:8])[0], 0
+        while off and off + 2 <= len(b) and n < 1000:
+            cnt = struct.unpack(e + "H", b[off:off + 2])[0]
+            n += 1
+            off = struct.unpack(e + "I", b[off + 2 + cnt * 12:off + 6 + cnt * 12])[0]
+        return n
+
+    def to_tiff(pdf: Path, tif: Path) -> int:
+        gs = shutil.which("gs")
+        if not gs:
+            raise AppError("Ghostscript fehlt im cme-web-Image (neu bauen).")
+        # Fax-Format: 1728 Punkte breit, 204x196 dpi (fein), A4, eine Seite je Blatt
+        r = subprocess.run([gs, "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=tiffg4", "-r204x196",
+                            "-g1728x2292", "-dFIXEDMEDIA", "-dPDFFitPage", f"-sOutputFile={tif}", str(pdf)],
+                           capture_output=True, timeout=120)
+        if r.returncode != 0 or not tif.exists():
+            raise AppError("PDF konnte nicht umgerechnet werden: "
+                           + (r.stderr or r.stdout).decode(errors="replace").strip()[-300:])
+        pages = tiff_pages(tif)
+        if not pages:
+            raise AppError("Das PDF hat keine Seiten.")
+        return pages
+
+    def fax_text(s: str, n: int) -> str:
+        # landet in einer AMI-Variable und in ExecIf(): keine Kommas, Klammern, Doppelpunkte, Anfuehrungszeichen
+        for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("Ä", "Ae"), ("Ö", "Oe"), ("Ü", "Ue"), ("ß", "ss")):
+            s = s.replace(a, b)
+        return re.sub(r"[^A-Za-z0-9 _./+\-]", "", s).strip()[:n]
+
+    def originate(job: dict) -> None:
+        if demo:
+            (outdir / f"{job['id']}.result").write_text(f"SUCCESS|{job['pages']}||DEMO\n")
+            return
+        station = fax_text(job["from"], 20)
+        r = ami.run({"Action": "Originate", "Channel": f"PJSIP/{job['to']}@cme", "Context": "cme-faxout",
+                     "Exten": "s", "Priority": "1", "Timeout": "60000", "Async": "true",
+                     "CallerID": f"\"{fax_text(job['header'] or job['from'], 30)}\" <{job['from']}>",
+                     "Codecs": "alaw,ulaw",
+                     "Variable": f"FAXJOB={job['id']},FAXSTATION={station},FAXHDR={fax_text(job['header'], 50)}"})[0]
+        if r.get("Response") != "Success":
+            raise AppError(f"Asterisk hat den Anruf abgelehnt: {r.get('Message', r.get('Response'))}")
+
+    @app.post("/api/vmapps/fax/send")
+    def fax_send():
+        need()
+        to = re.sub(r"[\s/()-]", "", request.form.get("to") or "")
+        sender = (request.form.get("from") or "").strip()
+        header = (request.form.get("header") or "").strip()
+        if not re.fullmatch(r"\+?[0-9]{3,24}", to):
+            raise AppError("Ungültige Zielnummer.")
+        allowed = {f["number"] for f in data()["fax"]} | {n["number"] for n in ctx["numbers"]()}
+        if sender not in allowed:
+            raise AppError("Absender: eine Faxnummer oder Rufnummer der Anlage wählen.")
+        f = request.files.get("file")
+        if not f or not f.filename:
+            raise AppError("Bitte ein PDF auswählen.")
+        raw = f.read()
+        if not raw.startswith(b"%PDF"):
+            raise AppError("Die Datei ist kein PDF.")
+        outdir.mkdir(parents=True, exist_ok=True)
+        jid = time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6]   # nur Ziffern/hex (Dialplan filtert so)
+        pdf, tif = outdir / f"{jid}.pdf", outdir / f"{jid}.tif"
+        pdf.write_bytes(raw)
+        try:
+            pages = to_tiff(pdf, tif)
+        except Exception:
+            pdf.unlink(missing_ok=True)
+            tif.unlink(missing_ok=True)
+            raise
+        tif.chmod(0o664)
+        job = {"id": jid, "time": int(time.time()), "to": to, "from": sender, "header": header,
+               "file": re.sub(r"[^\w .()\-]", "", f.filename)[:80], "pages": pages, "tries": 0,
+               "status": "calling", "error": "", "sent": 0}
+        return start(job)
+
+    def start(job: dict):
+        job.update(tries=job.get("tries", 0) + 1, status="calling", error="", started=int(time.time()))
+        (outdir / f"{job['id']}.result").unlink(missing_ok=True)
+        (outdir / f"{job['id']}.json").write_text(json.dumps(job, ensure_ascii=False))
+        try:
+            originate(job)
+        except Exception as e:
+            job.update(status="FAILED", error=str(e))
+            (outdir / f"{job['id']}.json").write_text(json.dumps(job, ensure_ascii=False))
+            return jsonify(ok=False, error=str(e)), 400
+        return jsonify(ok=True, job=job)
+
+    def out_job(jid: str) -> dict:
+        if not re.fullmatch(r"[0-9a-f]{10,40}", jid):
+            raise AppError("Ungültiger Auftrag.")
+        p = outdir / f"{jid}.json"
+        if not p.exists():
+            raise AppError("Auftrag nicht gefunden.")
+        return json.loads(p.read_text())
+
+    @app.post("/api/vmapps/fax/sent/<jid>/retry")
+    def fax_retry(jid):
+        need()
+        job = job_state(out_job(jid))
+        if job["status"] == "calling":
+            raise AppError("Das Fax wird gerade gesendet.")
+        if not (outdir / f"{jid}.tif").exists():
+            raise AppError("Die Faxdatei ist nicht mehr da.")
+        return start(job)
+
+    @app.get("/api/vmapps/fax/sent/<jid>.pdf")
+    def fax_sent_pdf(jid):
+        need()
+        out_job(jid)
+        return send_file(outdir / f"{jid}.pdf", mimetype="application/pdf", max_age=0)
+
+    @app.delete("/api/vmapps/fax/sent/<jid>")
+    def fax_sent_delete(jid):
+        need()
+        out_job(jid)
+        for suffix in (".pdf", ".tif", ".json", ".result"):
+            (outdir / f"{jid}{suffix}").unlink(missing_ok=True)
         return jsonify(ok=True)
 
     # Sprachmenues
