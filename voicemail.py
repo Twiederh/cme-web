@@ -10,6 +10,7 @@ Am Router richtet es ein:
   voice register global / voicemail <pilot>               (Nachrichten-Taste)
   dial-peer voice <tag> voip -> session target ipv4:<VM_HOST_IP>
   voice register dn <n> / mwi, call-forward b2bua noan|busy <pilot>
+  telephony-service / codec g722-64, service phone g722CodecSupport 2 ...  (G.722 an den Telefonen)
 """
 
 from __future__ import annotations
@@ -427,16 +428,28 @@ def register(app, router, apply, demo: bool) -> None:
                 cur[1] = True
         for p in need:
             lines += [f"voice register pool {p}", " dtmf-relay rtp-nte sip-notify"]
+        # G.722: SIP-Telefone der 78xx/88xx-Reihe bieten G.722 erst an, wenn es unter
+        # telephony-service freigeschaltet ist (auch ohne SCCP-Telefone)
+        ts = router.show("show running-config | section telephony-service")
+        g722 = [x for x in (" codec g722-64", " service phone g722CodecSupport 2",
+                            " service phone advertiseG722Codec 1") if not re.search(rf"^{re.escape(x)}\s*$", ts, re.M)]
+        if g722:
+            lines += ["telephony-service", *g722]
+            # alle Telefone muessen die neue Konfigurationsdatei laden
+            restart = sorted(set(need) | set(re.findall(r"^voice register pool\s+(\d+)", pools, re.M)), key=int)
+        else:
+            restart = need
         # Umleitungen der Postfaecher auf die (neue) Nummer
         for n in numbers():
             b = s["mailboxes"].get(n["number"])
             if b:
                 lines += dn_lines(n["tag"], b, s["pilot"], None)
         lines += ["voice register global", " create profile"]
-        for p in need:      # Telefone laden die neue Einstellung erst nach einem Neustart
+        for p in restart:   # Telefone laden die neue Einstellung erst nach einem Neustart
             lines += [f"voice register pool {p}", " restart"]
         res = apply(lines)
         res["dtmf_pools"] = need
+        res["restarted_pools"] = restart
         return res
 
     VM_CODEC = 8998   # eigene Codec-Liste fuer Asterisk: G.722 zuerst

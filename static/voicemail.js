@@ -158,7 +158,8 @@
     const d = e.target.dataset || {};
     if (e.target.id === "vm-setup") {
       if (!confirm(`Am Router einrichten?\n\n• mwi-server ${V.host_ip} unter sip-ua\n• voicemail ${V.settings.pilot} unter voice register global\n` +
-                   `• Dial-Peer ${V.settings.pilot} → ${V.host_ip}\n• Umleitungen der aktiven Postfächer`)) return;
+                   `• Dial-Peer ${V.settings.pilot} → ${V.host_ip} (G.722 bevorzugt)\n• G.722 für die Telefone freischalten (telephony-service)\n` +
+                   `• Umleitungen der aktiven Postfächer\n\nTelefone mit geänderter Einstellung starten neu.`)) return;
       e.target.disabled = true;
       const j = await api("/api/voicemail/cme", { method: "POST" });
       e.target.disabled = false;
