@@ -368,6 +368,34 @@ löschen und als gehört oder neu markieren.
   und/oder als `messagesURL` (Taste Nachrichten) in die Telefon-Konfiguration ein. Das geschieht
   als Anpassung, die nach „create profile“ erhalten bleibt.
 
+### Telefonbuch, Namen beim Klingeln, Verzeichnis und Kurzwahltasten
+
+Der Tab „Telefonbuch“ verwaltet Rufnummern mit Namen:
+
+- **Sammeln:** cme-web fragt jede Minute `show call history voice brief` ab und übernimmt eingehende
+  Nummern (nur über die gewählten Provider-Dial-Peers). Neue Nummern erscheinen ohne Namen; den
+  Namen trägt man in der Tabelle ein. Damit der Router genug Anrufe aufhebt:
+  `dial-control-mib retain-timer 60` und `dial-control-mib max-size 500`.
+- **Rückwärtssuche (optional):** Neue deutsche Nummern werden einmal im öffentlichen Telefonbuch
+  gesucht (Adresse einstellbar, `{number}` = Nummer national mit 0).
+- **Namen in der Voicemail:** in der Weboberfläche und in der Visual Voicemail am Telefon.
+- **Namen beim Klingeln:** `directory entry` wirkt bei SIP-Telefonen nicht. Stattdessen legt die Seite
+  ein eingehendes SIP-Profil an, das den Anzeigenamen im `From` setzt, und hängt es an die gewählten
+  Dial-Peers:
+  ```
+  voice class sip-profiles 95
+   rule 1 request INVITE sip-header From modify ":[^<]*<sip:([+]*[0-9]*61871234567)@" ": Max Muster <sip:\1@"
+  voice service voip
+   sip
+    sip-profiles inbound
+  dial-peer voice <trunk> voip
+   voice-class sip profiles 95 inbound
+  ```
+- **Verzeichnis am Telefon:** Die Taste *Verzeichnisse* zeigt das Telefonbuch und die internen
+  Rufnummern mit Suche (`directoryURL` → `http://<docker-host>:8081/ipphone/dir`).
+- **Kurzwahltasten:** je Telefon `speed-dial <n> <nummer> label "<name>"` im Pool, danach
+  `create profile` und Neustart.
+
 ## Abfragen für den Status
 
 - `show sip-ua register status` – Registrierung beim Provider

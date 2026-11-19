@@ -227,6 +227,18 @@ def register(app, router, apply, demo: bool) -> None:
     def mbid(number: str) -> str:
         return re.sub(r"\D", "", number)
 
+    def named(msgs: list[dict]) -> list[dict]:
+        """Fehlende Anrufernamen aus dem Telefonbuch (phonebook.py) ergaenzen."""
+        pb = app.config.get("PHONEBOOK")
+        if pb:
+            for m in msgs:
+                if not m["caller_name"] and m["caller"]:
+                    try:
+                        m["caller_name"] = pb["name"](m["caller"])
+                    except Exception:
+                        pass
+        return msgs
+
     def write_config(s: dict, names: dict[str, str]) -> bool:
         """Schreibt die Asterisk-Dateien; True, wenn sich die MWI-Ziele geaendert haben."""
         cfgdir.mkdir(parents=True, exist_ok=True)
@@ -372,7 +384,7 @@ def register(app, router, apply, demo: bool) -> None:
         for n in nums:
             b = s["mailboxes"].get(n["number"])
             dn = cme.get("dns", {}).get(n["tag"], {})
-            msgs = list_messages(spool, mbid(n["number"])) if b else []
+            msgs = named(list_messages(spool, mbid(n["number"]))) if b else []
             boxes.append({"tag": n["tag"], "number": n["number"], "name": n["name"], "enabled": bool(b),
                           "pin": (b or {}).get("pin", ""), "timeout": (b or {}).get("timeout", 20),
                           "busy": (b or {}).get("busy", True), "email": (b or {}).get("email", ""),
@@ -587,8 +599,12 @@ def register(app, router, apply, demo: bool) -> None:
         "mail_ready": mail_ready, "numbers": numbers, "mbid": mbid, "codec_line": codec_line,
         "settings": settings})
 
+    # Telefonbuch: Namen zu Rufnummern, Verzeichnis am Telefon, Kurzwahltasten
+    import phonebook
+    phonebook.register(app, router, apply, demo, cfgdir, host_ip)
+
     # Visual Voicemail am Telefon (XML-Dienst)
     import vvm
     vvm.register(app, router, demo, {
-        "spool": spool, "list_messages": list_messages, "msg_action": msg_action, "settings": settings,
-        "mbid": mbid, "host_ip": host_ip, "enabled": enabled})
+        "spool": spool, "list_messages": lambda sp, box: named(list_messages(sp, box)), "msg_action": msg_action,
+        "settings": settings, "mbid": mbid, "host_ip": host_ip, "enabled": enabled})
