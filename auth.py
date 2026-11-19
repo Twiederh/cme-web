@@ -16,6 +16,9 @@ Konfiguration ueber Umgebungsvariablen:
 
   OIDC_ALLOWED_GROUPS=cme-admins               Nur Mitglieder dieser Gruppen (optional, kommagetrennt)
   OIDC_ALLOWED_USERS=thomas@example.de         Nur diese Benutzer/E-Mails (optional, kommagetrennt)
+  CME_ADMIN_GROUPS=cme-admins                  Mitglieder dieser Gruppen sind Administratoren (Standard cme-admins,
+                                               "*" = alle). Alle anderen sehen nur die Benutzerseite (/me).
+                                               Der lokale Benutzer ist immer Administrator.
 
   CME_PUBLIC_URL=https://cme.example.de        Oeffentliche URL (fuer die Redirect-URI hinter Traefik)
   CME_SECRET_KEY=...                           Schluessel fuer die Session-Cookies (sonst zufaellig)
@@ -70,6 +73,7 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
     providers = load_providers()
     allowed_groups = {g.lower() for g in _split(os.environ.get("OIDC_ALLOWED_GROUPS", ""))}
     allowed_users = {u.lower() for u in _split(os.environ.get("OIDC_ALLOWED_USERS", ""))}
+    admin_groups = {g.lower() for g in _split(os.environ.get("CME_ADMIN_GROUPS", "cme-admins"))}
     public_url = os.environ.get("CME_PUBLIC_URL", "").strip().rstrip("/")
     enabled = bool(providers or web_user)
 
@@ -110,6 +114,29 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
     def current_user() -> dict | None:
         return session.get("user")
 
+    def groups_of(info: dict) -> list[str]:
+        groups = info.get("groups") or []
+        if isinstance(groups, str):
+            groups = [groups]
+        return [str(g) for g in groups]
+
+    def is_admin_info(info: dict) -> bool:
+        return "*" in admin_groups or bool(admin_groups & {g.lower() for g in groups_of(info)})
+
+    def whoami() -> dict | None:
+        """Angemeldeter Benutzer mit Rolle; ohne Anmeldung (nicht eingerichtet) ist jeder Administrator."""
+        if not enabled:
+            return {"name": "", "email": "", "provider": "", "admin": True, "key": ""}
+        u = current_user()
+        if u:
+            u = dict(u)
+            u["admin"] = bool(u.get("admin")) or u.get("provider") == "lokal"
+            u["key"] = (u.get("email") or u.get("name") or "").lower()
+            return u
+        if basic_ok():
+            return {"name": web_user, "email": "", "provider": "lokal", "admin": True, "key": web_user.lower()}
+        return None
+
     def basic_ok() -> bool:
         a = request.authorization
         return bool(web_user and a and secrets.compare_digest(a.username or "", web_user)
@@ -118,11 +145,8 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
     def is_allowed(info: dict) -> bool:
         if not allowed_groups and not allowed_users:
             return True
-        groups = info.get("groups") or []
-        if isinstance(groups, str):
-            groups = [groups]
         names = {str(info.get(k, "")).lower() for k in ("email", "preferred_username", "sub", "name")}
-        return bool(allowed_groups & {str(g).lower() for g in groups}) or bool(allowed_users & names)
+        return bool(allowed_groups & {g.lower() for g in groups_of(info)}) or bool(allowed_users & names)
 
     def safe_next(target: str | None) -> str:
         # nur relative Pfade innerhalb der App zulassen
@@ -160,11 +184,11 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
     def auth_info():
         return jsonify(enabled=enabled, local=bool(web_user),
                        providers=[{"name": p["name"], "label": p["label"]} for p in providers],
-                       user=current_user())
+                       user=whoami())
 
     @app.get("/api/me")
     def me():
-        return jsonify(enabled=enabled, user=current_user())
+        return jsonify(enabled=enabled, user=whoami())
 
     @app.post("/auth/local")
     def local_login():
@@ -173,7 +197,7 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
                 and secrets.compare_digest(str(data.get("password", "")), web_pass):
             session.clear()
             session.permanent = True
-            session["user"] = {"name": web_user, "email": "", "provider": "lokal", "ts": int(time.time())}
+            session["user"] = {"name": web_user, "email": "", "provider": "lokal", "ts": int(time.time()), "admin": True}
             return jsonify(ok=True, next=safe_next(data.get("next")))
         time.sleep(1.0)   # Raten erschweren
         return jsonify(ok=False, error="Benutzername oder Passwort falsch"), 401
@@ -203,7 +227,7 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
             token = client.authorize_access_token()
             info = dict(token.get("userinfo") or {})
             # Gruppen stehen bei manchen Anbietern nur im Userinfo-Endpunkt
-            if not info or (allowed_groups and "groups" not in info):
+            if not info or ((allowed_groups or admin_groups) and "groups" not in info):
                 try:
                     info.update(client.userinfo(token=token))
                 except Exception:
@@ -225,6 +249,7 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
             "email": info.get("email", ""),
             "provider": next(p["label"] for p in providers if p["name"] == name),
             "ts": int(time.time()),
+            "admin": is_admin_info(info),
         }
         return redirect(safe_next(nxt))
 
@@ -238,4 +263,4 @@ def setup_auth(app: Flask, base_dir: Path, web_user: str = "", web_pass: str = "
         base = public_url or "http(s)://<host>"
         print("OIDC Redirect-URIs: " + ", ".join(f"{base}/auth/callback/{p['name']}"
                                                   for p in providers), flush=True)
-    return {"enabled": enabled, "methods": parts}
+    return {"enabled": enabled, "methods": parts, "whoami": whoami}

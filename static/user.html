@@ -1,0 +1,27 @@
+<body>
+<header>
+  <h1>Mein Telefon</h1>
+  <span class="host" id="u-numbers"></span>
+  <span class="spacer"></span>
+  <a id="u-admin" href="/" hidden style="color:var(--accent);text-decoration:none;font-size:13px">Administration</a>
+  <button id="u-refresh" title="Neu laden">Aktualisieren</button>
+  <span class="user" id="user"><span id="user-name"></span> · <a href="/logout">Abmelden</a></span>
+</header>
+<main>
+  <div class="errors" id="errors"></div>
+  <section class="card" id="u-none" hidden>
+    <h2>Noch keine Rufnummer</h2>
+    <div class="body">Deinem Konto ist noch keine Rufnummer zugeordnet. Bitte den Administrator, dir deine
+      Rufnummer(n) im Tab <b>Benutzer</b> zuzuweisen.</div>
+  </section>
+  <section class="card" id="u-vm"><h2>Voicemail <span class="count" id="c-vm"></span></h2><div id="u-vm-body"></div></section>
+  <section class="card" id="u-fax"><h2>Fax</h2><div id="u-fax-body"></div></section>
+  <section class="card" id="u-sd"><h2>Kurzwahltasten</h2><div id="u-sd-body"></div></section>
+  <section class="card" id="u-pb"><h2>Telefonbuch <span class="count" id="c-pb"></span>
+    <span class="right muted" style="font-weight:400;font-size:12px">Namen für eingehende Anrufe – gilt für alle</span></h2>
+    <div id="u-pb-body"></div></section>
+</main>
+<datalist id="u-dl"></datalist>
+<script src="/static/user.js"></script>
+</body>
+</html>
