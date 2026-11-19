@@ -26,7 +26,11 @@ for f in pjsip_mwi.conf mailboxes.conf vm_general.conf globals.conf; do
 done
 [ -e /etc/asterisk/cme/extensions_cme.conf ] || echo "[cme-numbers]" > /etc/asterisk/cme/extensions_cme.conf
 [ -e /etc/asterisk/cme/extensions_rec.conf ] || echo "[cme-recnotice]" > /etc/asterisk/cme/extensions_rec.conf
-mkdir -p /etc/asterisk/cme/sounds /var/spool/asterisk/voicemail/fax
+[ -e /etc/asterisk/cme/extensions_queue.conf ] || printf '[cme-queues]\n[queue-run]\n' > /etc/asterisk/cme/extensions_queue.conf
+for f in queues.conf musiconhold.conf; do
+  [ -e "/etc/asterisk/cme/$f" ] || : > "/etc/asterisk/cme/$f"
+done
+mkdir -p /etc/asterisk/cme/sounds /etc/asterisk/cme/moh /var/spool/asterisk/voicemail/fax
 
 for src in /opt/cme-asterisk/*.conf; do
   sed -e "s|@HOST_IP@|${HOST_IP}|g" -e "s|@CME_IP@|${CME_IP}|g" \
