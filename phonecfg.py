@@ -315,6 +315,71 @@ def register(app, router, apply) -> None:
             raise CfgError("Ungültiger Dateiname.")
         return name
 
+    # ---------------- fuer andere Module (z.B. vvm.py) ----------------
+
+    def file_names() -> dict[str, str]:
+        return {n: p for n, p in binds().items() if n.upper().startswith("SEP") and n.endswith(".cnf.xml")}
+
+    def state(paths: list[str]) -> dict:
+        """Je Datei: Wert der Regel fuer die angegebenen Pfade (oder None)."""
+        rules = load_rules()
+        out = {}
+        for name in file_names():
+            rs = {r["path"]: r.get("text") for r in rules.get(name, []) if r["op"] == "set"}
+            out[name] = {p: rs.get(p) for p in paths}
+        return out
+
+    def set_all(values: dict[str, str | None], restart: bool) -> dict:
+        """Setzt (Wert) oder entfernt (None) eine Regel je Pfad in allen Telefon-Dateien und schreibt sie neu."""
+        rules_all = load_rules()
+        done, errors = [], []
+        ps = pools()
+        restart_pools = []
+        with lock:
+            for name, path in file_names().items():
+                try:
+                    old = rules_all.get(name, [])
+                    o = orig_path(name)
+                    if old and o.exists():
+                        base = o.read_text()
+                    else:
+                        base = files.read_text(path)
+                        if base is None:
+                            raise CfgError("nicht lesbar")
+                        o.parent.mkdir(parents=True, exist_ok=True)
+                        o.write_text(base)
+                    rs = [r for r in old if not (r["op"] == "set" and r["path"] in values)]
+                    rs += [{"op": "set", "path": p, "text": v} for p, v in values.items() if v is not None]
+                    text, _ = patch(base, rs)
+                    parse(text)
+                    if canon(text) != canon(files.read_text(path) or ""):
+                        write_file(path, text)
+                        mac = name[3:-8].upper()
+                        if ps.get(mac, {}).get("pool"):
+                            restart_pools.append(ps[mac]["pool"])
+                    if rs:
+                        rules_all[name] = rs
+                    else:
+                        rules_all.pop(name, None)
+                        o.unlink(missing_ok=True)
+                    done.append(name)
+                except Exception as e:
+                    errors.append(f"{name}: {e}")
+            save_rules(rules_all)
+        restarted = []
+        if restart and restart_pools:
+            lines = []
+            for p in restart_pools:
+                lines += [f"voice register pool {p}", " restart"]
+            r = apply(lines)
+            if r.get("ok"):
+                restarted = restart_pools
+            else:
+                errors.append(f"Neustart: {r.get('error')}")
+        return {"files": done, "errors": errors, "restarted": restarted}
+
+    app.config["PHONECFG"] = {"state": state, "set_all": set_all}
+
     # ---------------- API ----------------
 
     @app.errorhandler(CfgError)

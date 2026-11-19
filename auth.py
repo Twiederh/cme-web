@@ -33,7 +33,8 @@ from urllib.parse import quote
 
 from flask import Flask, jsonify, redirect, request, send_from_directory, session
 
-OPEN_PATHS = ("/login", "/healthz", "/api/auth/info", "/auth/")
+# /ipphone/: XML-Dienste fuer die Telefone; nur ueber den eigenen Telefon-Port erreichbar (vvm.py prueft das)
+OPEN_PATHS = ("/login", "/healthz", "/api/auth/info", "/auth/", "/ipphone/")
 
 
 def _split(value: str) -> list[str]:
