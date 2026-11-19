@@ -459,3 +459,7 @@ def register(app, router, apply) -> None:
         res = apply([f"no voice translation-profile {name}"])
         res["name"] = name
         return jsonify(res), (200 if res["ok"] else 400)
+
+    # E.164-Pattern-Maps (e164.py) im selben Tab
+    import e164
+    e164.register(app, router, apply)

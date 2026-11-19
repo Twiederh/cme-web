@@ -26,12 +26,23 @@
     <table><thead><tr><th>Gerät</th><th>Typ</th><th>Rufnummern</th><th>IP</th><th>Status</th></tr></thead>
     <tbody id="t-devices"></tbody></table>`;
 
+  // Karte fuer die E.164-Pattern-Maps (Tab Uebersetzungen); static/e164.js fuellt sie
+  if (!document.getElementById("e164-card")) {
+    const c = document.createElement("section");
+    c.className = "card";
+    c.id = "e164-card";
+    main.appendChild(c);
+    const s = document.createElement("script");
+    s.src = "/static/e164.js";
+    document.body.appendChild(s);
+  }
+
   const TABS = [
     { id: "overview", label: "Übersicht",
       parts: [top(".kpis"), devices, top("#t-trunks"), top("#raw-out")] },
     { id: "phones", label: "Telefone & Rufnummern",
       parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#t-hunts"), top("#t-codecs")] },
-    { id: "translation", label: "Übersetzungen", parts: [top("#translation-card")] },
+    { id: "translation", label: "Übersetzungen", parts: [top("#translation-card"), top("#e164-card")] },
     { id: "voicemail", label: "Voicemail, Fax & IVR", parts: [top("#voicemail-card")] },
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },
     { id: "user", label: "Benutzereinstellungen", parts: [top("#walls")] },
