@@ -5,7 +5,7 @@
   let open = null;            // aufgeklappte Map
   let testNum = "";
 
-  const KIND = { "destination": "Ziel (destination)", "incoming called": "eingehend, angerufene Nr.",
+  const KIND = { "destination calling": "Absender (destination calling)", "destination": "Ziel (destination)", "incoming called": "eingehend, angerufene Nr.",
                  "incoming calling": "eingehend, Anrufer" };
 
   // Die Karte legt tabs.js an (damit sie beim Aufbau der Tabs schon da ist)
@@ -194,5 +194,88 @@
     }
   });
 
+  window.loadE164 = loadE;
   loadE();
+})();
+
+// Absender-Routing: welche eigene Rufnummer geht ueber welchen Provider raus (Tab Telefone & Rufnummern).
+// Pflegt je Provider-Dial-Peer eine Pattern Map mit den Absendernummern (destination calling e164-pattern-map)
+// und die Regel "Ziel und Absender muessen passen" (voice class dial-peer provision-policy ... dnis ani).
+(() => {
+  let E = null;
+  let card = document.getElementById("egress-card");
+  if (!card) {
+    card = document.createElement("section");
+    card.className = "card";
+    card.id = "egress-card";
+    document.querySelector("main").appendChild(card);
+  }
+  card.innerHTML = `<h2>Ausgehend über Provider
+      <span class="right muted" style="font-weight:400;font-size:12px">destination calling e164-pattern-map</span></h2>
+    <div id="egress-body"><div class="empty">Lädt …</div></div>`;
+
+  const provLabel = (p) => `Dial-Peer ${p.tag}${p.desc ? ` – ${p.desc}` : ""}`;
+  const options = (sel, empty) => `<option value="">${empty}</option>` +
+    E.providers.map(p => `<option value="${esc(p.tag)}" ${sel === p.tag ? "selected" : ""}>${esc(provLabel(p))}</option>`).join("");
+
+  function render() {
+    const body = $("#egress-body");
+    if (!E.providers.length) {
+      body.innerHTML = `<div class="body"><div class="hint">Keine Dial-Peers zu Providern gefunden
+        (VoIP-Dial-Peers mit <span class="mono">session target</span>, außer zu Asterisk).</div></div>`;
+      return;
+    }
+    const anyActive = E.providers.some(p => p.active);
+    body.innerHTML = `
+      <div class="body">
+        <div class="hint">Jede eigene Rufnummer geht über den Provider raus, bei dem sie registriert ist. Der Router wählt dann den
+          Dial-Peer nach Ziel <b>und</b> Absender. Rufnummern ohne Zuordnung gehen über den Standard-Provider.
+          Der Standard gilt auch für weitergeleitete Anrufe, die mit der Nummer des externen Anrufers rausgehen.
+          ${E.unmanaged.length ? `<br><b>Hinweis:</b> Dial-Peer ${E.unmanaged.map(esc).join(", ")} prüft den Absender nicht. Bedient er dieselben
+          Ziele wie die Provider oben, konkurriert er weiter mit ihnen – dann einer Rufnummer zuordnen oder als Standard wählen.` : ""}</div>
+        <form id="f-egress">
+          <table><thead><tr><th>Rufnummer</th><th>Geht raus über</th></tr></thead><tbody>
+            ${E.numbers.map(n => `<tr><td><span class="mono">${esc(n.number)}</span> <span class="muted">${esc(n.name)}</span></td>
+              <td><select name="n:${esc(n.number)}" style="min-width:280px">${options(n.provider, "Standard-Provider")}</select></td></tr>`).join("")
+              || `<tr><td colspan="2" class="empty">Keine Rufnummern.</td></tr>`}
+            <tr><td><b>Alle anderen Absender</b> <span class="muted">(Standard)</span></td>
+              <td><select name="default" style="min-width:280px">${options(E.default, "– keiner –")}</select></td></tr>
+          </tbody></table>
+          <div class="actions" style="margin-top:10px"><button class="primary" type="submit">Am Router übernehmen</button>
+            ${anyActive ? badge("ok", `aktiv an Dial-Peer ${E.providers.filter(p => p.active).map(p => p.tag).join(", ")}`) : badge("neutral", "noch nicht eingerichtet")}</div>
+          <div class="msg" id="m-egress"></div>
+        </form>
+        <div class="hint" style="margin-top:8px">Prüfen mit <span class="mono">debug voip dialpeer inout</span> und je einem Anruf:
+          in der Ausgabe muss <span class="mono">DP_MATCH_DEST_CALLING</span> den richtigen Dial-Peer finden.
+          ${E.policy ? `Regel: <span class="mono">voice class dial-peer provision-policy ${esc(E.policy)}</span> (preference 1 dnis ani).` : ""}</div>
+      </div>`;
+  }
+
+  async function loadEg() {
+    const j = await api("/api/egress");
+    if (!j.ok) { $("#egress-body").innerHTML = `<div class="empty">${esc(j.error || "Fehler")}</div>`; return; }
+    E = j;
+    render();
+  }
+
+  card.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    if (f.id !== "f-egress") return;
+    const assign = {};
+    f.querySelectorAll("select[name^='n:']").forEach(s => { if (s.value) assign[s.name.slice(2)] = s.value; });
+    const def = f.default.value;
+    if (Object.keys(assign).length && !def &&
+        !confirm("Ohne Standard-Provider gehen Anrufe von nicht zugeordneten Rufnummern evtl. über keinen Provider raus. Trotzdem übernehmen?")) return;
+    const btn = f.querySelector("button[type=submit]");
+    btn.disabled = true;
+    const j = await api("/api/egress", { method: "POST", body: JSON.stringify({ assign, default: def }) });
+    btn.disabled = false;
+    if (!j.ok) { showMsg($("#m-egress"), false, j.error || "Fehler"); return; }
+    await loadEg();
+    showMsg($("#m-egress"), true, j.unchanged ? "Keine Änderung." : `Übernommen.\n\n${(j.config || []).join("\n")}`);
+    if (window.loadE164) window.loadE164();
+  });
+
+  loadEg();
 })();
