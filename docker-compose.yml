@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     ports:
       - "${CME_WEB_PORT:-8080}:8080"
+      # Telefondienste (Visual Voicemail) fuer die Cisco-Telefone, nur /ipphone/...
+      - "${CME_PHONE_PORT:-8081}:8081"
     environment:
       CME_HOST: ${CME_HOST}
       CME_USER: ${CME_USER}
@@ -37,6 +39,8 @@ services:
       VM_AMI_HOST: asterisk
       VM_SMTP_USER: ${VM_SMTP_USER:-}
       VM_REC_DIR: /data/recordings
+      # Visual Voicemail: Port, unter dem die Telefone cme-web erreichen (siehe ports)
+      CME_PHONE_URL_PORT: ${CME_PHONE_PORT:-8081}
     volumes:
       - vm-config:/data/asterisk
       - vm-spool:/data/voicemail
