@@ -384,6 +384,45 @@ ERROR_PREFIXES = ("%", "failed", "error")
 IGNORED_ERRORS = (re.compile(r"^%Error deleting \S+ \(No such file or directory\)$", re.I),)
 
 
+RE_PROMPT = re.compile(r"^\s*[\w.-]+(?:\(([\w-]+)\))?#(.*)$")
+
+
+def failed_command(lines: list[str], i: int) -> str | None:
+    """Zeile(n) vor einer %-Meldung: den abgelehnten Befehl (mit Konfigurationsmodus) und,
+    falls der Router mit ^ markiert hat, das Wort an dieser Stelle."""
+    j = i - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    caret = None
+    if j >= 0 and re.fullmatch(r"\s*\^\s*", lines[j]):
+        caret = lines[j].index("^")
+        j -= 1
+        while j >= 0 and not lines[j].strip():
+            j -= 1
+    if j < 0:
+        return None
+    raw = lines[j].rstrip()
+    m = RE_PROMPT.match(raw)
+    cmd = (m.group(2) if m else raw).strip()
+    if not cmd or cmd.lower().startswith(ERROR_PREFIXES):
+        return None
+    text = f"Befehl: {cmd}" + (f"  [{m.group(1)}]" if m and m.group(1) else "")
+    if caret is not None and caret < len(raw):
+        # Wort an der markierten Stelle (Spalte bezieht sich auf die Zeile samt Prompt)
+        a = caret
+        while a > 0 and not raw[a - 1].isspace():
+            a -= 1
+        b = caret
+        while b < len(raw) and not raw[b].isspace():
+            b += 1
+        word = raw[a:b].strip()
+        if word:
+            text += f"\n  abgelehnt bei: {word}"
+    elif caret is not None:
+        text += "\n  abgelehnt am Zeilenende (Befehl unvollständig)"
+    return text
+
+
 def config_errors(out: str) -> list[str]:
     errs = []
     lines = out.splitlines()
@@ -392,6 +431,10 @@ def config_errors(out: str) -> list[str]:
         if t.lower().startswith(ERROR_PREFIXES):
             if any(p.match(t) for p in IGNORED_ERRORS):
                 continue
+            if t.startswith("%"):
+                cmd = failed_command(lines, i)
+                if cmd:
+                    errs.append(cmd)
             errs.append(t)
             # Erlaeuterungen direkt darunter mitnehmen (z.B. Passwortregeln)
             for nxt in lines[i + 1:i + 6]:
