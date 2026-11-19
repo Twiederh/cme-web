@@ -3,10 +3,10 @@
 (() => {
   const vmCard = document.getElementById("voicemail-card");
   if (!vmCard || document.getElementById("vmapps")) return;
-  let A = { enabled: false, fax: [], received: [], ivrs: [], numbers: [], mailboxes: [], keys: [] };
+  let A = { enabled: false, fax: [], received: [], ivrs: [], numbers: [], mailboxes: [], keys: [], queues: [] };
   let player = null;
 
-  const ACTION_LABEL = { "": "–", dial: "Durchstellen zu", ivr: "Untermenü", voicemail: "Voicemail", repeat: "Ansage wiederholen", hangup: "Auflegen" };
+  const ACTION_LABEL = { "": "–", dial: "Durchstellen zu", ivr: "Untermenü", queue: "Warteschlange", voicemail: "Voicemail", repeat: "Ansage wiederholen", hangup: "Auflegen" };
   const h2 = (t, id) => `<h2 style="font-size:14px;margin:0;padding:12px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">${t}
     <span class="count" id="${id}" style="color:var(--muted);font-weight:400"></span></h2>`;
   const box = document.createElement("div");
@@ -81,6 +81,7 @@
     if (a.action === "dial") return `→ ${esc(numName(a.target))}`;
     if (a.action === "ivr") return `→ Menü ${esc((A.ivrs.find(i => String(i.id) === a.target) || {}).name || a.target)}`;
     if (a.action === "voicemail") return `→ Voicemail ${esc(a.target)}`;
+    if (a.action === "queue") return `→ Warteschlange ${esc(((A.queues || []).find(q => q.id === a.target) || {}).name || a.target)}`;
     return esc(ACTION_LABEL[a.action]);
   }
 
@@ -112,6 +113,9 @@
     if (action === "ivr") return `<select name="target">${A.ivrs.filter(i => i.id !== ownId).map(i =>
       `<option value="${i.id}" ${String(i.id) === value ? "selected" : ""}>${esc(i.name)}</option>`).join("")
       || '<option value="">(kein anderes Menü)</option>'}</select>`;
+    if (action === "queue") return `<select name="target">${(A.queues || []).map(q =>
+      `<option value="${esc(q.id)}" ${q.id === value ? "selected" : ""}>${esc(q.name)}</option>`).join("")
+      || '<option value="">(keine Warteschlange)</option>'}</select>`;
     if (action === "voicemail") return `<select name="target">${A.mailboxes.map(b =>
       `<option value="${esc(b.number)}" ${b.number === value ? "selected" : ""}>${esc(b.number)}</option>`).join("")
       || '<option value="">(kein Postfach)</option>'}</select>`;

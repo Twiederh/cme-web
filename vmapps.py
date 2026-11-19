@@ -26,7 +26,7 @@ RE_NUM = re.compile(r"^\+?[0-9*#]{1,32}$")
 RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 RE_NAME = re.compile(r"^[A-Za-z0-9 äöüÄÖÜß_.,()/+\-]{1,40}$")
 KEYS = [*"1234567890", "*", "#"]
-ACTIONS = ["dial", "ivr", "voicemail", "repeat", "hangup"]
+ACTIONS = ["dial", "ivr", "queue", "voicemail", "repeat", "hangup"]
 # Stimmen fuer die Sprachausgabe (Piper, laeuft lokal; Modelle werden beim ersten Gebrauch geladen)
 TTS_VOICES = {
     "de_DE-thorsten-medium": "Thorsten (männlich)",
@@ -73,6 +73,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             return ["Playback(transfer)", dial_target(target), "Hangup()"]
         if kind == "ivr":
             return [f"Goto(ivr-{target},s,1)"]
+        if kind == "queue":
+            return [f"Goto(queue-run,q{target},1)"]
         if kind == "voicemail":
             return [f"VoiceMail({mbid(target)}@default,u)", "Hangup()"]
         if kind == "repeat":
@@ -205,9 +207,16 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
         r.update({i["number"]: (ascii_desc(f"{IVR_DESC} {i['name']}"), False) for i in d["ivrs"] if i.get("number")})
         return r
 
+    def queue_list() -> list[dict]:
+        try:
+            return json.loads((cfgdir / "cme-queues.json").read_text()).get("queues", [])
+        except FileNotFoundError:
+            return []
+
     def check_free(number: str, d: dict, own: str) -> None:
         taken = {f["number"]: f"Fax {f['number']}" for f in d["fax"]}
         taken.update({i["number"]: f"IVR {i['name']}" for i in d["ivrs"] if i.get("number")})
+        taken.update({q["number"]: f"Warteschlange {q['name']}" for q in queue_list() if q.get("number")})
         taken.pop(own, None)
         if number in taken:
             raise AppError(f"{number} ist schon vergeben ({taken[number]}).")
@@ -267,7 +276,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             i["greeting"] = (sounds / f"ivr-{i['id']}.wav").exists()
         boxes = [{"number": n, "id": ctx["mbid"](n)} for n in ctx["settings"]()["mailboxes"]]
         return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(),
-                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS, tts=tts_info())
+                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS, tts=tts_info(),
+                       queues=[{"id": q["id"], "name": q["name"]} for q in queue_list()])
 
     def tts_info() -> dict:
         voices = [{"id": v, "label": label, "installed": (tts_dir / f"{v}.onnx").exists()}
@@ -378,6 +388,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
                     raise AppError(f"{where}: Untermenue auswaehlen.")
                 if own and int(target) == own["id"]:
                     raise AppError(f"{where}: Fuer dasselbe Menue \"wiederholen\" nehmen.")
+            elif kind == "queue":
+                if target not in {q["id"] for q in queue_list()}:
+                    raise AppError(f"{where}: Warteschlange auswaehlen.")
             elif kind == "voicemail":
                 if target not in boxes:
                     raise AppError(f"{where}: Postfach auswaehlen.")
@@ -580,4 +593,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
     tools = {"tts_info": tts_info, "tts_input": tts_input, "synthesize": synthesize, "to_phone": to_phone}
     import recording
     recording.register(app, router, apply, demo, {**ctx, "tools": tools})
+    # Warteschlangen mit Wartemusik (queues.py)
+    import queues
+    queues.register(app, router, apply, demo, ctx)
     return tools
