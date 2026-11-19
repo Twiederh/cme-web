@@ -39,9 +39,10 @@
     s.src = "/static/e164.js";
     document.body.appendChild(s);
   }
-  // Karten fuer die Telefon-Firmware (Tab Telefone) und die Warteschlangen (Tab Voicemail);
-  // static/firmware.js und static/queues.js fuellen sie
-  for (const [id, src] of [["firmware-card", "/static/firmware.js"], ["queue-card", "/static/queues.js"]]) {
+  // Karten fuer Telefon-Firmware und -Konfiguration (Tab Telefone) und die Warteschlangen (Tab Voicemail);
+  // static/firmware.js, static/phonecfg.js und static/queues.js fuellen sie
+  for (const [id, src] of [["firmware-card", "/static/firmware.js"], ["phonecfg-card", "/static/phonecfg.js"],
+                           ["queue-card", "/static/queues.js"]]) {
     if (document.getElementById(id)) continue;
     const c = document.createElement("section");
     c.className = "card";
@@ -56,7 +57,7 @@
     { id: "overview", label: "Übersicht",
       parts: [top(".kpis"), devices, top("#t-trunks"), top("#raw-out")] },
     { id: "phones", label: "Telefone & Rufnummern",
-      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#firmware-card")] },
+      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#firmware-card"), top("#phonecfg-card")] },
     { id: "translation", label: "Übersetzungen", parts: [top("#translation-card"), top("#e164-card")] },
     { id: "voicemail", label: "Voicemail, IVR & Warteschlangen", parts: [top("#voicemail-card"), top("#queue-card")] },
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },
