@@ -200,7 +200,8 @@
 
 // Absender-Routing: welche eigene Rufnummer geht ueber welchen Provider raus (Tab Telefone & Rufnummern).
 // Pflegt je Provider-Dial-Peer eine Pattern Map mit den Absendernummern (destination calling e164-pattern-map)
-// und die Regel "Ziel und Absender muessen passen" (voice class dial-peer provision-policy ... dnis ani).
+// und die Regel "Absender und Ziel muessen passen" (voice class dial-peer provision-policy: preference 1 calling called,
+// preference 2 called) an den eingehenden Dial-Peers (destination provision-policy).
 (() => {
   let E = null;
   let card = document.getElementById("egress-card");
@@ -229,7 +230,8 @@
     body.innerHTML = `
       <div class="body">
         <div class="hint">Jede eigene Rufnummer geht über den Provider raus, bei dem sie registriert ist. Der Router wählt dann den
-          Dial-Peer nach Ziel <b>und</b> Absender. Rufnummern ohne Zuordnung gehen über den Standard-Provider.
+          Dial-Peer nach Ziel <b>und</b> Absender. Rufnummern ohne Zuordnung gehen über den Standard-Provider –
+          ist keiner gewählt, wählt der Router wie bisher nur nach dem Ziel.
           Der Standard gilt auch für weitergeleitete Anrufe, die mit der Nummer des externen Anrufers rausgehen.
           ${E.unmanaged.length ? `<br><b>Hinweis:</b> Dial-Peer ${E.unmanaged.map(esc).join(", ")} prüft den Absender nicht. Bedient er dieselben
           Ziele wie die Provider oben, konkurriert er weiter mit ihnen – dann einer Rufnummer zuordnen oder als Standard wählen.` : ""}</div>
@@ -241,13 +243,20 @@
             <tr><td><b>Alle anderen Absender</b> <span class="muted">(Standard)</span></td>
               <td><select name="default" style="min-width:280px">${options(E.default, "– keiner –")}</select></td></tr>
           </tbody></table>
+          <div style="margin-top:12px"><b>Anrufe kommen herein über</b>
+            <span class="muted">– an diesen Dial-Peers hängt die Regel (<span class="mono">destination provision-policy</span>)</span></div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:4px">
+            ${E.inbound.map(i => `<label class="check" style="margin:0"><input type="checkbox" name="inbound" value="${esc(i.tag)}" ${i.selected ? "checked" : ""}>
+              <span class="mono">${esc(i.tag)}</span> ${esc(i.desc || i.incoming)}</label>`).join("")
+              || '<span class="muted">Keine Dial-Peers mit <span class="mono">incoming …</span> gefunden.</span>'}</div>
           <div class="actions" style="margin-top:10px"><button class="primary" type="submit">Am Router übernehmen</button>
             ${anyActive ? badge("ok", `aktiv an Dial-Peer ${E.providers.filter(p => p.active).map(p => p.tag).join(", ")}`) : badge("neutral", "noch nicht eingerichtet")}</div>
           <div class="msg" id="m-egress"></div>
         </form>
         <div class="hint" style="margin-top:8px">Prüfen mit <span class="mono">debug voip dialpeer inout</span> und je einem Anruf:
           in der Ausgabe muss <span class="mono">DP_MATCH_DEST_CALLING</span> den richtigen Dial-Peer finden.
-          ${E.policy ? `Regel: <span class="mono">voice class dial-peer provision-policy ${esc(E.policy)}</span> (preference 1 dnis ani).` : ""}</div>
+          ${E.policy ? `Regel: <span class="mono">voice class dial-peer provision-policy ${esc(E.policy)}</span>
+            (${E.policy_lines.map(esc).join(", ")}).` : ""}</div>
       </div>`;
   }
 
@@ -265,11 +274,14 @@
     const assign = {};
     f.querySelectorAll("select[name^='n:']").forEach(s => { if (s.value) assign[s.name.slice(2)] = s.value; });
     const def = f.default.value;
-    if (Object.keys(assign).length && !def &&
-        !confirm("Ohne Standard-Provider gehen Anrufe von nicht zugeordneten Rufnummern evtl. über keinen Provider raus. Trotzdem übernehmen?")) return;
+    const inbound = [...f.querySelectorAll("input[name=inbound]:checked")].map(i => i.value);
+    if ((Object.keys(assign).length || def) && !inbound.length) {
+      showMsg($("#m-egress"), false, "Bitte mindestens einen Dial-Peer wählen, über den die Anrufe hereinkommen.");
+      return;
+    }
     const btn = f.querySelector("button[type=submit]");
     btn.disabled = true;
-    const j = await api("/api/egress", { method: "POST", body: JSON.stringify({ assign, default: def }) });
+    const j = await api("/api/egress", { method: "POST", body: JSON.stringify({ assign, default: def, inbound }) });
     btn.disabled = false;
     if (!j.ok) { showMsg($("#m-egress"), false, j.error || "Fehler"); return; }
     await loadEg();

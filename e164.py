@@ -81,6 +81,8 @@ def entries_input(raw) -> list[str]:
 
 EGRESS_DESC = "Absender fuer Dial-Peer {tag} (cme-web)"
 DEFAULT_PATTERN = "T"         # jeder Absender, auch weitergeleitete externe Anrufer
+# Regel fuer den eingehenden Dial-Peer: erst Absender UND Ziel passend, sonst wie bisher nur nach Ziel
+POLICY_LINES = ["preference 1 calling called", "preference 2 called"]
 
 
 def parse_peers(out: str) -> list[dict]:
@@ -90,7 +92,7 @@ def parse_peers(out: str) -> list[dict]:
         m = re.match(r"^dial-peer voice (\d+) (\w+)", line)
         if m:
             cur = {"tag": m.group(1), "kind": m.group(2), "desc": "", "pattern": "", "target": "",
-                   "calling_map": "", "policy": "", "dest_map": ""}
+                   "calling_map": "", "policy": "", "dest_map": "", "incoming": ""}
             res.append(cur)
             continue
         if cur is None or not line.startswith(" "):
@@ -111,6 +113,8 @@ def parse_peers(out: str) -> list[dict]:
             cur["dest_map"] = t.split()[2]
         elif t.startswith("destination provision-policy "):
             cur["policy"] = t.split()[2]
+        elif t.startswith(("incoming ", "answer-address ")) and not cur["incoming"]:
+            cur["incoming"] = t
     return res
 
 
@@ -190,6 +194,8 @@ def register(app, router, apply) -> None:
             for t, p in demo_state["peers"].items():
                 out += [f"dial-peer voice {t} voip", f" description {p['desc']}",
                         f" destination-pattern {p['pattern']}", f" session target {p['target']}"]
+                if t == "100":
+                    out.append(" incoming called e164-pattern-map 1")
                 x = demo_state["extra"].get(t, {})
                 if x.get("calling_map"):
                     out.append(f" destination calling e164-pattern-map {x['calling_map']}")
@@ -225,7 +231,7 @@ def register(app, router, apply) -> None:
                     if mpol.group(1):
                         demo_state["policies"].pop(mpol.group(2), None)
                     else:
-                        demo_state["policies"][mpol.group(2)] = ["preference 1 dnis ani"]
+                        demo_state["policies"][mpol.group(2)] = list(POLICY_LINES)
                     continue
                 if peer is not None and line.startswith(" "):
                     t = line.strip()
@@ -403,11 +409,18 @@ def register(app, router, apply) -> None:
                     assign[e] = p["tag"]
                 else:
                     others.setdefault(p["tag"], []).append(e)
-        policy = next((t for t, ls in policies.items() if "preference 1 dnis ani" in ls), "")
-        active = [p["tag"] for p in peers if p["calling_map"] and p["policy"]]
+        policy = next((t for t, ls in policies.items() if POLICY_LINES[0] in ls), "")
+        allpeers = [p for p in parse_peers(show_peers()) if p["kind"] == "voip"]
+        # eingehende Dial-Peers: dort muss die Regel haengen (destination provision-policy)
+        inbound = [{"tag": p["tag"], "desc": p["desc"], "incoming": p["incoming"],
+                    "selected": bool(policy) and p["policy"] == policy}
+                   for p in allpeers if p["incoming"] or (policy and p["policy"] == policy)]
+        on = any(i["selected"] for i in inbound)
+        active = [p["tag"] for p in peers if p["calling_map"]] if on else []
         return {"providers": [dict(p, active=p["tag"] in active, others=others.get(p["tag"], [])) for p in peers],
                 "numbers": [dict(d, provider=assign.get(d["number"], "")) for d in dns],
-                "default": default, "policy": policy, "policies": policies, "maps": maps,
+                "default": default, "policy": policy, "policy_lines": POLICY_LINES, "policies": policies,
+                "maps": maps, "inbound": inbound, "allpeers": allpeers,
                 "unmanaged": [p["tag"] for p in peers if active and p["tag"] not in active]}
 
     @app.get("/api/egress")
@@ -415,6 +428,7 @@ def register(app, router, apply) -> None:
         st = egress_state()
         st.pop("maps")
         st.pop("policies")
+        st.pop("allpeers")
         return jsonify(ok=True, **st)
 
     @app.post("/api/egress")
@@ -436,6 +450,11 @@ def register(app, router, apply) -> None:
         default = str(b.get("default") or "")
         if default and default not in tags:
             raise E164Error(f"Dial-Peer {default} ist kein Provider-Dial-Peer.")
+        voip = {p["tag"]: p for p in st["allpeers"]}
+        inbound = [str(t) for t in (b.get("inbound") or []) if str(t)]
+        for t in inbound:
+            if t not in voip:
+                raise E164Error(f"Dial-Peer {t} gibt es nicht (oder ist kein VoIP-Dial-Peer).")
         maps = st["maps"]
         want: dict[str, list[str]] = {}
         for p in st["providers"]:
@@ -445,11 +464,23 @@ def register(app, router, apply) -> None:
             if entries:
                 want[p["tag"]] = entries
 
+        if want and not inbound:
+            raise E164Error("Bitte mindestens einen eingehenden Dial-Peer wählen, über den die Anrufe hereinkommen.")
         lines, tail = [], []
         policy = st["policy"]
         if want and not policy:
             policy = str(next(t for t in range(1, MAX_TAG + 1) if str(t) not in st["policies"]))
-            lines += [f"voice class dial-peer provision-policy {policy}", " preference 1 dnis ani"]
+            lines += [f"voice class dial-peer provision-policy {policy}"] + [f" {l}" for l in POLICY_LINES]
+        # Regel an die eingehenden Dial-Peers haengen bzw. dort entfernen
+        for t, p in voip.items():
+            has = bool(p["policy"]) and p["policy"] == policy
+            if want and t in inbound and not has:
+                if p["policy"]:
+                    tail += [f"dial-peer voice {t} voip", f" no destination provision-policy {p['policy']}"]
+                tail += [f"dial-peer voice {t} voip", f" destination provision-policy {policy}"]
+            elif p["policy"] and (has or t in tags) and not (want and t in inbound):
+                # nicht mehr gewaehlt - oder Rest der frueheren Fassung an einem Provider-Dial-Peer
+                tail += [f"dial-peer voice {t} voip", f" no destination provision-policy {p['policy']}"]
         used = {int(t) for t in maps}
         for p in st["providers"]:
             entries = want.get(p["tag"], [])
@@ -467,20 +498,11 @@ def register(app, router, apply) -> None:
                     if add or rem:     # erst hinzufuegen, dann entfernen: die Map wird nie leer
                         lines += [f"voice class e164-pattern-map {m}"] + [f" e164 {e}" for e in add] + \
                                  [f" no e164 {e}" for e in rem]
-                peer = []
                 if p["calling_map"] != m:
-                    peer.append(f" destination calling e164-pattern-map {m}")
-                if p["policy"] != policy:
-                    peer.append(f" destination provision-policy {policy}")
-                if peer:
-                    tail += [f"dial-peer voice {p['tag']} voip"] + peer
-            elif p["calling_map"] or p["policy"]:
-                peer = [f"dial-peer voice {p['tag']} voip"]
-                if p["policy"]:
-                    peer.append(f" no destination provision-policy {p['policy']}")
-                if p["calling_map"]:
-                    peer.append(f" no destination calling e164-pattern-map {p['calling_map']}")
-                tail += peer
+                    tail += [f"dial-peer voice {p['tag']} voip", f" destination calling e164-pattern-map {m}"]
+            elif p["calling_map"]:
+                tail += [f"dial-peer voice {p['tag']} voip",
+                         f" no destination calling e164-pattern-map {p['calling_map']}"]
                 mm = maps.get(p["calling_map"])
                 if mm and mm["description"] == EGRESS_DESC.format(tag=p["tag"]):
                     tail.append(f"no voice class e164-pattern-map {p['calling_map']}")
