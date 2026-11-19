@@ -375,6 +375,14 @@ def register(app, router, apply, demo: bool, cfgdir: Path, host_ip: str) -> None
         old = sorted({int(n) for n in re.findall(r"^\s+rule (\d+)\s", cur, re.M)})
         peers = parse_peers(router.show("show running-config | section dial-peer voice"))
         want = set(s["peers"]) if s["ring_names"] and rules else set()
+        # pro Dial-Peer gibt es nur EIN eingehendes Profil - ein vorhandenes anderes nicht still ersetzen
+        busy = [f"Dial-Peer {p['tag']} (Profil {', '.join(p['inbound'])})" for p in peers
+                if p["tag"] in want and p["inbound"] and str(tag) not in p["inbound"]]
+        if busy:
+            return {"ok": False, "error": "Diese Dial-Peers haben schon ein anderes eingehendes SIP-Profil "
+                                          f"(voice-class sip profiles N inbound): {', '.join(busy)}. "
+                                          "Ein Dial-Peer kann nur eines haben - die Namensregel würde es ersetzen. "
+                                          "Bitte die Regeln dort zusammenführen oder den Dial-Peer abwählen."}
         lines = []
         if want:
             lines.append(f"voice class sip-profiles {tag}")
