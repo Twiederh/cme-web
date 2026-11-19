@@ -77,13 +77,27 @@
     return new RegExp(out.endsWith("$") ? out : out + "$");
   }
   const matches = (p, n) => { try { const r = toRegex(p); return r ? r.test(n) : false; } catch { return false; } };
+  // Wie genau ein Muster ist (wie bei der Dial-Peer-Auswahl: die laengste feste Uebereinstimmung gewinnt):
+  // ohne T vor mit T, dann mehr feste Ziffern, dann mehr Bereiche [..] statt beliebiger Ziffern
+  function score(p) {
+    const fixed = (p.replace(/\[[^\]]*\]/g, "").match(/[0-9A-D*#+]/g) || []).length;
+    const ranges = (p.match(/\[[^\]]*\]/g) || []).length;
+    return [/[T%]/.test(p) ? 0 : 1, fixed, ranges];
+  }
+  const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 
   function render() {
     $("#c-e164").textContent = M.length ? `(${M.length})` : "";
     const n = testNum.trim();
+    // nur die genauesten passenden Muster markieren, die ungenaueren kommen ohnehin nicht zum Zug
+    let best = null;
+    if (n) for (const m of M) for (const e of m.entries) {
+      if (matches(e, n) && (!best || cmp(score(e), best) > 0)) best = score(e);
+    }
+    const isBest = (e) => best && matches(e, n) && cmp(score(e), best) === 0;
     let hits = 0;
     $("#t-e164").innerHTML = M.map(m => {
-      const hit = n ? m.entries.filter(e => matches(e, n)) : [];
+      const hit = n ? m.entries.filter(isBest) : [];
       hits += hit.length ? 1 : 0;
       const isOpen = open === m.tag;
       const shown = isOpen ? m.entries : m.entries.slice(0, 6);
@@ -115,7 +129,8 @@
           </form>`}
           <div class="msg" id="m-e164-${esc(m.tag)}"></div></div></td></tr>` : ""}`;
     }).join("") || `<tr><td colspan="5" class="empty">Keine Pattern Maps.</td></tr>`;
-    $("#e164-test-out").innerHTML = !n ? "" : hits ? badge("ok", `passt zu ${hits} Map${hits > 1 ? "s" : ""}`)
+    const where = M.filter(m => m.entries.some(isBest)).map(m => `Map ${m.tag}`).join(", ");
+    $("#e164-test-out").innerHTML = !n ? "" : hits ? badge("ok", `passt am genauesten: ${where}`)
       : badge("neutral", "passt zu keiner Map");
   }
 
