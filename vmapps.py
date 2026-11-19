@@ -222,6 +222,11 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
         taken = {f["number"]: f"Fax {f['number']}" for f in d["fax"]}
         taken.update({i["number"]: f"IVR {i['name']}" for i in d["ivrs"] if i.get("number")})
         taken.update({q["number"]: f"Warteschlange {q['name']}" for q in queue_list() if q.get("number")})
+        try:
+            for r in json.loads((cfgdir / "cme-conf.json").read_text()).get("rooms", []):
+                taken.update({n: f"Konferenz {r['name']}" for n in (r.get("number"), r.get("external")) if n})
+        except (FileNotFoundError, ValueError):
+            pass
         taken.pop(own, None)
         if number in taken:
             raise AppError(f"{number} ist schon vergeben ({taken[number]}).")
@@ -768,4 +773,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
     # Warteschlangen mit Wartemusik (queues.py)
     import queues
     queues.register(app, router, apply, demo, ctx)
+    # Rufuebernahme, Berechtigungen (COR) und Konferenzraeume (features.py)
+    import features
+    features.register(app, router, apply, demo, ctx)
     return tools
