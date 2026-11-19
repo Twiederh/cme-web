@@ -32,7 +32,7 @@ PHONE_PORT = int(os.environ.get("CME_PHONE_PORT", "8081"))                 # Por
 URL_PORT = int(os.environ.get("CME_PHONE_URL_PORT") or PHONE_PORT)          # Port auf dem Docker-Host
 RTP_PORT = int(os.environ.get("VVM_RTP_PORT", "20480"))
 PREFIX = "/ipphone/vvm"
-RE_ID = re.compile(r"^[\w.-]{1,64}$")
+RE_ID = re.compile(r"^[\w.+-]{1,64}$")
 RE_IP = r"\d+\.\d+\.\d+\.\d+"
 
 
@@ -97,22 +97,42 @@ def fmt_time(ts: int) -> str:
     return d.strftime("%d.%m. %H:%M")
 
 
-def parse_pool_ips(out: str) -> dict[str, list[str]]:
-    """show voice register pool all brief -> {ip: [Rufnummern]}"""
-    res: dict[str, list[str]] = {}
-    last = None
+def parse_pool_ips(out: str) -> dict[str, str]:
+    """show voice register pool all brief -> {ip: pool}"""
+    res: dict[str, str] = {}
     mac_re = r"[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
     for line in out.splitlines():
-        m = re.match(rf"^\s*(\d+)\s+(?:{mac_re}|{RE_IP}|[A-Za-z][\w-]+)\s+(?:({RE_IP})\s+)?\d+\s+\d+\s+(\S+)\s+\S+", line)
+        m = re.match(rf"^\s*(\d+)\s+(?:{mac_re}|{RE_IP}|[A-Za-z][\w-]+)\s+({RE_IP})\s", line)
         if m:
-            last = m.group(2) or None
-            if last:
-                res.setdefault(last, []).append(m.group(3))
-            continue
-        m = re.match(r"^\s+\d+\s+\d+\s+(\S+)\s+\S+\s*$", line)
-        if m and last:
-            res[last].append(m.group(1))
+            res.setdefault(m.group(2), m.group(1))
     return res
+
+
+def parse_pool_numbers(cfg: str) -> dict[str, list[str]]:
+    """show running-config | section voice register -> {pool: [Rufnummern der Leitungen]}"""
+    dns: dict[str, str] = {}
+    pool_dns: dict[str, list[str]] = {}
+    kind = tag = None
+    for line in cfg.splitlines():
+        m = re.match(r"^voice register (dn|pool)\s+(\d+)\s*$", line)
+        if m:
+            kind, tag = m.groups()
+            if kind == "pool":
+                pool_dns.setdefault(tag, [])
+            continue
+        if not line.startswith(" "):
+            kind = tag = None
+            continue
+        t = line.strip()
+        if kind == "dn":
+            mm = re.match(r"^number\s+(\S+)", t)
+            if mm:
+                dns[tag] = mm.group(1)
+        elif kind == "pool":
+            mm = re.match(r"^number\s+\d+\s+dn\s+(\d+)", t)
+            if mm:
+                pool_dns[tag].append(mm.group(1))
+    return {p: [dns[d] for d in ds if d in dns] for p, ds in pool_dns.items()}
 
 
 # --------------------------------------------------------------------------
@@ -132,19 +152,26 @@ def register(app, router, demo: bool, ctx: dict) -> None:
 
     # ------------- Telefon -> Mailboxen -------------
 
-    def phone_map() -> dict[str, list[str]]:
+    def phone_map() -> tuple[dict[str, str], dict[str, list[str]]]:
+        """({ip: pool}, {pool: [Rufnummern]}), 20 s zwischengespeichert"""
         if time.time() - cache["t"] > 20:
-            cache["map"] = parse_pool_ips(router.show("show voice register pool all brief"))
+            cache["map"] = (parse_pool_ips(router.show("show voice register pool all brief")),
+                            parse_pool_numbers(router.show("show running-config | section voice register")))
             cache["t"] = time.time()
         return cache["map"]
 
+    def lookup(ip: str) -> tuple[str | None, list[str], list[str]]:
+        """-> (pool, Rufnummern des Telefons, davon mit Mailbox)"""
+        ips, nums = phone_map()
+        pool = ips.get(ip)
+        if pool is None and demo:
+            pool = next(iter(ips.values()), None)
+        numbers = list(dict.fromkeys(nums.get(pool, []))) if pool else []
+        have = {mbid(k): k for k in settings()["mailboxes"]}
+        return pool, numbers, [have[mbid(n)] for n in numbers if mbid(n) in have]
+
     def my_boxes(ip: str) -> list[str]:
-        boxes = settings()["mailboxes"]
-        pm = phone_map()
-        nums = pm.get(ip)
-        if nums is None and demo:
-            nums = next(iter(pm.values()), [])
-        return [n for n in dict.fromkeys(nums or []) if n in boxes]
+        return lookup(ip)[2]
 
     def phone_ip() -> str:
         return request.remote_addr or ""
@@ -237,10 +264,15 @@ def register(app, router, demo: bool, ctx: dict) -> None:
         g = guard()
         if g:
             return g
-        boxes = my_boxes(phone_ip())
+        pool, numbers, boxes = lookup(phone_ip())
         if not boxes:
-            return xml_resp(xml_text("Voicemail", "", f"Für dieses Telefon ({phone_ip()}) ist keine Mailbox eingerichtet.",
-                                     [("Beenden", "SoftKey:Exit")]))
+            if pool is None:
+                why = f"Kein registriertes Telefon mit der Adresse {phone_ip()} gefunden."
+            elif not numbers:
+                why = f"Telefon {phone_ip()} (Pool {pool}) hat keine Rufnummern."
+            else:
+                why = f"Telefon {phone_ip()} (Pool {pool}): für {', '.join(numbers)} ist keine Mailbox eingerichtet."
+            return xml_resp(xml_text("Voicemail", "", why, [("Beenden", "SoftKey:Exit")]))
         if len(boxes) == 1:
             return box_menu(boxes[0])
         items = []
