@@ -34,6 +34,8 @@ RTP_PORT = int(os.environ.get("VVM_RTP_PORT", "20480"))
 PREFIX = "/ipphone/vvm"
 RE_ID = re.compile(r"^[\w.+-]{1,64}$")
 RE_IP = r"\d+\.\d+\.\d+\.\d+"
+# Dienst ganz schliessen (78xx/88xx); SoftKey:Exit geht dort nur eine Seite zurueck
+EXIT = os.environ.get("VVM_EXIT_URI", "App:Close:0")
 
 
 # --------------------------------------------------------------------------
@@ -184,7 +186,7 @@ def register(app, router, demo: bool, ctx: dict) -> None:
         if request.environ.get("cme.phone") != "1":
             return Response("Nicht gefunden", status=404)
         if not ctx["enabled"]:
-            return xml_resp(xml_text("Voicemail", "", "Die Voicemail ist nicht eingerichtet.", [("Beenden", "SoftKey:Exit")]))
+            return xml_resp(xml_text("Voicemail", "", "Die Voicemail ist nicht eingerichtet.", [("Beenden", EXIT)]))
         if box is not None and (not RE_ID.match(box) or box not in my_boxes(phone_ip())):
             return xml_resp(xml_text("Voicemail", "", "Diese Mailbox gehört nicht zu diesem Telefon.",
                                      [("Zurück", "SoftKey:Exit")]))
@@ -238,7 +240,7 @@ def register(app, router, demo: bool, ctx: dict) -> None:
                   f"{base()}/{box}/{m['id']}") for m in msgs if m["id"]]
         prompt = note or (f"{new} neu, {len(msgs) - new} alt" if msgs else "Keine Nachrichten")
         keys = [("Auswahl", "SoftKey:Select"), ("Mailbox", f"Dial:{settings().get('pilot', '')}"),
-                ("Aktual.", f"{base()}/{box}"), ("Beenden", "SoftKey:Exit")]
+                ("Aktual.", f"{base()}/{box}"), ("Beenden", EXIT)]
         if not items:
             return xml_resp(xml_text(f"Voicemail {box}", prompt, "Keine Nachrichten vorhanden.", keys[1:]))
         return xml_resp(xml_menu(f"Voicemail {box}", prompt, items, keys))
@@ -272,7 +274,7 @@ def register(app, router, demo: bool, ctx: dict) -> None:
                 why = f"Telefon {phone_ip()} (Pool {pool}) hat keine Rufnummern."
             else:
                 why = f"Telefon {phone_ip()} (Pool {pool}): für {', '.join(numbers)} ist keine Mailbox eingerichtet."
-            return xml_resp(xml_text("Voicemail", "", why, [("Beenden", "SoftKey:Exit")]))
+            return xml_resp(xml_text("Voicemail", "", why, [("Beenden", EXIT)]))
         if len(boxes) == 1:
             return box_menu(boxes[0])
         items = []
@@ -281,7 +283,7 @@ def register(app, router, demo: bool, ctx: dict) -> None:
             new = sum(m["folder"] == "INBOX" for m in msgs)
             items.append((f"{b}  –  {new} neu, {len(msgs) - new} alt", f"{base()}/{b}"))
         return xml_resp(xml_menu("Voicemail", "Mailbox wählen", items,
-                                 [("Auswahl", "SoftKey:Select"), ("Beenden", "SoftKey:Exit")]))
+                                 [("Auswahl", "SoftKey:Select"), ("Beenden", EXIT)]))
 
     @app.get(f"{PREFIX}/<box>")
     def vvm_box(box):
