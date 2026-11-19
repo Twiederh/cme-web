@@ -439,9 +439,11 @@ def register(app, router, apply, demo: bool) -> None:
         res["dtmf_pools"] = need
         return res
 
+    VM_CODEC = 8998   # eigene Codec-Liste fuer Asterisk: G.722 zuerst
+
     def codec_line() -> str:
-        """G.722 bevorzugt: erste Codec-Liste (voice class codec), die mit G.722 beginnt;
-        sonst G.711 a-law."""
+        """G.722 bevorzugt: erste Codec-Liste (voice class codec), die mit G.722 beginnt.
+        Gibt es keine, wird die Liste 8998 (G.722, G.711 a-law, G.711 u-law) angelegt."""
         out = router.show("show running-config | section voice class codec")
         lists, cur = {}, None
         for line in out.splitlines():
@@ -455,7 +457,12 @@ def register(app, router, apply, demo: bool) -> None:
         for t in sorted(lists):
             if lists[t] and lists[t][min(lists[t])].startswith("g722"):
                 return f" voice-class codec {t}"
-        return " codec g711alaw"
+        if VM_CODEC not in lists:
+            res = apply([f"voice class codec {VM_CODEC}", " codec preference 1 g722-64",
+                         " codec preference 2 g711alaw", " codec preference 3 g711ulaw"])
+            if not res.get("ok"):
+                return " codec g711alaw"
+        return f" voice-class codec {VM_CODEC}"
 
     def dn_lines(tag: str, b: dict | None, pilot: str, cur: dict | None) -> list[str]:
         out = [f"voice register dn {tag}"]
