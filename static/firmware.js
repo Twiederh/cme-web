@@ -72,7 +72,7 @@
         <td class="mono" style="font-size:12px">${esc(f.dir)}${f.files ? ` <span class="muted">(${f.files} Dateien)</span>` : ""}
           ${f.own ? "" : `<br><span class="muted">manuell installiert</span>`}</td>
         <td>${f.used_by.length ? f.used_by.map(t => badge("ok", TYPE_LABEL?.[t] ?? t)).join(" ") : '<span class="muted">–</span>'}</td>
-        <td>${f.own && !f.used_by.length ? `<button class="small danger" data-fw-del="${esc(f.load)}">Löschen</button>` : ""}</td></tr>`).join("")
+        <td>${f.used_by.length ? "" : `<button class="small danger" data-fw-del="${esc(f.load)}">Löschen</button>`}</td></tr>`).join("")
       || `<tr><td colspan="5" class="empty">Keine Firmware mit tftp-server-Eintrag gefunden.</td></tr>`;
     renderJob();
   }
@@ -148,7 +148,11 @@
       if (!j.ok) { alert(j.error || "Fehler"); return; }
       load();
     } else if (d.fwDel) {
-      if (!confirm(`Firmware ${d.fwDel} mit allen Dateien aus dem Flash löschen?`)) return;
+      const fw = F.firmware.find(x => x.load === d.fwDel) || { file_list: [] };
+      const list = fw.file_list.map(x => x.path.split("/").pop());
+      const more = list.length > 15 ? `\n… und ${list.length - 15} weitere` : "";
+      if (!confirm(`Firmware ${d.fwDel} löschen?\n\nDiese ${list.length} Datei(en) und ihre tftp-server-Einträge werden entfernt:\n` +
+                   list.slice(0, 15).join("\n") + more)) return;
       e.target.disabled = true;
       const j = await api(`/api/firmware/${encodeURIComponent(d.fwDel)}`, { method: "DELETE" });
       if (!j.ok) { e.target.disabled = false; alert(j.error || "Fehler"); return; }

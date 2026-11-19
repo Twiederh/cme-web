@@ -135,10 +135,20 @@ def register(app, router, apply) -> None:
             load = alias[:-6]
             d = path.rsplit("/", 1)[0]
             own = d == f"{FW_DIR}/{load}"
-            n = sum(1 for p in al.values() if p.startswith(d + "/")) if own else None
-            out.append({"load": load, "path": path, "dir": d, "own": own, "files": n,
-                        "types": types_for(load)})
+            out.append({"load": load, "path": path, "dir": d, "own": own,
+                        "file_list": fw_files(al, load, path, own), "types": types_for(load)})
+            out[-1]["files"] = len(out[-1]["file_list"])
         return out
+
+    def fw_files(al: dict[str, str], load: str, path: str, own: bool) -> list[dict]:
+        """Dateien einer Firmware: eigener Ordner komplett, sonst alle Dateien im Ordner der
+        .loads-Datei, deren Name die Versionsnummer traegt (z. B. 14-2-1-0101-1)."""
+        prefix = lambda p: re.match(r"^(.*[:/])", p).group(1) if re.match(r"^(.*[:/])", p) else ""
+        if own:
+            return [{"alias": a, "path": p} for a, p in sorted(al.items()) if p.startswith(prefix(path))]
+        version = load.split(".", 1)[1] if "." in load else load
+        return [{"alias": a, "path": p} for a, p in sorted(al.items())
+                if prefix(p) == prefix(path) and version in p[len(prefix(p)):]]
 
     def state() -> dict:
         al = aliases()
@@ -336,19 +346,21 @@ def register(app, router, apply) -> None:
             raise FWError(f"Firmware {load} nicht gefunden.")
         if fw["used_by"]:
             raise FWError(f"Firmware {load} ist noch zugewiesen ({', '.join(fw['used_by'])}).")
-        if not fw["own"]:
-            raise FWError("Diese Firmware wurde nicht über die Weboberfläche installiert. "
-                          "Ihre Dateien bitte von Hand löschen.")
         d = fw["dir"]
-        al = aliases()
-        cfg = [f"no tftp-server {p} alias {a}" for a, p in sorted(al.items()) if p.startswith(d + "/")]
+        cfg = [f"no tftp-server {f['path']} alias {f['alias']}" for f in fw["file_list"]]
         res = do_apply(cfg) if cfg else {"ok": True, "error": None, "config": []}
         if res.get("ok"):
             if demo:
-                for p in [p for p in router.files if p.startswith(d + "/")]:
-                    router.files.pop(p)
-            else:
+                gone = [p for p in router.files if p.startswith(d + "/")] if fw["own"] \
+                    else [f["path"] for f in fw["file_list"]]
+                for p in gone:
+                    router.files.pop(p, None)
+            elif fw["own"]:
                 router._do(lambda c: c.send_command_timing(f"delete /force /recursive {d}", read_timeout=120))
+            else:
+                # manuell installiert: nur die Dateien dieser Firmware, der Ordner bleibt
+                for f in fw["file_list"]:
+                    files.delete(f["path"])
         res.pop("output", None)
         return jsonify(res), (200 if res.get("ok") else 400)
 
@@ -360,4 +372,9 @@ def register(app, router, apply) -> None:
                         ("rootfs88xx.14-4-1-0301-6.sbn", 90_000_000)):
             router.files[f"{d}/{n}"] = b"\0" * min(size, 4096)
             cfg.append(f"tftp-server {d}/{n} alias {n}")
+        # dazu eine alte, von Hand in den Flash kopierte Firmware
+        for n in ("sip8845_65.14-1-1-0001-125.loads", "kern8845_65.14-1-1-0001-125.sbn",
+                  "rootfs8845_65.14-1-1-0001-125.sbn"):
+            router.files[f"bootflash:/{n}"] = b"\0" * 1024
+            cfg.append(f"tftp-server bootflash:/{n} alias {n}")
         router.tftp.extend(cfg)
