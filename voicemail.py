@@ -586,3 +586,9 @@ def register(app, router, apply, demo: bool) -> None:
         "ami": ami, "cfgdir": cfgdir, "spool": spool, "host_ip": host_ip, "enabled": enabled,
         "mail_ready": mail_ready, "numbers": numbers, "mbid": mbid, "codec_line": codec_line,
         "settings": settings})
+
+    # Visual Voicemail am Telefon (XML-Dienst)
+    import vvm
+    vvm.register(app, router, demo, {
+        "spool": spool, "list_messages": list_messages, "msg_action": msg_action, "settings": settings,
+        "mbid": mbid, "host_ip": host_ip, "enabled": enabled})

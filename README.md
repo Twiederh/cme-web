@@ -36,7 +36,8 @@ oder unter **GitOps updates** automatisches Aktualisieren einschalten.
 ## Hinter Traefik
 
 Für einen vorhandenen Traefik (v3) gibt es `docker-compose.traefik.yml`.
-Sie veröffentlicht keinen Port (Zugriff nur über Traefik), sondern hängt den Container ins Traefik-Netz
+Die Oberfläche ist nur über Traefik erreichbar; veröffentlicht wird nur Port 8081 für die
+Telefondienste (siehe „Visual Voicemail am Telefon“). Die Datei hängt den Container ins Traefik-Netz
 und setzt die Labels für HTTPS, die Weiterleitung von HTTP auf HTTPS,
 eine IP-Allowlist (nur LAN) und Sicherheits-Header.
 
@@ -347,6 +348,25 @@ Nummer nur noch auf einem Telefon liegt.
 
 Geänderte Konfiguration wird erst mit „Konfiguration speichern“ (`write memory`)
 dauerhaft gespeichert.
+
+### Visual Voicemail am Telefon
+
+Im Tab „Voicemail“ gibt es einen Telefondienst, der die Asterisk-Mailboxen ähnlich wie die
+Visual Voicemail von Unity Connection am Telefon zeigt. Du siehst die Liste der Nachrichten mit
+Anrufer, Zeit, Dauer und ob eine Nachricht neu ist. Du kannst Nachrichten abspielen, zurückrufen,
+löschen und als gehört oder neu markieren.
+
+- **Port:** Die Telefone sprechen nur HTTP ohne Anmeldung. Deshalb antwortet cme-web dafür auf
+  einem eigenen Port: `CME_PHONE_PORT`, Standard `8081`. Dieser Port liefert nur `/ipphone/...` aus.
+  Über den normalen Zugang (auch über Traefik) sind diese Pfade gesperrt.
+- **Erkennung:** Ein Telefon wird an seiner IP-Adresse erkannt
+  (`show voice register pool all brief`). Es sieht nur die Mailboxen seiner eigenen Leitungen.
+- **Abspielen:** cme-web schickt die Aufnahme per RTP (G.711 µ-law) an das Telefon. Das Telefon
+  bekommt dazu `RTPRx:<eigene IP>:20480` und spielt den Ton über Hörer oder Lautsprecher ab.
+  Nach dem Abspielen ist die Nachricht als gehört markiert.
+- **Tasten:** Die Karte trägt die Adresse als `servicesURL` (Taste Dienste/Anwendungen)
+  und/oder als `messagesURL` (Taste Nachrichten) in die Telefon-Konfiguration ein. Das geschieht
+  als Anpassung, die nach „create profile“ erhalten bleibt.
 
 ## Abfragen für den Status
 

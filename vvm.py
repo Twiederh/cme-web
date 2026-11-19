@@ -357,6 +357,9 @@ def register(app, router, demo: bool, ctx: dict) -> None:
             start_response("404 Not Found", [("Content-Type", "text/plain")])
             return [b"Nicht gefunden"]
         environ["cme.phone"] = "1"
+        # Kein Proxy davor: X-Forwarded-* verwerfen, sonst liesse sich die IP eines Telefons vortaeuschen
+        for k in [k for k in environ if k.startswith("HTTP_X_FORWARDED") or k == "HTTP_FORWARDED"]:
+            del environ[k]
         return app.wsgi_app(environ, start_response)
 
     def serve_phones():
