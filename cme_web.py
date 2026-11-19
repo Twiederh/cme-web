@@ -510,6 +510,140 @@ class Router:
         return self._do(lambda c: c.save_config())
 
 
+class CachedRouter:
+    """Zwischenspeicher vor dem Router: jeder SSH-Befehl kostet 1-2 s, und eine Seite fragt Dutzende ab.
+
+    * "show running-config | section/include ..." beantwortet er aus EINER gespeicherten Kopie der
+      Konfiguration und wendet die Filter selbst an (wie IOS: section = ganzer Block, wenn eine Zeile passt).
+    * Statusbefehle (show ... brief, register status, ...) gelten einige Sekunden.
+    * Ein Hintergrund-Thread haelt beides frisch; nach jeder Konfigurationsaenderung wird neu gelesen.
+    """
+
+    RUN_MAX_AGE = 120        # aelter: beim naechsten Zugriff sofort neu lesen
+    RUN_REFRESH = 45         # so oft liest der Hintergrund-Thread die Konfiguration neu
+    STATUS_TTL = 15
+    TTL = {"show clock": 0, "show call active voice brief": 2, "show sip-ua calls": 2,
+           "show call history voice brief": 10, "show version": 600}
+    KEEP_WARM = 300          # Statusbefehle, die so lange nicht abgefragt wurden, nicht mehr auffrischen
+
+    def __init__(self, router):
+        self.router = router
+        self.run_lock = threading.Lock()
+        self.status_lock = threading.Lock()
+        self.run, self.run_ts, self.run_gen, self.gen = None, 0.0, -1, 0
+        self.status: dict[str, dict] = {}
+        threading.Thread(target=self._warm, daemon=True, name="router-cache").start()
+
+    def __getattr__(self, name):           # z. B. _do fuer firmware.py
+        return getattr(self.router, name)
+
+    # ---- running-config ----
+
+    def running(self) -> str:
+        with self.run_lock:
+            if self.run is None or self.run_gen != self.gen or time.time() - self.run_ts > self.RUN_MAX_AGE:
+                gen = self.gen
+                out = self.router.show("show running-config")
+                self.run, self.run_ts, self.run_gen = out, time.time(), gen
+            return self.run
+
+    @staticmethod
+    def _filter(text: str, flt: str) -> str:
+        kind, _, rx = flt.strip().partition(" ")
+        pat = re.compile(rx.strip())
+        lines = text.splitlines()
+        if kind in ("include", "inc", "i"):
+            return "\n".join(l for l in lines if pat.search(l))
+        if kind in ("exclude", "exc", "e"):
+            return "\n".join(l for l in lines if not pat.search(l))
+        if kind in ("begin", "beg", "b"):
+            for i, l in enumerate(lines):
+                if pat.search(l):
+                    return "\n".join(lines[i:])
+            return ""
+        if kind in ("section", "sec", "s"):
+            out, block = [], []
+            for l in lines + ["!"]:
+                if l and not l.startswith(" "):
+                    if block and any(pat.search(b) for b in block):
+                        out += block
+                    block = [] if l.startswith("!") else [l]
+                elif block:
+                    block.append(l)
+            return "\n".join(out)
+        raise ValueError(f"Filter {kind} nicht nachgebildet")
+
+    # ---- Befehle ----
+
+    def show(self, cmd: str) -> str:
+        parts = re.split(r"\s+\|\s+", cmd.strip())
+        base = parts[0].strip()
+        if base in ("show running-config", "show run", "sh run"):
+            try:
+                text = self.running()
+                for flt in parts[1:]:
+                    text = self._filter(text, flt)
+                return text
+            except (ValueError, re.error):
+                return self.router.show(cmd)
+        return self._status(cmd)
+
+    def _ttl(self, cmd: str) -> int:
+        return next((v for k, v in self.TTL.items() if cmd.startswith(k)), self.STATUS_TTL)
+
+    def _status(self, cmd: str, refresh: bool = False) -> str:
+        ttl = self._ttl(cmd)
+        now = time.time()
+        with self.status_lock:
+            e = self.status.get(cmd)
+            if e:
+                e["used"] = now
+            if e and not refresh and e["gen"] == self.gen and now - e["ts"] < ttl:
+                return e["out"]
+        if ttl == 0:
+            return self.router.show(cmd)
+        gen = self.gen
+        out = self.router.show(cmd)
+        with self.status_lock:
+            self.status[cmd] = {"out": out, "ts": time.time(), "gen": gen,
+                                "used": (e or {}).get("used", now) if refresh else now}
+        return out
+
+    def show_live(self, cmd: str) -> str:
+        return self.router.show(cmd)
+
+    def invalidate(self) -> None:
+        self.gen += 1
+
+    def configure(self, lines: list[str]) -> str:
+        try:
+            return self.router.configure(lines)
+        finally:
+            self.invalidate()
+
+    def save(self) -> str:
+        return self.router.save()
+
+    def _warm(self) -> None:
+        time.sleep(2)
+        while True:
+            try:
+                if time.time() - self.run_ts > self.RUN_REFRESH or self.run_gen != self.gen:
+                    with self.run_lock:
+                        gen = self.gen
+                        out = self.router.show("show running-config")
+                        self.run, self.run_ts, self.run_gen = out, time.time(), gen
+                now = time.time()
+                with self.status_lock:
+                    due = [c for c, e in self.status.items() if now - e["used"] < self.KEEP_WARM
+                           and self._ttl(c) > 0 and now - e["ts"] > self._ttl(c) * 0.6]
+                for c in due:
+                    self._status(c, refresh=True)
+            except Exception as e:
+                print(f"Router-Cache: {type(e).__name__}: {e}", flush=True)
+            time.sleep(5)
+
+
 class DemoRouter:
     """Spielt einen Router mit Beispieldaten nach, zum Ausprobieren der Oberflaeche."""
 
@@ -792,18 +926,40 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                 "templates": [templates[k] for k in sorted(templates, key=int)],
                 "errors": errors, "ts": time.time()}
 
-    def get_status(force=False) -> dict:
+    def refresh_status() -> None:
         with cache_lock:
-            if force or not state["cache"] or time.time() - state["cache_ts"] > 10:
-                state["cache"] = collect()
-                state["cache_ts"] = time.time()
-            return {**state["cache"], "dirty": state["dirty"]}
+            state["cache"] = collect()
+            state["cache_ts"] = time.time()
+            state["stale"] = False
+
+    def refresh_background() -> None:
+        try:
+            refresh_status()
+        except Exception:
+            pass
+        finally:
+            state["refreshing"] = False
+
+    def get_status(force=False) -> dict:
+        # Nach einer Aenderung (stale) oder beim ersten Mal sofort lesen; sonst den letzten Stand liefern
+        # und im Hintergrund auffrischen, wenn er aelter als 10 s ist.
+        if force or not state["cache"] or state.get("stale"):
+            refresh_status()
+        elif time.time() - state["cache_ts"] > 10 and not state.get("refreshing"):
+            state["refreshing"] = True
+            threading.Thread(target=refresh_background, daemon=True).start()
+        return {**state["cache"], "dirty": state["dirty"]}
+
+    if not isinstance(router, DemoRouter):
+        # Beim Start schon einmal alles lesen, damit der erste Seitenaufruf nicht wartet
+        state["refreshing"] = True
+        threading.Thread(target=refresh_background, daemon=True).start()
 
     def apply(lines: list[str]) -> dict:
         out = router.configure(lines)
         errs = config_errors(out)
         state["dirty"] = True
-        state["cache_ts"] = 0
+        state["stale"] = True
         return {"ok": not errs, "error": "\n".join(errs) if errs else None, "config": lines,
                 "output": out}
 
@@ -1465,7 +1621,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         cmd = request.args.get("cmd", "")
         if cmd not in RAW_COMMANDS:
             raise InputError("Befehl nicht erlaubt")
-        return jsonify(ok=True, output=router.show(cmd))
+        return jsonify(ok=True, output=getattr(router, "show_live", router.show)(cmd))
 
     return app
 
@@ -1504,6 +1660,8 @@ def main():
             # Nicht abbrechen: im Container wuerde das sonst eine Neustart-Schleife ausloesen.
             # Die Oberflaeche zeigt den Fehler an und versucht es beim naechsten Laden erneut.
             print(f"Warnung: Router nicht erreichbar ({type(e).__name__}: {e})", flush=True)
+        # Konfiguration und Status zwischenspeichern und im Hintergrund frisch halten
+        router = CachedRouter(router)
 
     app = create_app(router, web_user, web_pass)
     auth = app.config["AUTH"]
