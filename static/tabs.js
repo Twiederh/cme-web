@@ -43,7 +43,7 @@
   // static/firmware.js, static/phonecfg.js, static/queues.js, static/vvm.js und static/phonebook.js fuellen sie
   for (const [id, src] of [["firmware-card", "/static/firmware.js"], ["phonecfg-card", "/static/phonecfg.js"],
                            ["queue-card", "/static/queues.js"], ["vvm-card", "/static/vvm.js"],
-                           ["phonebook-card", "/static/phonebook.js"]]) {
+                           ["phonebook-card", "/static/phonebook.js"], ["users-card", "/static/users.js"]]) {
     if (document.getElementById(id)) continue;
     const c = document.createElement("section");
     c.className = "card";
@@ -63,7 +63,8 @@
     { id: "voicemail", label: "Voicemail, IVR & Warteschlangen", parts: [top("#voicemail-card"), top("#vvm-card"), top("#queue-card")] },
     { id: "phonebook", label: "Telefonbuch", parts: [top("#phonebook-card")] },
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },
-    { id: "user", label: "Benutzereinstellungen", parts: [top("#walls")] },
+    { id: "user", label: "Hintergründe & Klingeltöne", parts: [top("#walls")] },
+    { id: "users", label: "Benutzer", parts: [top("#users-card")] },
   ];
 
   const nav = document.createElement("nav");
