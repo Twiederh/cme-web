@@ -30,7 +30,7 @@ done
 for f in queues.conf musiconhold.conf; do
   [ -e "/etc/asterisk/cme/$f" ] || : > "/etc/asterisk/cme/$f"
 done
-mkdir -p /etc/asterisk/cme/sounds /etc/asterisk/cme/moh /var/spool/asterisk/voicemail/fax
+mkdir -p /etc/asterisk/cme/sounds /etc/asterisk/cme/moh /var/spool/asterisk/voicemail/fax/out
 
 for src in /opt/cme-asterisk/*.conf; do
   sed -e "s|@HOST_IP@|${HOST_IP}|g" -e "s|@CME_IP@|${CME_IP}|g" \

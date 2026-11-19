@@ -6,9 +6,9 @@ ENV PYTHONUNBUFFERED=1 \
     CME_WEB_PORT=8080
 
 WORKDIR /app
-# ffmpeg rechnet hochgeladene Klingeltoene ins Cisco-Format um
+# ffmpeg rechnet hochgeladene Klingeltoene ins Cisco-Format um, Ghostscript PDFs in Fax-TIFFs
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends ffmpeg ghostscript \
  && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install -r requirements.txt \
