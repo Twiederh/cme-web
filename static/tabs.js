@@ -39,12 +39,22 @@
     s.src = "/static/e164.js";
     document.body.appendChild(s);
   }
+  // Karte fuer die Telefon-Firmware (Tab Telefone); static/firmware.js fuellt sie
+  if (!document.getElementById("firmware-card")) {
+    const c = document.createElement("section");
+    c.className = "card";
+    c.id = "firmware-card";
+    main.appendChild(c);
+    const s = document.createElement("script");
+    s.src = "/static/firmware.js";
+    document.body.appendChild(s);
+  }
 
   const TABS = [
     { id: "overview", label: "Übersicht",
       parts: [top(".kpis"), devices, top("#t-trunks"), top("#raw-out")] },
     { id: "phones", label: "Telefone & Rufnummern",
-      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs")] },
+      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#firmware-card")] },
     { id: "translation", label: "Übersetzungen", parts: [top("#translation-card"), top("#e164-card")] },
     { id: "voicemail", label: "Voicemail, Fax & IVR", parts: [top("#voicemail-card")] },
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },

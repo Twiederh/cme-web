@@ -496,3 +496,7 @@ def register(app, router, apply) -> None:
                 res.update(ok=False, error="Der Router hat das Absender-Routing nicht wie gewünscht übernommen."
                                            + (f" Ausgabe des Routers:\n\n{tail_out}" if tail_out else ""))
         return reply(res)
+
+    # Telefon-Firmware (firmware.py, Tab Telefone)
+    import firmware
+    firmware.register(app, router, apply)
