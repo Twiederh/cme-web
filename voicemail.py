@@ -624,6 +624,10 @@ def register(app, router, apply, demo: bool) -> None:
         to = "Old" if folder == "INBOX" else "INBOX"
         return jsonify(msg_action(box, folder, file, {"Action": "VoicemailMove", "ToFolder": to}))
 
+    # fuer die Benutzerseite (portal.py)
+    app.config["VOICEMAIL"] = {"settings": settings, "numbers": numbers, "mbid": mbid, "enabled": enabled,
+                               "messages": lambda box: named(list_messages(spool, box))}
+
     # Fax-Empfang und Sprachmenues (vmapps.py) nutzen denselben Asterisk
     import vmapps
     vmapps.register(app, router, apply, demo, {
@@ -640,3 +644,7 @@ def register(app, router, apply, demo: bool) -> None:
     vvm.register(app, router, demo, {
         "spool": spool, "list_messages": lambda sp, box: named(list_messages(sp, box)), "msg_action": msg_action,
         "settings": settings, "mbid": mbid, "host_ip": host_ip, "enabled": enabled})
+
+    # Benutzerseite und Rechte (Administration / Benutzer)
+    import portal
+    portal.register(app, router, demo, cfgdir)
