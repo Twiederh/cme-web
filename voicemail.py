@@ -41,6 +41,16 @@ class VMError(ValueError):
     pass
 
 
+def vm_key(number: str) -> str:
+    """Vergleichsform einer Anrufernummer fuer die Fernabfrage (wie cme-normkey im Asterisk-Dialplan):
+    nur Ziffern, ohne fuehrende Nullen, ohne 49 bei deutschen Nummern mit Laendervorwahl.
+    001796907106, 01796907106, +491796907106 -> 1796907106"""
+    k = re.sub(r"\D", "", number or "").lstrip("0")
+    if k.startswith("49") and len(k) >= 12:
+        k = k[2:]
+    return k
+
+
 # --------------------------------------------------------------------------
 # AMI
 # --------------------------------------------------------------------------
@@ -256,7 +266,9 @@ def register(app, router, apply, demo: bool) -> None:
             "mailboxes.conf": "\n".join(mb_lines) + "\n",
             "pjsip_mwi.conf": "\n".join(mwi) + "\n",
             "vm_general.conf": f"maxmsg={int(s['maxmsg'])}\nmaxsecs={int(s['maxsecs'])}\nminsecs=2\ntz=european\n",
-            "globals.conf": f"VM_PILOT={s['pilot']}\nVM_MAIN_OPTS={'s' if s['skip_pin'] else ''}\n",
+            "globals.conf": f"VM_PILOT={s['pilot']}\nVM_MAIN_OPTS={'s' if s['skip_pin'] else ''}\n" + "".join(
+                f"VMR_{vm_key(r)}={mbid(number)}\nVMRP_{vm_key(r)}={0 if b.get('remote_pin') is False else 1}\n"
+                for number, b in sorted(boxes.items()) for r in b.get("remote", [])),
             "cme-voicemail.json": json.dumps(s, indent=2),
         }
         try:
@@ -388,6 +400,7 @@ def register(app, router, apply, demo: bool) -> None:
             boxes.append({"tag": n["tag"], "number": n["number"], "name": n["name"], "enabled": bool(b),
                           "pin": (b or {}).get("pin", ""), "timeout": (b or {}).get("timeout", 20),
                           "busy": (b or {}).get("busy", True), "email": (b or {}).get("email", ""),
+                          "remote": (b or {}).get("remote", []), "remote_pin": (b or {}).get("remote_pin", True),
                           "id": mbid(n["number"]),
                           "cme": dn, "new": sum(m["folder"] == "INBOX" for m in msgs),
                           "old": sum(m["folder"] == "Old" for m in msgs), "messages": msgs})
@@ -536,7 +549,26 @@ def register(app, router, apply, demo: bool) -> None:
             email = str(d.get("email") or "").strip()
             if email and not RE_EMAIL.match(email):
                 raise VMError("Ungueltige E-Mail-Adresse.")
-            b = {"pin": pin, "timeout": timeout, "busy": bool(d.get("busy")), "email": email}
+            remote = []
+            raw = d.get("remote") or []
+            if isinstance(raw, str):
+                raw = re.split(r"[,;\n]+", raw)
+            own = {mbid(x["number"]) for x in nums}
+            taken = {vm_key(r): k for k, mb in s["mailboxes"].items() if k != n["number"] for r in mb.get("remote", [])}
+            for r in raw:
+                r = re.sub(r"[\s/()-]", "", str(r))
+                if not r:
+                    continue
+                if not RE_NUM.match(r) or len(vm_key(r)) < 6:
+                    raise VMError(f"Fernabfrage: {r} ist keine vollständige externe Rufnummer.")
+                if mbid(r) in own:
+                    raise VMError(f"Fernabfrage: {r} ist eine interne Rufnummer.")
+                if vm_key(r) in taken:
+                    raise VMError(f"Fernabfrage: {r} gehört schon zum Postfach {taken[vm_key(r)]}.")
+                if vm_key(r) not in {vm_key(x) for x in remote}:
+                    remote.append(r)
+            b = {"pin": pin, "timeout": timeout, "busy": bool(d.get("busy")), "email": email,
+                 "remote": remote, "remote_pin": d.get("remote_pin", True) is not False}
             s["mailboxes"][n["number"]] = b
         else:
             b = None
