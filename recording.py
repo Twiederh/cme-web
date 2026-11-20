@@ -619,6 +619,39 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
 
     app.config.setdefault("PHONE_MENU", []).append(phone_menu_item)
 
+    # ---------------- Benutzerseite (portal.py) ----------------
+
+    def rec_numbers(m: dict) -> set[str]:
+        nums = {m.get("internal", ""), m.get("external", "")} | {p.get("number", "") for p in m.get("parties") or []}
+        return {n for n in nums if n}
+
+    def matches(m: dict, nums: list[str]) -> bool:
+        """Gehoert die Aufnahme zu einer der Rufnummern? Kurze Nummern exakt, lange ueber die letzten 8 Ziffern."""
+        mine = {n for n in nums if n}
+        long_tails = {tail(n) for n in mine if len(re.sub(r"\D", "", n)) >= 8}
+        for n in rec_numbers(m):
+            if n in mine or (len(re.sub(r"\D", "", n)) >= 8 and tail(n) in long_tails):
+                return True
+        return False
+
+    def user_recordings(nums: list[str], limit: int = 200) -> list[dict]:
+        if not nums:
+            return []
+        keep = ("id", "start", "duration", "direction", "internal", "external", "parties", "channels", "partial",
+                "transcript", "transcript_status")
+        return [{k: m.get(k) for k in keep} for m in recordings(limit=5000) if matches(m, nums)][:limit]
+
+    def user_may(rid: str, nums: list[str]) -> bool:
+        if not RE_ID.match(rid):
+            return False
+        try:
+            m = json.loads((recdir / f"{rid}.json").read_text())
+        except (OSError, ValueError):
+            return False
+        return matches(m, nums)
+
+    app.config["RECORDING"] = {"enabled": lambda: bool(ctx["enabled"]), "list": user_recordings, "may": user_may}
+
     # Asterisk-Datei beim Start anlegen (z. B. nach einem Update)
     if ctx["enabled"] and not (cfgdir / "extensions_rec.conf").exists():
         try:
