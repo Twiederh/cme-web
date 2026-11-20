@@ -1,19 +1,17 @@
 """
 locales.py - Sprachpakete fuer die Telefone (Tab "Telefone & Rufnummern")
 
-Nimmt das Locale-Paket von Cisco an (z. B. CME-locale-de_DE-German_Germany-14.1.14.1.tar), laedt die
-Dateien per SCP nach <CME_MEDIA_DIR>/locale/<Sprache>/ und setzt fuer jede Datei einen tftp-server-Alias:
+Das Locale-Paket von Cisco (z. B. CME-locale-de_DE-German-8.6.3.0.tar) wird unveraendert per SCP nach
+<CME_MEDIA_DIR>/ (Standard bootflash:/its) kopiert und vom Locale-Installer des Routers ausgepackt:
 
-  Dateien in Unterordnern des Pakets   -> Alias = Pfad im Paket (z. B. German_Germany/...)
-  lose Dateien *-tones.xml             -> <Land>/<datei>          (Netz-Locale: Toene, z. B. Germany/)
-  andere lose Dateien                  -> <Sprache_Land>/<datei>  (User-Locale: Texte, z. B. German_Germany/)
+  voice register global
+   user-locale <tag> DE load bootflash:/its/CME-locale-de_DE-....tar
+   network-locale <tag> DE
+   create profile
+  voice register pool <n> / reset          (optional)
 
-Danach laesst sich die Sprache fuer alle SIP-Telefone einschalten:
-
-  voice register global / user-locale DE / network-locale DE / create profile   (+ optional reset)
-
-Hochladen laeuft im Hintergrund wie bei der Firmware. Wird aus features.register() eingehaengt;
-Oberflaeche: static/locales.js.
+Tag 0 ist die Standardsprache aller Telefone. Hochladen laeuft im Hintergrund wie bei der Firmware.
+Wird aus features.register() eingehaengt; Oberflaeche: static/locales.js.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from __future__ import annotations
 import os
 import posixpath
 import re
-import tarfile
 import tempfile
 import threading
 import time
@@ -33,12 +30,11 @@ from flask import jsonify, request, send_file
 import media
 
 BASE = Path(__file__).resolve().parent
-LOCALE_DIR = f"{media.DEFAULT_BASE}/locale"
+LOCALE_DIR = media.DEFAULT_BASE
 MAX_UPLOAD = 300 * 1024 * 1024
-RE_TAR = re.compile(r"^CME-locale-([a-z]{2})_([A-Z]{2})-([A-Za-z]+(?:_[A-Za-z]+)*)-([0-9.]+)\.tar$")
-RE_PART = re.compile(r"^[A-Za-z0-9_.\-]{1,96}$")
-RE_LANGDIR = re.compile(r"^[A-Z][a-z]+_[A-Z][A-Za-z_]+$")
+RE_TAR = re.compile(r"^CME-locale-([a-z]{2})_([A-Z]{2})-[A-Za-z0-9_.\-]+\.tar$")
 RE_CODE = re.compile(r"^[A-Z]{2}$")
+RE_LINE = re.compile(r"^ (user|network)-locale\s+(?:(\d)\s+)?(?:(U\d)\s+)?([A-Z]{2})(?:\s+load\s+(\S+))?\s*$")
 
 
 class LocaleError(ValueError):
@@ -46,24 +42,22 @@ class LocaleError(ValueError):
 
 
 def parse_name(filename: str) -> dict:
-    m = RE_TAR.match(posixpath.basename(filename))
+    name = posixpath.basename(filename)
+    m = RE_TAR.match(name)
     if not m:
-        raise LocaleError("Erwartet wird das Locale-Paket von Cisco, z. B. CME-locale-de_DE-German_Germany-14.1.14.1.tar.")
-    lang, cc, name, version = m.groups()
-    if "_" not in name:                      # aeltere Pakete: CME-locale-de_DE-German-8.6.tar
-        name = f"{name}_{_country_name(cc)}"
-    return {"lang": lang, "code": cc, "name": name, "country": name.split("_", 1)[1], "version": version,
-            "id": f"{name}-{version}"}
+        raise LocaleError("Erwartet wird das Locale-Paket von Cisco, z. B. CME-locale-de_DE-German-8.6.3.0.tar.")
+    return {"file": name, "lang": m.group(1), "code": m.group(2)}
 
 
-def parse_locales(glob: str) -> dict:
-    """voice register global -> {user: code, network: code}"""
-    res = {"user": "", "network": ""}
+def parse_locales(glob: str) -> list[dict]:
+    """voice register global -> [{kind, tag, code, load, line}]"""
+    out = []
     for line in glob.splitlines():
-        m = re.match(r"^ (user|network)-locale\s+(?:\d+\s+)?(?:U\d\s+)?([A-Z]{2})\b", line)
+        m = RE_LINE.match(line)
         if m:
-            res[m.group(1)] = m.group(2)
-    return res
+            out.append({"kind": m.group(1), "tag": m.group(2) or "0", "ud": m.group(3) or "",
+                        "code": m.group(4), "load": m.group(5) or "", "line": line.strip()})
+    return out
 
 
 def register(app, router, apply, demo: bool) -> None:
@@ -73,116 +67,87 @@ def register(app, router, apply, demo: bool) -> None:
     job: dict = {}
     job_lock = threading.Lock()
 
-    def aliases() -> dict[str, str]:
-        return media.parse_tftp_aliases(router.show("show running-config | include ^tftp-server"))
-
-    def installed(al: dict[str, str]) -> list[dict]:
-        """Pakete in <LOCALE_DIR>/<id>/ anhand der tftp-Aliase"""
-        out: dict[str, dict] = {}
-        for alias, path in sorted(al.items()):
-            if not path.startswith(LOCALE_DIR + "/"):
-                continue
-            pid = path[len(LOCALE_DIR) + 1:].split("/", 1)[0]
-            e = out.setdefault(pid, {"id": pid, "files": [], "dirs": set()})
-            e["files"].append({"alias": alias, "path": path})
-            if "/" in alias:
-                e["dirs"].add(alias.split("/", 1)[0])
-        res = []
-        for pid, e in sorted(out.items()):
-            m = re.match(r"^([A-Za-z]+_[A-Za-z_]+)-([0-9.]+)$", pid)
-            res.append({"id": pid, "name": m.group(1) if m else pid, "version": m.group(2) if m else "",
-                        "count": len(e["files"]), "dirs": sorted(e["dirs"]), "files": e["files"]})
-        return res
-
     def state() -> dict:
-        al = aliases()
         glob = router.show("show running-config | section voice register global")
         pools = router.show("show running-config | section voice register pool")
-        return {"locales": installed(al), "current": parse_locales(glob), "dir": LOCALE_DIR,
+        try:
+            listing = files.list_dir(LOCALE_DIR)
+        except Exception:
+            listing = {}
+        locs = parse_locales(glob)
+        used = {posixpath.basename(l["load"]) for l in locs if l["load"]}
+        tars = [{"file": n, "size": s, "path": f"{LOCALE_DIR}/{n}", "code": RE_TAR.match(n).group(2),
+                 "used": n in used} for n, s in sorted(listing.items()) if RE_TAR.match(n)]
+        return {"tars": tars, "locales": locs, "dir": LOCALE_DIR,
                 "pools": re.findall(r"^voice register pool\s+(\d+)", pools, re.M)}
+
+    def install(path: str, code: str, tag: str, network: bool, reset: bool) -> dict:
+        st = state()
+        lines = ["voice register global", f" user-locale {tag} {code} load {path}"]
+        if network:
+            lines.append(f" network-locale {tag} {code}")
+        lines.append(" create profile")
+        if reset:
+            for p in st["pools"]:
+                lines += [f"voice register pool {p}", " reset"]
+        res = apply(lines)
+        out = res.get("output") or ""
+        bad = [l.strip() for l in out.splitlines() if re.search(r"LOCALE (ERROR|INSTALLER MESSAGE)", l)]
+        if res.get("ok") and any("ERROR" in l for l in bad):
+            res.update(ok=False, error="\n".join(bad))
+        if res.get("ok") and not demo:          # der Demo-Router merkt sich voice register global nicht
+            now = parse_locales(router.show("show running-config | section voice register global"))
+            if not any(l["kind"] == "user" and l["tag"] == tag and l["code"] == code for l in now):
+                res.update(ok=False, error="Der Router hat die Sprache nicht übernommen.\n\n"
+                           + "\n".join([l for l in out.splitlines() if l.strip()][-20:]))
+        if bad and res.get("ok"):
+            res["note"] = "\n".join(bad)
+        res.pop("output", None)
+        return res
 
     # ---------------- Hochladen (Hintergrund) ----------------
 
-    def run_job(tpath: str, info: dict, jid: str) -> None:
+    def run_job(tpath: str, info: dict, opts: dict, jid: str) -> None:
         def upd(**kw):
             with job_lock:
                 if job.get("id") == jid:
                     job.update(kw)
         try:
-            with tarfile.open(tpath) as t:
-                members = [m for m in t.getmembers() if m.isfile()]
-                plan = []                      # (member, relativer Pfad, Alias)
-                names = [posixpath.normpath(m.name.lstrip("./")) for m in members]
-                # gemeinsamen Oberordner (z. B. de_DE/) weglassen, wenn er kein Locale-Ordner ist
-                tops = {n.split("/", 1)[0] for n in names}
-                strip = ""
-                if len(tops) == 1 and all("/" in n for n in names):
-                    top = tops.pop()
-                    if not RE_LANGDIR.match(top) and top != info["country"]:
-                        strip = top + "/"
-                for m, rel in zip(members, names):
-                    rel = rel[len(strip):]
-                    parts = rel.split("/")
-                    if rel.startswith("..") or any(not RE_PART.match(p) for p in parts) or len(parts) > 4:
-                        raise LocaleError(f"Unerwarteter Dateiname im Paket: {m.name}")
-                    if len(parts) > 1:
-                        alias = rel
-                    elif parts[0].endswith("-tones.xml"):
-                        alias = f"{info['country']}/{parts[0]}"
-                    else:
-                        alias = f"{info['name']}/{parts[0]}"
-                    plan.append((m, rel, alias))
-                if not plan:
-                    raise LocaleError("Das Paket ist leer.")
-                dup = {a for _, _, a in plan if sum(1 for _, _, b in plan if b == a) > 1}
-                if dup:
-                    raise LocaleError(f"Doppelte Dateien im Paket: {', '.join(sorted(dup)[:5])}")
-                total = sum(m.size for m, _, _ in plan)
-                base = f"{LOCALE_DIR}/{info['id']}"
-                upd(step="Ordner anlegen", total=total, done=0, files=len(plan))
-                done = 0
-                made: set[str] = set()
-                listing: dict[str, dict[str, int]] = {}
-                for m, rel, alias in sorted(plan, key=lambda x: x[1]):
-                    dest = f"{base}/{rel}"
-                    d, n = dest.rsplit("/", 1)
-                    if d not in made:
-                        files.mkdirs(d)
-                        made.add(d)
-                        listing[d] = files.list_dir(d)
-                    if listing[d].get(n) == m.size:
-                        done += m.size
-                        upd(step=f"{rel} ist schon da", done=done)
-                        continue
-                    upd(step=f"Lade {rel} ({max(1, m.size // 1024)} KB) …")
-                    files.upload(t.extractfile(m).read(), dest)
-                    done += m.size
-                    upd(done=done)
-            upd(step="tftp-server-Einträge setzen")
-            al = aliases()
-            cfg = []
-            for _, rel, alias in plan:
-                path = f"{base}/{rel}"
-                old = al.get(alias)
-                if old == path:
-                    continue
-                if old:
-                    cfg.append(f"no tftp-server {old} alias {alias}")
-                cfg.append(f"tftp-server {path} alias {alias}")
-            res = apply(cfg) if cfg else {"ok": True}
-            if not res.get("ok"):
-                raise LocaleError(f"tftp-server-Einträge: {res.get('error')}")
-            upd(state="done", step=f"Fertig: {info['name']} {info['version']} ({len(plan)} Dateien)",
-                ts_end=time.time())
+            data = Path(tpath).read_bytes()
+            dest = f"{LOCALE_DIR}/{info['file']}"
+            upd(total=len(data), done=0)
+            if files.list_dir(LOCALE_DIR).get(info["file"]) == len(data):
+                upd(step=f"{info['file']} ist schon im Flash", done=len(data))
+            else:
+                upd(step=f"Lade {info['file']} ({len(data) // 1024} KB) in den Flash …")
+                files.mkdirs(LOCALE_DIR)
+                files.upload(data, dest)
+                upd(done=len(data))
+            if opts.get("install"):
+                upd(step="Locale-Installer des Routers läuft …")
+                res = install(dest, info["code"], opts["tag"], opts["network"], opts["reset"])
+                if not res.get("ok"):
+                    raise LocaleError(res.get("error") or "Installation fehlgeschlagen")
+                upd(state="done", step=f"Installiert: {info['code']} (user-locale {opts['tag']})", ts_end=time.time(),
+                    note=res.get("note", ""))
+            else:
+                upd(state="done", step=f"Hochgeladen: {dest}", ts_end=time.time())
         except Exception as e:
-            msg = str(e) if isinstance(e, (LocaleError, media.MediaError, tarfile.TarError)) \
-                else f"{type(e).__name__}: {e}"
+            msg = str(e) if isinstance(e, (LocaleError, media.MediaError)) else f"{type(e).__name__}: {e}"
             upd(state="error", step="Abgebrochen", error=msg, ts_end=time.time())
         finally:
             try:
                 os.unlink(tpath)
             except OSError:
                 pass
+
+    def options(b) -> dict:
+        tag = str(b.get("tag") or "0").strip()
+        if not re.fullmatch(r"[0-4]", tag):
+            raise LocaleError("Tag: 0 bis 4 (0 = Standard für alle Telefone).")
+        return {"tag": tag, "network": str(b.get("network", "1")).lower() in ("1", "true", "on", "yes"),
+                "reset": str(b.get("reset", "")).lower() in ("1", "true", "on", "yes"),
+                "install": str(b.get("install", "1")).lower() in ("1", "true", "on", "yes")}
 
     # ---------------- API ----------------
 
@@ -212,81 +177,60 @@ def register(app, router, apply, demo: bool) -> None:
         if not f or not f.filename:
             raise LocaleError("Keine Datei.")
         info = parse_name(f.filename)
+        opts = options(request.form)
         with job_lock:
             if job.get("state") == "running":
                 raise LocaleError("Es läuft schon ein Hochladen.")
         fd, tpath = tempfile.mkstemp(suffix=".tar")
         os.close(fd)
         f.save(tpath)
-        if not tarfile.is_tarfile(tpath):
-            os.unlink(tpath)
-            raise LocaleError("Die Datei ist kein gültiges TAR-Archiv.")
         jid = uuid.uuid4().hex[:8]
         with job_lock:
             job.clear()
-            job.update(id=jid, state="running", step="Paket prüfen", file=f.filename, total=0, done=0,
-                       ts_start=time.time(), locale=info)
-        threading.Thread(target=run_job, args=(tpath, info, jid), daemon=True).start()
+            job.update(id=jid, state="running", step="Übertrage …", file=info["file"], total=0, done=0,
+                       ts_start=time.time())
+        threading.Thread(target=run_job, args=(tpath, info, opts, jid), daemon=True).start()
         return jsonify(ok=True, job=dict(job))
 
-    @app.post("/api/locales/activate")
-    def loc_activate():
-        """Body: {user: "DE"|"", network: "DE"|"", reset: bool}"""
+    @app.post("/api/locales/install")
+    def loc_install():
+        """Body: {file, tag, network, reset} - schon im Flash liegendes Paket installieren"""
         b = request.get_json(force=True) or {}
-        user, net = str(b.get("user") or "").strip().upper(), str(b.get("network") or "").strip().upper()
-        for c in (user, net):
-            if c and not RE_CODE.match(c):
-                raise LocaleError("Ländercode: zwei Buchstaben, z. B. DE.")
+        info = parse_name(str(b.get("file") or ""))
+        opts = options(b)
         st = state()
-        cur = st["current"]
-        lines = ["voice register global"]
-        for kind, want in (("user", user), ("network", net)):
-            if want == cur[kind]:
-                continue
-            if want:
-                lines.append(f" {kind}-locale {want}")
-            else:
-                lines.append(f" no {kind}-locale {cur[kind]}")
-        if len(lines) == 1:
-            return jsonify(ok=True, config=[], unchanged=True)
-        lines.append(" create profile")
+        tar = next((t for t in st["tars"] if t["file"] == info["file"]), None)
+        if not tar:
+            raise LocaleError(f"{info['file']} liegt nicht in {LOCALE_DIR}.")
+        res = install(tar["path"], info["code"], opts["tag"], opts["network"], opts["reset"])
+        return jsonify(res), (200 if res.get("ok") else 400)
+
+    @app.post("/api/locales/remove")
+    def loc_remove():
+        """Body: {kind, tag, reset} - Sprache/Toene fuer einen Tag zuruecknehmen (Englisch/USA)"""
+        b = request.get_json(force=True) or {}
+        kind, tag = str(b.get("kind") or ""), str(b.get("tag") or "")
+        st = state()
+        cur = next((l for l in st["locales"] if l["kind"] == kind and l["tag"] == tag), None)
+        if not cur:
+            raise LocaleError("Diese Einstellung gibt es nicht.")
+        ud = f"{cur['ud']} " if cur["ud"] else ""
+        lines = ["voice register global", f" no {kind}-locale {cur['tag']} {ud}{cur['code']}", " create profile"]
         if b.get("reset"):
             for p in st["pools"]:
                 lines += [f"voice register pool {p}", " reset"]
         res = apply(lines)
-        if res.get("ok"):
-            now = parse_locales(router.show("show running-config | section voice register global"))
-            if (now["user"], now["network"]) != (user, net):
-                res.update(ok=False, error="Der Router hat die Sprache nicht übernommen.\n\n"
-                           + "\n".join([l for l in (res.get("output") or "").splitlines() if l.strip()][-20:]))
         res.pop("output", None)
         return jsonify(res), (200 if res.get("ok") else 400)
 
-    @app.delete("/api/locales/<pid>")
-    def loc_delete(pid):
-        if not re.fullmatch(r"[A-Za-z0-9_.\-]{1,80}", pid):
-            raise LocaleError("Ungültiges Paket.")
+    @app.delete("/api/locales/<name>")
+    def loc_delete(name):
+        info = parse_name(name)
         st = state()
-        loc = next((l for l in st["locales"] if l["id"] == pid), None)
-        if not loc:
-            raise LocaleError(f"Paket {pid} nicht gefunden.")
-        in_use = [k for k in ("user", "network")
-                  if st["current"][k] and loc["name"].endswith("_" + _country_name(st["current"][k]))]
-        if in_use and len([l for l in st["locales"] if l["name"] == loc["name"]]) == 1:
-            raise LocaleError("Die Sprache ist noch eingeschaltet – zuerst auf Standard zurückstellen.")
-        cfg = [f"no tftp-server {f['path']} alias {f['alias']}" for f in loc["files"]]
-        res = apply(cfg) if cfg else {"ok": True, "error": None, "config": []}
-        if res.get("ok"):
-            d = f"{LOCALE_DIR}/{pid}"
-            if demo:
-                for p in [p for p in router.files if p.startswith(d + "/")]:
-                    router.files.pop(p, None)
-            else:
-                raw._do(lambda c: c.send_command_timing(f"delete /force /recursive {d}", read_timeout=120))
-        res.pop("output", None)
-        return jsonify(res), (200 if res.get("ok") else 400)
-
-
-def _country_name(code: str) -> str:
-    return {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "FR": "France", "IT": "Italy",
-            "ES": "Spain", "NL": "Netherlands", "GB": "United_Kingdom", "US": "United_States"}.get(code, code)
+        tar = next((t for t in st["tars"] if t["file"] == info["file"]), None)
+        if not tar:
+            raise LocaleError("Datei nicht gefunden.")
+        if tar["used"]:
+            raise LocaleError("Das Paket ist noch per user-locale … load eingetragen – zuerst die Sprache entfernen.")
+        files.delete(tar["path"])
+        return jsonify(ok=True)
