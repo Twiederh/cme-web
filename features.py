@@ -834,3 +834,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             if res.get("ok"):
                 save(d)
         return reply(res)
+
+    # Sprachpakete fuer die Telefone (locales.py)
+    import locales
+    locales.register(app, router, apply, demo)

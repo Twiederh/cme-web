@@ -270,4 +270,11 @@
   });
 
   loadPickup(); loadCor(); loadAutoreg(); loadConf();
+
+  // Sprachpakete (static/locales.js) im selben Tab
+  if (!document.getElementById("locale-card")) {
+    const s = document.createElement("script");
+    s.src = "/static/locales.js";
+    document.body.appendChild(s);
+  }
 })();
