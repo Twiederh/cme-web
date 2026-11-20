@@ -234,3 +234,7 @@ def register(app, router, apply, demo: bool) -> None:
             raise LocaleError("Das Paket ist noch per user-locale … load eingetragen – zuerst die Sprache entfernen.")
         files.delete(tar["path"])
         return jsonify(ok=True)
+
+    # Sicherung und Wiederherstellung (backup.py) nutzt dieselben Dateifunktionen
+    import backup
+    backup.register(app, router, apply, demo)

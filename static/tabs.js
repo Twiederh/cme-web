@@ -66,6 +66,16 @@
     s.src = "/static/features.js";
     document.body.appendChild(s);
   }
+  // Sicherung und Umzug auf einen neuen Router (Tab Sicherung): static/backup.js
+  if (!document.getElementById("backup-card")) {
+    const c = document.createElement("section");
+    c.className = "card";
+    c.id = "backup-card";
+    main.appendChild(c);
+    const s = document.createElement("script");
+    s.src = "/static/backup.js";
+    document.body.appendChild(s);
+  }
 
   const TABS = [
     { id: "overview", label: "Übersicht",
@@ -78,6 +88,7 @@
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },
     { id: "user", label: "Hintergründe & Klingeltöne", parts: [top("#walls")] },
     { id: "users", label: "Benutzer", parts: [top("#users-card")] },
+    { id: "backup", label: "Sicherung", parts: [top("#backup-card")] },
   ];
 
   const nav = document.createElement("nav");
