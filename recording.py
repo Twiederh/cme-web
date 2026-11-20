@@ -79,12 +79,19 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         out = ["; Von cme-web erzeugt (Aufzeichnung) - Aenderungen hier gehen verloren.", "",
                "; Eingehende Gespraeche mit vorangestellter Nummer: Hinweis abspielen, dann zur Nummer",
                "[cme-recnotice]",
-               f"exten => _{p}X.,1,Verbose(1,Aufzeichnungshinweis fuer ${{EXTEN:{len(p)}}} von ${{CALLERID(num)}})",
-               " same => n,Set(CHANNEL(tonezone)=de)"]
+               f"exten => _{p}X.,1,Set(RNUM=${{EXTEN:{len(p)}}})",
+               " same => n,Goto(cme-recnotice-run,s,1)"]
+        # Rufnummern mit + (z. B. +4961872024990): der Router setzt 8199 vor die Ziffern ohne +,
+        # Asterisk stellt das + beim Weiterverbinden wieder voran
+        for n in sorted({x for x in s.get("internal") or [] if x.startswith("+") and x[1:].isdigit()}):
+            out += [f"exten => {p}{n[1:]},1,Set(RNUM={n})", " same => n,Goto(cme-recnotice-run,s,1)"]
+        out += ["", "[cme-recnotice-run]",
+                "exten => s,1,Verbose(1,Aufzeichnungshinweis fuer ${RNUM} von ${CALLERID(num)})",
+                " same => n,Set(CHANNEL(tonezone)=de)"]
         if s.get("notice") and notice_wav.exists():
             out += [" same => n,Progress()", " same => n,Wait(0.3)",
                     f" same => n,Playback({notice_wav.with_suffix('')},noanswer)"]
-        out += [f" same => n,Dial(PJSIP/${{EXTEN:{len(p)}}}@cme,180,r)", " same => n,Hangup()"]
+        out += [" same => n,Dial(PJSIP/${RNUM}@cme,180,r)", " same => n,Hangup()"]
         return "\n".join(out) + "\n"
 
     def save(s: dict, refresh: bool = True) -> None:
@@ -654,8 +661,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
 
     app.config["RECORDING"] = {"enabled": lambda: bool(ctx["enabled"]), "list": user_recordings, "may": user_may}
 
-    # Asterisk-Datei beim Start anlegen (z. B. nach einem Update)
-    if ctx["enabled"] and not (cfgdir / "extensions_rec.conf").exists():
+    # Asterisk-Datei beim Start neu schreiben (z. B. nach einem Update)
+    if ctx["enabled"]:
         try:
             save(settings(), refresh=False)
         except Exception:
