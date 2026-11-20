@@ -6,7 +6,11 @@ Router:  media profile recorder / media class ... siprec an den gewaehlten Trunk
          Dial-Peer fuer Anrufe von Asterisk (incoming uri via), damit Gespraeche ueber Asterisk
          nicht doppelt aufgezeichnet werden,
          optional Dial-Peer <prefix>T -> Asterisk fuer die Ansage vor eingehenden Gespraechen.
-Asterisk: cme/extensions_rec.conf mit [cme-recnotice]: Ansage als Early Media, dann zur Nummer.
+         Ansage automatisch: fuer jeden aufgezeichneten eingehenden Dial-Peer eine Kopie seines
+         translation-profile incoming (Name <profil>-rec, Regelsatz 8190-8299), deren called-Regeln die
+         Vorwahl voranstellen; der Dial-Peer wird auf die Kopie umgestellt (Ausschalten stellt ihn zurueck).
+Asterisk: cme/extensions_rec.conf mit [cme-recnotice]: Ansage als Early Media, dann zur Nummer
+          (Fax-Nummern ohne Ansage, IVR/Konferenz/Warteschlange direkt in Asterisk).
 Recorder: liest cme-recording.json (Einstellungen, interne und eigene Rufnummern),
           schreibt Aufnahmen und .status.json nach VM_REC_DIR.
 Ein/Aus waehrend des Gespraechs: .control.json in VM_REC_DIR (Weboberflaeche und Telefondienst /ipphone/rec);
@@ -26,6 +30,8 @@ from pathlib import Path
 
 from flask import Response, jsonify, request, send_file
 
+import translation as _tr
+
 RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 RE_NUM = re.compile(r"^\+?[0-9]{1,32}$")
 RE_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
@@ -34,6 +40,9 @@ REC_PATTERN = "89990001"          # Rufnummer des Recorders (nur fuer die SIP-An
 REC_DESC = "Aufzeichnung (cme-recorder)"
 AST_DESC = "Von Asterisk (cme-web)"
 NOTICE_DESC = "Aufzeichnungshinweis (Asterisk)"
+NOTICE_SUFFIX = "-rec"               # Kopie des Uebersetzungsprofils mit Vorwahl
+NOTICE_DEFAULT = "cme-rec-in"        # Kopie fuer Dial-Peers ohne eigenes Profil
+NOTICE_RULES = range(8190, 8300)     # Regelsaetze der Kopien
 DEFAULT_NOTICE = ("Dieses Gespräch wird aufgezeichnet. Wenn Sie damit nicht einverstanden sind, "
                   "beenden Sie bitte jetzt den Anruf.")
 
@@ -85,12 +94,22 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         # Asterisk stellt das + beim Weiterverbinden wieder voran
         for n in sorted({x for x in s.get("internal") or [] if x.startswith("+") and x[1:].isdigit()}):
             out += [f"exten => {p}{n[1:]},1,Set(RNUM={n})", " same => n,Goto(cme-recnotice-run,s,1)"]
+        # Faxe ohne Ansage (die wuerde die Faxuebertragung stoeren)
+        try:
+            faxes = [f["number"] for f in json.loads((cfgdir / "cme-apps.json").read_text()).get("fax", [])]
+        except (FileNotFoundError, ValueError):
+            faxes = []
+        for n in sorted(set(faxes)):
+            out += [f"exten => {p}{n.lstrip('+')},1,Goto(cme-numbers,{n},1)"]
         out += ["", "[cme-recnotice-run]",
                 "exten => s,1,Verbose(1,Aufzeichnungshinweis fuer ${RNUM} von ${CALLERID(num)})",
                 " same => n,Set(CHANNEL(tonezone)=de)"]
         if s.get("notice") and notice_wav.exists():
             out += [" same => n,Progress()", " same => n,Wait(0.3)",
                     f" same => n,Playback({notice_wav.with_suffix('')},noanswer)"]
+        # Sprachmenue, Konferenz, Warteschlange: gleich in Asterisk weiter, sonst zurueck an CME
+        for c in ("cme-numbers", "cme-conf", "cme-queues"):
+            out.append(f" same => n,GotoIf(${{DIALPLAN_EXISTS({c},${{RNUM}},1)}}?{c},${{RNUM}},1)")
         out += [" same => n,Dial(PJSIP/${RNUM}@cme,180,r)", " same => n,Hangup()"]
         return "\n".join(out) + "\n"
 
@@ -122,7 +141,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             m = re.match(r"^dial-peer voice (\d+) (\w+)", line)
             if m:
                 cur = {"tag": m.group(1), "kind": m.group(2), "desc": "", "pattern": "", "target": "",
-                       "media_class": "", "incoming": "", "codec": ""}
+                       "media_class": "", "incoming": "", "codec": "", "tp_in": ""}
                 res.append(cur)
                 continue
             if cur is None or not line.startswith(" "):
@@ -141,6 +160,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                 cur["incoming"] = (cur["incoming"] + ", " if cur["incoming"] else "") + t[9:]
             elif t.startswith("voice-class codec "):
                 cur["codec"] = t.split()[2]
+            elif t.startswith("translation-profile incoming "):
+                cur["tp_in"] = t.split()[2]
         return res
 
     def parse_media(out: str) -> tuple[dict, dict]:
@@ -204,6 +225,103 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                 "codec": rec["codec"] if rec else "", "uri": uri,
                 "configured": bool(rec and mclass and classes[mclass]["siprec"])}
 
+    # ---------------- Ansage: Vorwahl per Kopie des eingehenden Uebersetzungsprofils ----------------
+
+    def notice_rules(prefix: str, base: list[dict]) -> list[dict]:
+        """called-Regeln des Originals mit Vorwahl vor dem Ergebnis (+ entfaellt, Asterisk setzt es wieder)."""
+        out = []
+        for r in base:
+            r = dict(r)
+            if not r["reject"]:
+                rp = r["replace"]
+                rp = rp[2:] if rp.startswith("\\+") else (rp[1:] if rp.startswith("+") else rp)
+                if rp and not rp.startswith(prefix):      # schon von Hand vorangestellt: so lassen
+                    r["replace"] = prefix + rp
+            out.append(r)
+        nxt = max([r["prec"] for r in out] + [0]) + 1
+        # alles, was keine Regel trifft, bekommt die Vorwahl ebenfalls
+        for match in (r"^\+\(.*\)", r"^\(.*\)"):
+            if nxt <= 15:
+                out.append({"prec": nxt, "reject": False, "match": match, "replace": prefix + r"\1",
+                            "type_from": "", "type_to": "", "plan_from": "", "plan_to": ""})
+                nxt += 1
+        return out
+
+    def notice_lines(prefix: str, peers: list[dict], recorded: set[str], enable: bool, tr_out: str) -> list[str]:
+        """Befehle, damit die aufgezeichneten eingehenden Dial-Peers (ohne session target) die Kopie nutzen."""
+        rules, profiles = _tr.parse_translation(tr_out)
+
+        def ours(name: str) -> bool:
+            pr = profiles.get(name)
+            if not pr or not (name.endswith(NOTICE_SUFFIX) or name == NOTICE_DEFAULT):
+                return False
+            t = pr["translate"].get("called", "")
+            return t.isdigit() and int(t) in NOTICE_RULES
+
+        def orig_of(name: str) -> str:
+            return "" if name == NOTICE_DEFAULT else name[:-len(NOTICE_SUFFIX)]
+
+        want, peer_lines = {}, []
+        for p in peers:
+            if p["kind"] != "voip" or p["target"] or not p["incoming"]:
+                continue                      # nur eingehende Dial-Peers
+            cur = p["tp_in"]
+            orig = orig_of(cur) if ours(cur) else cur
+            if enable and p["tag"] in recorded:
+                copy = f"{orig}{NOTICE_SUFFIX}" if orig else NOTICE_DEFAULT
+                if len(copy) > 30:
+                    raise RecError(f"Profilname {copy} ist zu lang (Dial-Peer {p['tag']}).")
+                want[copy] = orig
+                if cur != copy:
+                    peer_lines += [f"dial-peer voice {p['tag']} voip", f" translation-profile incoming {copy}"]
+            elif ours(cur):
+                peer_lines += [f"dial-peer voice {p['tag']} voip",
+                               f" translation-profile incoming {orig}" if orig else f" no translation-profile incoming {cur}"]
+        used = {int(t) for t in rules}
+        rule_lines, prof_lines = [], []
+        for copy, orig in sorted(want.items()):
+            op = profiles.get(orig, {"translate": {}}) if orig else {"translate": {}}
+            base = rules.get(op["translate"].get("called", ""), {}).get("rules", [])
+            new = notice_rules(prefix, base)
+            have = profiles.get(copy) if ours(copy) else None
+            rtag = have["translate"]["called"] if have else None
+            if not rtag:
+                free = next((t for t in NOTICE_RULES if t not in used), None)
+                if free is None:
+                    raise RecError("Kein freier Regelsatz (8190-8299) fuer die Ansage.")
+                used.add(free)
+                rtag = str(free)
+            rl = _tr.ruleset_lines(rtag, new, rules.get(rtag, {}).get("rules"))
+            if len(rl) > 1:
+                rule_lines += rl
+            tw = {k: v for k, v in op["translate"].items() if k != "called"}
+            tw["called"] = rtag
+            th = (have or {}).get("translate", {})
+            if copy in profiles and not have:
+                raise RecError(f"Es gibt schon ein Uebersetzungsprofil {copy}, das nicht von cme-web ist.")
+            pl = [f" no translate {k}" for k in th if k not in tw]
+            pl += [f" translate {k} {v}" for k, v in tw.items() if th.get(k) != v]
+            if pl:
+                prof_lines += [f"voice translation-profile {copy}"] + pl
+        cleanup = []
+        for name in sorted(profiles):
+            if ours(name) and name not in want:
+                cleanup += [f"no voice translation-profile {name}",
+                            f"no voice translation-rule {profiles[name]['translate']['called']}"]
+        return rule_lines + prof_lines + peer_lines + cleanup
+
+    def notice_router(s: dict, enable: bool | None = None) -> list[str]:
+        """Befehle fuer die Ansage am Router passend zu den aktuell aufgezeichneten Dial-Peers."""
+        if demo:
+            return []
+        st = router_state(s)
+        peers = parse_peers(router.show("show running-config | section dial-peer voice"))
+        recorded = {p["tag"] for p in st["peers"] if p["recorded"]}
+        # nur mit Dial-Peer <vorwahl>T zu Asterisk, sonst liefen die Anrufe ins Leere
+        on = (bool(s.get("notice")) and st["configured"] and bool(st["notice_peer"])) if enable is None else enable
+        return notice_lines(s["prefix"], peers, recorded, on,
+                            router.show("show running-config | section voice translation"))
+
     def free_tag(used: set[int], start: int, stop: int, step: int = 1) -> int:
         t = next((t for t in range(start, stop, step) if t not in used), None)
         if t is None:
@@ -245,10 +363,14 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                 lines += [f"dial-peer voice {p['tag']} voip", f" media-class {mtag}"]
             elif p["recorded"]:
                 lines += [f"dial-peer voice {p['tag']} voip", f" no media-class {mtag}"]
+        if not demo:
+            lines += notice_lines(s["prefix"], parse_peers(router.show("show running-config | section dial-peer voice")),
+                                  set(peers), bool(s.get("notice")),
+                                  router.show("show running-config | section voice translation"))
         return lines
 
     def remove_lines(st: dict) -> list[str]:
-        lines = []
+        lines = notice_router(settings(), enable=False)      # Dial-Peers zurueck auf ihre Profile
         for p in st["peers"]:
             if p["recorded"]:
                 lines += [f"dial-peer voice {p['tag']} voip", f" no media-class {st['mclass']}"]
@@ -327,13 +449,33 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                 save(s)       # neue Rufnummern an den Recorder weitergeben
         except Exception as e:
             st, nums, err = {"peers": [], "configured": False}, [], f"{type(e).__name__}: {e}"
+        sync = notice_sync(s, st) if not err else None
         vm = ctx["settings"]()["mailboxes"]
         s.pop("demo_router", None)
         return jsonify(ok=True, enabled=True, settings=s, router=st, router_error=err, host_ip=host_ip,
                        recorder=recorder_status(), active=active_calls(), numbers=nums, mail_ready=ctx["mail_ready"],
                        vm_emails={k: v.get("email", "") for k, v in vm.items() if v.get("email")},
                        notice={"exists": notice_wav.exists()}, tts=tools["tts_info"](),
-                       recordings=recordings(request.args.get("q", "")))
+                       recordings=recordings(request.args.get("q", "")), notice_sync=sync)
+
+    notice_state = {"failed": "", "last": None}
+
+    def notice_sync(s: dict, st: dict) -> dict | None:
+        """Kopien der Uebersetzungsregeln nachziehen, wenn sich das Original geaendert hat."""
+        if demo or not st.get("configured"):
+            return notice_state["last"]
+        try:
+            lines = notice_router(s)
+        except Exception as e:
+            notice_state["last"] = {"ok": False, "error": str(e)}
+            return notice_state["last"]
+        key = "\n".join(lines)
+        if lines and key != notice_state["failed"]:
+            r = apply(lines)
+            r.pop("output", None)
+            notice_state["failed"] = "" if r.get("ok") else key
+            notice_state["last"] = {"ok": r.get("ok"), "error": r.get("error"), "config": r.get("config", lines)}
+        return notice_state["last"]
 
     @app.put("/api/recording/settings")
     def rec_put_settings():
@@ -373,7 +515,18 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
                  emails=emails, default_email=default, retention_days=days, min_secs=mins,
                  notice=bool(b.get("notice")), prefix=prefix)
         save(s)
-        return jsonify(ok=True, router_change=router_change and router_state(s)["configured"])
+        res = {"ok": True, "router_change": False, "notice_router": None}
+        if router_change and not demo:
+            try:
+                st = router_state(s)
+                if st["configured"]:
+                    # Dial-Peer <vorwahl>T zu Asterisk und Uebersetzungsprofile fuer die Ansage gleich mit anpassen
+                    r = apply(setup_lines(s, st, [p["tag"] for p in st["peers"] if p["recorded"]]))
+                    r.pop("output", None)
+                    res["notice_router"] = r
+            except RecError as e:
+                res["notice_router"] = {"ok": False, "error": str(e)}
+        return jsonify(res)
 
     @app.post("/api/recording/router")
     def rec_setup_router():

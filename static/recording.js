@@ -175,11 +175,12 @@
     const s = R.settings, t = s.notice_tts || {}, p = esc(s.prefix);
     return `${h2("Ansage")}
       <div class="body">
-        <div class="hint"><b>So kommen eingehende Anrufe an der Ansage vorbei:</b> im Tab <a href="#translation">Übersetzungen</a>
-          die Regel für eingehende Anrufe so ändern, dass vor die interne Nummer <span class="mono">${p}</span> gesetzt wird, z. B.
-          <span class="mono">/^\\+49301234567\\(..\\)$/</span> → <span class="mono">/${p}\\1/</span> statt <span class="mono">/\\1/</span>.
+        <div class="hint"><b>So funktioniert es:</b> Die Seite stellt die aufgezeichneten eingehenden Dial-Peers auf eine Kopie ihres
+          Übersetzungsprofils um (<span class="mono">&lt;profil&gt;-rec</span>), die vor die Zielnummer <span class="mono">${p}</span> setzt.
           Der Router gibt den Anruf dann an Asterisk, das spielt die Ansage (ohne den Anruf anzunehmen) und verbindet zur Nummer dahinter.
-          Faxnummern und IVR-Nummern ohne ${p} lassen.</div>
+          Faxe gehen ohne Ansage durch. Ändert sich die Originalregel, wird die Kopie automatisch nachgezogen; ohne Ansage oder beim
+          Entfernen der Aufzeichnung bekommen die Dial-Peers ihr ursprüngliches Profil zurück.
+          ${R.notice_sync && R.notice_sync.ok === false ? `<br>${badge("bad", "Abgleich fehlgeschlagen")} ${esc(R.notice_sync.error || "")}` : ""}</div>
         <div class="actions" style="margin:10px 0">${R.notice.exists ? `<button type="button" class="small" id="rec-notice-play">▶ Aktuelle Ansage anhören</button>
           <button type="button" class="small danger" id="rec-notice-del">Ansage löschen</button>` : '<span class="muted">Noch keine Ansage – Anrufe gehen ohne Hinweis durch.</span>'}</div>
         ${R.tts?.available ? `<form id="f-rec-tts">
@@ -232,7 +233,10 @@
       const j = await api("/api/recording/settings", { method: "PUT", body: JSON.stringify(body) });
       if (!j.ok) { showMsg($("#m-recset"), false, j.error || "Fehler"); return; }
       await load();
-      showMsg($("#m-recset"), true, "Gespeichert." + (j.router_change ? "\nBitte oben „Router-Einstellungen erneut setzen“, damit der Dial-Peer für die Ansage passt." : ""));
+      const nr = j.notice_router;
+      showMsg($("#m-recset"), !nr || nr.ok !== false, "Gespeichert." +
+        (nr ? (nr.ok === false ? `\nAnsage am Router: ${nr.error || "Fehler"}` : `\n\nAm Router:\n${(nr.config || []).join("\n")}`) : "") +
+        (j.router_change ? "\nBitte oben „Router-Einstellungen erneut setzen“, damit der Dial-Peer für die Ansage passt." : ""));
     } else if (f.id === "f-rec-tts") {
       const m = $("#m-rec-tts"), btn = $("#rec-tts-save");
       btn.disabled = true; showMsg(m, true, "Wird gesprochen …");
