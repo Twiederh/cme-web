@@ -66,14 +66,15 @@
     s.src = "/static/features.js";
     document.body.appendChild(s);
   }
-  // Sicherung und Umzug auf einen neuen Router (Tab Sicherung): static/backup.js
-  if (!document.getElementById("backup-card")) {
+  // Sicherung (Tab Sicherung) und Dial-Peers/Tenants/SIP-Profile (Tab Dial-Peers & Trunks)
+  for (const [id, src] of [["backup-card", "/static/backup.js"], ["dialpeer-card", "/static/dialpeers.js"]]) {
+    if (document.getElementById(id)) continue;
     const c = document.createElement("section");
     c.className = "card";
-    c.id = "backup-card";
+    c.id = id;
     main.appendChild(c);
     const s = document.createElement("script");
-    s.src = "/static/backup.js";
+    s.src = src;
     document.body.appendChild(s);
   }
 
@@ -82,6 +83,7 @@
       parts: [top(".kpis"), devices, top("#t-trunks"), top("#raw-out")] },
     { id: "phones", label: "Telefone & Rufnummern",
       parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#pickup-card"), top("#cor-card"), top("#firmware-card"), top("#phonecfg-card")] },
+    { id: "dialpeers", label: "Dial-Peers & Trunks", parts: [top("#dialpeer-card")] },
     { id: "translation", label: "Übersetzungen", parts: [top("#translation-card"), top("#e164-card")] },
     { id: "voicemail", label: "Voicemail, IVR & Konferenzen", parts: [top("#voicemail-card"), top("#vvm-card"), top("#queue-card"), top("#conf-card")] },
     { id: "phonebook", label: "Telefonbuch", parts: [top("#phonebook-card")] },

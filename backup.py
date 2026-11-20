@@ -426,3 +426,7 @@ def register(app, router, apply, demo: bool) -> None:
                          args=(jid, rid, rep, bool(b.get("files")), bool(b.get("config")), bool(b.get("save")))).start()
         with job_lock:
             return jsonify(ok=True, job=dict(job))
+
+    # Dial-Peers, SIP-Tenants und SIP-Profile bearbeiten (dialpeers.py)
+    import dialpeers
+    dialpeers.register(app, router, apply, demo)
