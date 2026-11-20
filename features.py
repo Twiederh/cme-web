@@ -65,6 +65,7 @@ OUT_LISTS = {"national": "CME-NATIONAL", "mobil": "CME-MOBIL", "intl": "CME-INTL
 CATEGORIES = [("national", ["0[2-6]T", "07[1-9]T", "08[1-9]T", "0800T", "09[1-9]T", "[2-9]T"]),
               ("mobil", ["01[5-7]T"]), ("intl", ["00T"]),
               ("notruf", ["110", "112", "115", "116T"])]
+STAGE_LISTS = {f"CME-IN-{s.upper()}" for s in STAGES}
 HEAD = 1 + len(COR_NAMES) + 2 * len(OUT_LISTS) + sum(1 + len(m) for m in STAGES.values())
 RE_EMERGENCY = re.compile(r"^(110|112|115|116T|116\.+|19222)$")
 RE_CLONE = re.compile(r"^COR (\w+) (\S+) zu DP (\d+) \(cme-web\)$")
@@ -392,7 +393,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         return out
 
     def cor_active(pools: dict) -> bool:
-        return any(p["cor"].startswith("CME-IN-") for p in pools.values())
+        # nur die Sperrstufen zaehlen; CME-IN-VIA-* gehoert zum Absender-Routing (e164.py)
+        return any(p["cor"] in STAGE_LISTS for p in pools.values())
 
     def cor_lines(active: bool, peers: dict) -> list[str]:
         """Befehle, damit Klassen, Listen, Provider-Dial-Peers und Kopien zum Wunsch passen."""
@@ -411,6 +413,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             if not is_provider(p) or not p["pattern"] or RE_EMERGENCY.match(p["pattern"]):
                 continue
             target = "CME-OUT-SONDER" if active and access_of(p["pattern"] or "") is not None else ""
+            if p["corlist"].startswith("CME-OUT-VIA-"):
+                continue                     # Absender-Routing, nicht anfassen
             if p["corlist"] != target and (target or p["corlist"].startswith("CME-OUT-")):
                 lines += [f"dial-peer voice {p['tag']} voip",
                           f" corlist outgoing {target}" if target else f" no corlist outgoing {p['corlist']}"]
@@ -442,7 +446,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         return jsonify(ok=True, active=active, stages=STAGE_LABEL,
                        pools=[{"tag": p["tag"], "desc": p["desc"], "type": p["type"],
                                "numbers": [dns[d]["number"] for d in p["dns"] if d in dns],
-                               "stage": stage_of.get(p["cor"], ""), "foreign": bool(p["cor"]) and p["cor"] not in stage_of}
+                               "stage": stage_of.get(p["cor"], ""), "foreign": bool(p["cor"]) and p["cor"] not in stage_of,
+                               "egress": p["cor"].startswith("CME-IN-VIA-")}
                               for p in sorted(pools.values(), key=lambda x: int(x["tag"]))],
                        providers=info, clones=[{"tag": c["tag"], "desc": c["desc"], "pattern": c["pattern"]}
                                                for c in have.values()],
@@ -463,10 +468,18 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             if st and st not in STAGES:
                 raise FeatError(f"Unbekannte Stufe: {st}")
             cur = pools[tag]["cor"]
-            if cur and not cur.startswith("CME-IN-"):
+            if cur.startswith("CME-IN-VIA-") and st:
+                raise FeatError(f"Pool {tag} ist im Absender-Routing einem Provider zugeordnet ({cur}). Sperrstufen und "
+                                "Absender-Routing lassen sich derzeit nicht gleichzeitig verwenden.")
+            if cur and cur not in STAGE_LISTS and not cur.startswith("CME-IN-VIA-"):
                 raise FeatError(f"Pool {tag} hat schon eine eigene COR-Liste ({cur}) – bitte am Router entfernen.")
+            if cur.startswith("CME-IN-VIA-"):
+                continue
             new[tag] = f"CME-IN-{st.upper()}" if st else ""
-        active = any(v.startswith("CME-IN-") for v in new.values())
+        active = any(v in STAGE_LISTS for v in new.values())
+        if active and any(v.startswith("CME-IN-VIA-") for v in new.values()):
+            raise FeatError("Im Absender-Routing sind Telefone einem Provider zugeordnet. Sperrstufen und "
+                            "Absender-Routing lassen sich derzeit nicht gleichzeitig verwenden.")
         lines = cor_lines(active, peers) if active else []
         for tag, v in new.items():
             cur = pools[tag]["cor"]
