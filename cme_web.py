@@ -169,15 +169,17 @@ def parse_pool_brief(out: str) -> dict[str, dict]:
         m = re.match(rf"^\s*(\d+)\s+({mac_re}|{ip_re}|[A-Za-z][\w-]+)\s+(?:({ip_re})\s+)?(\d+)\s+(\d+)\s+(\S+)\s+(\S+)", line)
         if m:
             last = m.group(1)
+            # "REGISTERED*": Pool per Autoregistrierung angelegt (z. B. ATA 190)
+            state = m.group(7).upper()
             pools[last] = {"mac": m.group(2).upper(), "ip": m.group(3) or "",
-                           "state": m.group(7).upper(),
+                           "state": state.rstrip("*"), "auto": state.endswith("*"),
                            "lines": [{"ln": m.group(4), "dn": m.group(5), "number": m.group(6),
-                                      "state": m.group(7).upper()}]}
+                                      "state": state.rstrip("*")}]}
             continue
         m = re.match(r"^\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*$", line)
         if m and last:
             pools[last]["lines"].append({"ln": m.group(1), "dn": m.group(2),
-                                         "number": m.group(3), "state": m.group(4).upper()})
+                                         "number": m.group(3), "state": m.group(4).upper().rstrip("*")})
     return pools
 
 
