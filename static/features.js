@@ -81,7 +81,7 @@
         <table><thead><tr><th>Telefon</th><th>Rufnummern</th><th>Darf anrufen</th></tr></thead><tbody>
           ${C.pools.map(p => `<tr><td>${esc(p.desc || "Pool " + p.tag)} <span class="muted mono">#${esc(p.tag)}</span></td>
             <td class="mono">${p.numbers.map(esc).join(", ")}</td>
-            <td>${p.foreign ? '<span class="muted">eigene COR-Liste am Router</span>'
+            <td>${p.egress ? '<span class="muted">Absender-Routing aktiv (Ausgehend über Provider)</span>' : p.foreign ? '<span class="muted">eigene COR-Liste am Router</span>'
                  : `<select name="s:${esc(p.tag)}">${opts(p.stage)}</select>`}</td></tr>`).join("")
             || '<tr><td colspan="3" class="empty">Keine Telefone.</td></tr>'}
         </tbody></table>
