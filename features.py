@@ -841,6 +841,15 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         need()
         with conf_lock:
             d = data()
+            try:
+                ivrs = json.loads((cfgdir / "cme-apps.json").read_text()).get("ivrs", [])
+            except (FileNotFoundError, ValueError):
+                ivrs = []
+            used = [i["name"] for i in ivrs
+                    if any(a.get("action") == "conf" and a.get("target") == str(rid)
+                           for a in [*(i.get("keys") or {}).values(), i.get("on_timeout") or {}, i.get("on_invalid") or {}])]
+            if used:
+                raise FeatError("Der Raum ist Ziel im Sprachmenü " + ", ".join(used) + " – dort erst ändern.")
             old = routed(d)
             d["rooms"] = [x for x in d["rooms"] if x["id"] != rid]
             res = sync_router(old, routed(d))
