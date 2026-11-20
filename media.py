@@ -9,6 +9,13 @@ Formate:
 - Hintergrund 88xx: PNG 800x480, 8 Bit RGB; Vorschaubild 139x109
 - Klingelton: Rohdaten 8 kHz, 8 Bit mu-law, mono, Laenge ein Vielfaches von
   240 Byte, hoechstens 16080 Byte (gut 2 Sekunden)
+
+Lokaler Cache: Vorschaubilder und Klingeltoene liest die Seite nur einmal vom Router
+(per "more /binary", langsam) und legt sie unter CME_MEDIA_CACHE ab
+(Standard: <VM_CONFIG_DIR>/media-cache, also im Volume vm-config). Beim Hochladen
+kommen die neuen Dateien direkt in den Cache, beim Loeschen fliegen sie raus.
+Alle 30 Minuten (und nach jeder Aenderung) vergleicht die Seite die Dateigroessen mit dem
+Router und verwirft Abweichungen.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ import tempfile
 import threading
 import time
 import wave
+from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 from flask import Response, jsonify, request
@@ -415,11 +423,84 @@ def demo_seed(router) -> None:
 # Web-Endpunkte
 # --------------------------------------------------------------------------
 
+class MediaCache:
+    """Dateien vom Router: im Speicher und auf der Platte (ueberlebt Neustarts des Containers)."""
+
+    def __init__(self, directory: Path | None):
+        self.mem: dict[str, bytes] = {}
+        self.dir = None
+        if directory:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                probe = directory / ".probe"
+                probe.write_bytes(b"")
+                probe.unlink()
+                self.dir = directory
+            except OSError:
+                self.dir = None          # nicht beschreibbar: nur im Speicher
+
+    @staticmethod
+    def _name(path: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_.\-]", "_", path)[:200]
+
+    def get(self, path: str) -> bytes | None:
+        if path in self.mem:
+            return self.mem[path]
+        if self.dir:
+            try:
+                data = (self.dir / self._name(path)).read_bytes()
+            except OSError:
+                return None
+            self.mem[path] = data
+            return data
+        return None
+
+    def has(self, path: str) -> bool:
+        return path in self.mem or bool(self.dir and (self.dir / self._name(path)).exists())
+
+    def size(self, path: str) -> int | None:
+        if path in self.mem:
+            return len(self.mem[path])
+        if self.dir:
+            try:
+                return (self.dir / self._name(path)).stat().st_size
+            except OSError:
+                return None
+        return None
+
+    def put(self, path: str, data: bytes) -> None:
+        self.mem[path] = data
+        if self.dir:
+            f = self.dir / self._name(path)
+            tmp = f.with_name(f".{f.name}.tmp")
+            try:
+                tmp.write_bytes(data)
+                tmp.replace(f)
+            except OSError:
+                pass
+
+    def drop(self, path: str | None) -> None:
+        if not path:
+            return
+        self.mem.pop(path, None)
+        if self.dir:
+            (self.dir / self._name(path)).unlink(missing_ok=True)
+
+
+def cache_dir(demo: bool) -> Path:
+    if os.environ.get("CME_MEDIA_CACHE"):
+        return Path(os.environ["CME_MEDIA_CACHE"])
+    if demo:
+        return Path(tempfile.gettempdir()) / "cme-web-demo-media-cache"
+    return Path(os.environ.get("VM_CONFIG_DIR", "/data/asterisk")) / "media-cache"
+
+
 def register(app, router, apply, demo: bool) -> None:
     files = DemoFiles(router) if demo else RouterFiles(router)
     lock = threading.Lock()
-    cache: dict[str, bytes] = {}
+    cache = MediaCache(cache_dir(demo))
     st_cache = {"ts": 0.0, "data": None}
+    warm = {"running": False, "checked": 0.0}
     app.config.setdefault("MAX_CONTENT_LENGTH", MAX_UPLOAD)
 
     def aliases() -> dict[str, str]:
@@ -451,13 +532,60 @@ def register(app, router, apply, demo: bool) -> None:
         rings = parse_ring_list(rings_xml)
         for r in rings:
             r["alias_ok"] = r["file"] in al
+        for w in walls:
+            w["thumb_path"] = al.get(f"Desktops/{WALL_RES}/{w['thumb']}") or f"{loc['wall_dir']}/{w['thumb']}"
+        for r in rings:
+            r["path"] = al.get(r["file"]) or f"{loc['ring_dir']}/{r['file']}"
+        if force or time.time() - warm["checked"] > 1800:
+            warm["checked"] = time.time()
+            validate(loc, walls, rings)
         st_cache.update(ts=time.time(), data={"al": al, "loc": loc, "walls": walls, "rings": rings})
+        prefetch([w["thumb_path"] for w in walls] + [r["path"] for r in rings])
         return st_cache["data"]
+
+    def validate(loc: dict, walls: list[dict], rings: list[dict]) -> None:
+        """Zwischengespeicherte Dateien verwerfen, deren Groesse am Router anders ist."""
+        sizes: dict[str, int] = {}
+        for d in {loc["wall_dir"], loc["ring_dir"], *(posixpath.dirname(w["thumb_path"]) for w in walls),
+                  *(posixpath.dirname(r["path"]) for r in rings)}:
+            try:
+                sizes.update({f"{d}/{n}": s for n, s in files.list_dir(d).items()})
+            except Exception:
+                return                   # Router nicht erreichbar: Cache behalten
+        for p in [w["thumb_path"] for w in walls] + [r["path"] for r in rings]:
+            have = cache.size(p)
+            if have is not None and sizes.get(p) != have:
+                cache.drop(p)
+
+    def fetch(path: str) -> bytes:
+        data = cache.get(path)
+        if data is None:
+            data = files.read_binary(path)
+            cache.put(path, data)
+        return data
+
+    def prefetch(paths: list[str]) -> None:
+        """Fehlende Vorschaubilder und Klingeltoene im Hintergrund holen."""
+        todo = [p for p in paths if not cache.has(p)]
+        if not todo or warm["running"]:
+            return
+        warm["running"] = True
+
+        def run():
+            try:
+                for p in todo:
+                    try:
+                        fetch(p)
+                    except Exception:
+                        pass
+            finally:
+                warm["running"] = False
+        threading.Thread(target=run, daemon=True, name="media-cache").start()
 
     def write_text(path: str, text: str, al: dict, alias: str) -> list[str]:
         files.delete(path)
         files.upload(text.encode("utf-8"), path)
-        cache.pop(path, None)
+        cache.drop(path)
         return [] if al.get(alias) == path else [f"tftp-server {path} alias {alias}"]
 
     def finish(cfg: list[str], **extra):
@@ -492,13 +620,12 @@ def register(app, router, apply, demo: bool) -> None:
         if not any(w["thumb"] == name for w in st["walls"]):
             return Response(status=404)
         path = find_path(st["al"], f"Desktops/{WALL_RES}/{name}", f"{st['loc']['wall_dir']}/{name}")
-        if path not in cache:
-            try:
-                cache[path] = files.read_binary(path)
-            except MediaError:
-                return Response(status=404)
-        return Response(cache[path], mimetype="image/png",
-                        headers={"Cache-Control": "private, max-age=3600"})
+        try:
+            data = fetch(path)
+        except MediaError:
+            return Response(status=404)
+        return Response(data, mimetype="image/png",
+                        headers={"Cache-Control": "private, max-age=86400"})
 
     @app.get("/api/media/ring/<name>")
     def media_ring(name):
@@ -508,13 +635,12 @@ def register(app, router, apply, demo: bool) -> None:
         if not any(r["file"] == name for r in st["rings"]):
             return Response(status=404)
         path = find_path(st["al"], name, f"{st['loc']['ring_dir']}/{name}")
-        if path not in cache:
-            try:
-                cache[path] = files.read_binary(path)
-            except MediaError:
-                return Response(status=404)
-        return Response(ulaw_to_wav(cache[path]), mimetype="audio/wav",
-                        headers={"Cache-Control": "private, max-age=3600"})
+        try:
+            data = fetch(path)
+        except MediaError:
+            return Response(status=404)
+        return Response(ulaw_to_wav(data), mimetype="audio/wav",
+                        headers={"Cache-Control": "private, max-age=86400"})
 
     @app.post("/api/media/wallpapers")
     def media_add_wallpaper():
@@ -534,6 +660,8 @@ def register(app, router, apply, demo: bool) -> None:
             cfg = []
             for fname, data in ((f"{slug}.png", full), (f"{slug}_thumb.png", thumb)):
                 files.upload(data, f"{d}/{fname}")
+                if fname.endswith("_thumb.png"):
+                    cache.put(f"{d}/{fname}", data)      # Vorschau gleich im Cache
                 cfg.append(f"tftp-server {d}/{fname} alias Desktops/{WALL_RES}/{fname}")
             walls = [{"image": w["image"], "url": w["url"]} for w in st["walls"]]
             walls.append({"image": f"TFTP:Desktops/{WALL_RES}/{slug}_thumb.png",
@@ -560,7 +688,7 @@ def register(app, router, apply, demo: bool) -> None:
                 if path:
                     cfg.append(f"no tftp-server {path} alias {alias}")
                 files.delete(path or f"{st['loc']['wall_dir']}/{fname}")
-                cache.pop(path, None)
+                cache.drop(path or f"{st['loc']['wall_dir']}/{fname}")
         return finish(cfg, name=name)
 
     @app.post("/api/media/ringtones")
@@ -585,6 +713,7 @@ def register(app, router, apply, demo: bool) -> None:
             d = st["loc"]["ring_dir"]
             files.mkdirs(d)
             files.upload(raw, f"{d}/{fname}")
+            cache.put(f"{d}/{fname}", raw)
             cfg = [f"tftp-server {d}/{fname} alias {fname}"]
             for lst, path in st["loc"]["ring_lists"].items():
                 items = parse_ring_list(files.read_text(path) or "")
@@ -611,5 +740,5 @@ def register(app, router, apply, demo: bool) -> None:
             if path:
                 cfg.append(f"no tftp-server {path} alias {name}")
             files.delete(path or f"{st['loc']['ring_dir']}/{name}")
-            cache.pop(path, None)
+            cache.drop(path or f"{st['loc']['ring_dir']}/{name}")
         return finish(cfg, file=name)
