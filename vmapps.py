@@ -30,7 +30,7 @@ RE_NUM = re.compile(r"^\+?[0-9*#]{1,32}$")
 RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 RE_NAME = re.compile(r"^[A-Za-z0-9 äöüÄÖÜß_.,()/+\-]{1,40}$")
 KEYS = [*"1234567890", "*", "#"]
-ACTIONS = ["dial", "ivr", "queue", "voicemail", "repeat", "hangup"]
+ACTIONS = ["dial", "ivr", "queue", "conf", "voicemail", "repeat", "hangup"]
 # Stimmen fuer die Sprachausgabe (Piper, laeuft lokal; Modelle werden beim ersten Gebrauch geladen)
 TTS_VOICES = {
     "de_DE-thorsten-medium": "Thorsten (männlich)",
@@ -80,6 +80,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             return [f"Goto(ivr-{target},s,1)"]
         if kind == "queue":
             return [f"Goto(queue-run,q{target},1)"]
+        if kind == "conf":
+            return [f"Goto(conf-{target},s,1)"]       # Konferenzraum (features.py), mit PIN-Abfrage
         if kind == "voicemail":
             return [f"VoiceMail({mbid(target)}@default,u)", "Hangup()"]
         if kind == "repeat":
@@ -218,6 +220,12 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
         except FileNotFoundError:
             return []
 
+    def conf_list() -> list[dict]:
+        try:
+            return json.loads((cfgdir / "cme-conf.json").read_text()).get("rooms", [])
+        except (FileNotFoundError, ValueError):
+            return []
+
     def check_free(number: str, d: dict, own: str) -> None:
         taken = {f["number"]: f"Fax {f['number']}" for f in d["fax"]}
         taken.update({i["number"]: f"IVR {i['name']}" for i in d["ivrs"] if i.get("number")})
@@ -287,7 +295,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
         boxes = [{"number": n, "id": ctx["mbid"](n)} for n in ctx["settings"]()["mailboxes"]]
         return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(), sent=sent_list(),
                        ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS, tts=tts_info(),
-                       queues=[{"id": q["id"], "name": q["name"]} for q in queue_list()])
+                       queues=[{"id": q["id"], "name": q["name"]} for q in queue_list()],
+                       confs=[{"id": str(r["id"]), "name": r["name"], "number": r["number"]} for r in conf_list()])
 
     def tts_info() -> dict:
         voices = [{"id": v, "label": label, "installed": (tts_dir / f"{v}.onnx").exists()}
@@ -568,6 +577,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             elif kind == "queue":
                 if target not in {q["id"] for q in queue_list()}:
                     raise AppError(f"{where}: Warteschlange auswaehlen.")
+            elif kind == "conf":
+                if target not in {str(r["id"]) for r in conf_list()}:
+                    raise AppError(f"{where}: Konferenzraum auswaehlen.")
             elif kind == "voicemail":
                 if target not in boxes:
                     raise AppError(f"{where}: Postfach auswaehlen.")
