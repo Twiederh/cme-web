@@ -10,6 +10,9 @@ Ergebnis je Gespraech in REC_DIR:
   <id>.mp3    Stereo: links die interne Seite, rechts die Gegenseite
   <id>.json   Zeit, Dauer, Richtung, Rufnummern, Abschrift, Mailstatus
 
+Aufnahme ein/aus waehrend des Gespraechs: cme-web schreibt REC_DIR/.control.json ({id: true|false});
+im Modus "demand" (nur auf Wunsch) beginnt jedes Gespraech pausiert. Pausen werden zu Stille in der Aufnahme.
+
 Danach optional: Abschrift (Whisper, je Kanal getrennt -> Dialog), Mail mit Anhang,
 automatisches Loeschen nach N Tagen. Einstellungen liest der Dienst bei jedem Gespraech aus
 REC_CONFIG (schreibt cme-web).
@@ -43,7 +46,7 @@ from email.utils import formataddr, formatdate
 from pathlib import Path
 from queue import Queue
 
-VERSION = "1.0"
+VERSION = "1.1"
 HOST_IP = os.environ.get("HOST_IP", "")
 CME_IPS = {x.strip() for x in os.environ.get("CME_IP", "").split(",") if x.strip()}
 SIP_PORT = int(os.environ.get("SIP_PORT", "5070"))
@@ -73,7 +76,8 @@ def log(text: str) -> None:
 
 def settings() -> dict:
     s = {"enabled": True, "transcript": True, "mail": False, "emails": {}, "default_email": "",
-         "retention_days": 90, "min_secs": 3, "internal": [], "own": [], "prefix": "8199"}
+         "retention_days": 90, "min_secs": 3, "internal": [], "own": [], "prefix": "8199",
+         "mode": "always"}
     try:
         s.update(json.loads(REC_CONFIG.read_text()))
     except (FileNotFoundError, ValueError):
@@ -315,6 +319,9 @@ class Stream:
         if not codec or not payload:
             return                      # Tastentoene, Comfort Noise, Unbekanntes
         self.call.last_rtp = now
+        if not self.call.recording:
+            self.expect = None          # pausiert: nichts schreiben, danach neues Stueck an der richtigen Stelle
+            return
         pos_now = now - self.call.start
         new_anchor = False
         if ssrc != self.ssrc:
@@ -379,6 +386,21 @@ class Call:
         self.last: dict[tuple, bytes] = {}
         self.done = False
         self.codec = ""
+        self.mode = settings().get("mode") or "always"
+        self.recording = self.mode != "demand"
+        self.events = [[0.0, self.recording]]      # [Sekunde, an/aus]
+
+    def set_recording(self, on: bool, why: str = "") -> None:
+        if on == self.recording:
+            return
+        self.recording = on
+        self.events.append([round(time.time() - self.start, 1), on])
+        log(f"Aufzeichnung {self.id}: {'fortgesetzt' if on else 'pausiert'}{f' ({why})' if why else ''}")
+
+    def numbers(self) -> list[str]:
+        out = [p["number"] for p in self.meta["participants"] if p.get("number")]
+        out += [self.from_user, self.to_user, self.ruri_user]
+        return list(dict.fromkeys(n for n in out if n and re.search(r"\d", n)))
 
     def update(self, sdp: str, xml: str) -> bytes | None:
         """Angebot verarbeiten -> SDP-Antwort (None: kein brauchbarer Strom)."""
@@ -523,6 +545,29 @@ def finish(call: Call, why: str) -> None:
     JOBS.put(call)
 
 
+def control() -> None:
+    """Ein/Aus aus cme-web uebernehmen (REC_DIR/.control.json: {aufnahme-id: true|false})."""
+    path, seen = REC_DIR / ".control.json", None
+    while True:
+        time.sleep(0.5)
+        try:
+            mt = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if mt == seen:
+            continue
+        seen = mt
+        try:
+            want = json.loads(path.read_text() or "{}")
+        except (ValueError, OSError):
+            continue
+        with CALLS_LOCK:
+            calls = list(CALLS.values())
+        for c in calls:
+            if c.id in want:
+                c.set_recording(bool(want[c.id]), "cme-web")
+
+
 def watchdog() -> None:
     while True:
         time.sleep(15)
@@ -610,7 +655,7 @@ def ffmpeg(args: list[str], data: bytes | None = None, timeout: int = 900) -> by
     return r.stdout
 
 
-def channel_pcm(call: Call, st: Stream, rate: int, out: Path) -> float:
+def channel_pcm(call: Call, st: Stream, rate: int, out: Path, t0: float = 0.0) -> float:
     """Stroeme dekodieren und an die richtige Zeitstelle legen -> Sekunden mit Ton."""
     with open(out, "wb") as f:
         for codec, size in st.sizes.items():
@@ -621,7 +666,7 @@ def channel_pcm(call: Call, st: Stream, rate: int, out: Path) -> float:
             for seg in (s for s in st.segments if s["codec"] == codec):
                 a = seg["offset"] * per_byte * 2
                 chunk = pcm[a:a + seg["length"] * per_byte * 2]
-                f.seek(int(seg["pos"] * rate) * 2)
+                f.seek(max(0, int((seg["pos"] - t0) * rate)) * 2)
                 f.write(chunk)
     return sum(s["length"] * (2 if s["codec"] == "g722" else 1) for s in st.segments) / (
         16000 if any(s["codec"] == "g722" for s in st.segments) else 8000)
@@ -751,8 +796,11 @@ def process(call: Call) -> None:
     try:
         streams = [st for st in call.streams if st.packets]
         if not streams:
-            log(f"{call.id}: keine Sprachdaten empfangen, verworfen")
+            log(f"{call.id}: " + ("nicht eingeschaltet, nichts aufgezeichnet" if len(call.events) == 1 and not call.events[0][1]
+                                  else "keine Sprachdaten empfangen, verworfen"))
             return
+        # erst ab dem Einschalten: Stille davor abschneiden
+        t0 = min(seg["pos"] for st in streams for seg in st.segments) if len(call.events) > 1 or not call.events[0][1] else 0.0
         rate = 16000 if any(seg["codec"] == "g722" for st in streams for seg in st.segments) else 8000
         info = classify(call, s)
         # interne Seite nach links
@@ -762,7 +810,7 @@ def process(call: Call) -> None:
         pcms = []
         for st in streams:
             p = call.tmp / f"ch{st.index}.s16"
-            channel_pcm(call, st, rate, p)
+            channel_pcm(call, st, rate, p, t0)
             pcms.append(p)
         size = max(p.stat().st_size for p in pcms)
         for p in pcms:
@@ -789,13 +837,15 @@ def process(call: Call) -> None:
                 return "Seite 1" if i == 0 else "Seite 2"
             return p["name"] or p["number"] or ("Intern" if p is info["internal"] else "Extern")
 
-        meta = {"id": call.id, "start": round(call.start, 1), "duration": round(duration, 1),
+        meta = {"id": call.id, "start": round(call.start + t0, 1), "duration": round(duration, 1),
                 "direction": info["direction"],
                 "internal": info["internal"]["number"] if info["internal"] else "",
                 "external": info["external"]["number"] if info["external"] else "",
                 "parties": [{"number": p["number"], "name": p["name"]} for p in info["parts"]],
                 "channels": [label(i) for i in range(len(streams))],
                 "codec": call.codec, "file": mp3.name, "size": mp3.stat().st_size,
+                "partial": len(call.events) > 1 or not call.events[0][1],
+                "events": [[max(0.0, round(t - t0, 1)), on] for t, on in call.events],
                 "transcript": "", "transcript_status": "off", "mailed": "", "mail_error": ""}
         meta_path = REC_DIR / f"{call.id}.json"
 
@@ -859,7 +909,8 @@ def housekeeping() -> None:
         try:
             REC_DIR.mkdir(parents=True, exist_ok=True)
             with CALLS_LOCK:
-                active = [{"id": c.id, "start": c.start, "streams": len(c.streams)} for c in CALLS.values()]
+                active = [{"id": c.id, "start": c.start, "streams": len(c.streams), "recording": c.recording,
+                           "mode": c.mode, "numbers": c.numbers(), "events": c.events} for c in CALLS.values()]
             st = {"time": time.time(), "version": VERSION, "host_ip": HOST_IP, "sip_port": SIP_PORT,
                   "rtp": f"{RTP_START}-{RTP_END}", "active": active, "queue": JOBS.qsize(), "log": list(LOG)[-25:]}
             tmp = REC_DIR / ".status.json.tmp"
@@ -889,7 +940,7 @@ def housekeeping() -> None:
                         shutil.rmtree(d, ignore_errors=True)
         except Exception as e:
             log(f"Aufräumen: {type(e).__name__}: {e}")
-        time.sleep(20)
+        time.sleep(2)
 
 
 def main() -> None:
@@ -901,7 +952,7 @@ def main() -> None:
         sys.exit("ffmpeg fehlt")
     # Reste eines Absturzes verwerfen
     shutil.rmtree(REC_DIR / ".tmp", ignore_errors=True)
-    for fn in (udp_server, tcp_server, watchdog, worker, housekeeping):
+    for fn in (udp_server, tcp_server, watchdog, worker, housekeeping, control):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()
     log(f"cme-recorder {VERSION}: SIP {HOST_IP}:{SIP_PORT} (UDP/TCP), RTP {RTP_START}-{RTP_END}, "
         f"nur von {', '.join(sorted(CME_IPS)) or 'allen'}")
