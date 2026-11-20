@@ -1,4 +1,4 @@
-// Benutzerseite (/me): eigene Voicemail, Fax senden/empfangen, Kurzwahltasten, gemeinsames Telefonbuch.
+// Benutzerseite (/me): eigene Voicemail, Gespraechsaufzeichnungen, Fax senden/empfangen, Kurzwahltasten, gemeinsames Telefonbuch.
 // Daten aus /api/user; Aktionen ueber die vorhandenen API-Aufrufe (portal.py prueft die Rechte).
 (() => {
   const $ = (s) => document.querySelector(s);
@@ -41,6 +41,34 @@
         }).join("")}</tbody></table>` : `<div class="empty">Keine Nachrichten.</div>`}`).join("")
       + `<div class="body" style="border-top:1px solid var(--line)"><div class="hint">Am Telefon: Taste <b>Nachrichten</b>.
         ${boxes.some(b => b.email) ? "Neue Nachrichten kommen zusätzlich per E-Mail." : ""}</div></div>`;
+  }
+
+  // ---------------- Gespraechsaufzeichnungen ----------------
+
+  const DIR = { in: "↘ eingehend", out: "↗ ausgehend" };
+  let recOpen = null;
+  function otherSide(r) {
+    const mine = new Set(U.numbers.map(n => n.number));
+    const p = (r.parties || []).find(x => x.number && !mine.has(x.number) && x.number !== r.internal);
+    const num = p ? p.number : (mine.has(r.internal) ? r.external : r.internal) || r.external;
+    const name = p?.name && p.name !== num ? p.name : (U.phonebook.find(e => e.number === num)?.name || "");
+    return name ? `${esc(name)} <span class="muted mono">${esc(num)}</span>` : `<span class="mono">${esc(num || "unbekannt")}</span>`;
+  }
+  function renderRec() {
+    const R = U.recordings;
+    $("#u-rec").hidden = !R || !R.length;      // nur zeigen, wenn es Aufnahmen gibt
+    if ($("#u-rec").hidden) return;
+    $("#c-rec").textContent = R.length ? `(${R.length})` : "";
+    $("#u-rec-body").innerHTML = R.length ? `<table><thead><tr><th>Zeit</th><th>Richtung</th><th>Meine Nummer</th><th>Gesprächspartner</th><th>Dauer</th><th></th></tr></thead><tbody>
+      ${R.map(r => `<tr><td>${fmtTime(r.start)}</td><td>${esc(DIR[r.direction] || "–")}</td>
+        <td class="mono">${esc(r.internal || "–")}</td><td>${otherSide(r)}</td>
+        <td class="mono">${fmtDur(Math.round(r.duration || 0))}${r.partial ? ` <span title="Während des Gesprächs aus- oder eingeschaltet; Pausen sind Stille">${badge("neutral", "teilweise")}</span>` : ""}</td>
+        <td><div class="actions"><button class="small" data-recplay="${esc(r.id)}">▶</button>
+          ${r.transcript ? `<button class="small" data-rectext="${esc(r.id)}">Text</button>` : (r.transcript_status === "pending" ? badge("neutral", "Abschrift läuft …") : "")}
+          ${link(`/api/recording/files/${esc(r.id)}?download=1`, "⤓", "Herunterladen")}</div></td></tr>
+        ${r.transcript ? `<tr data-recrow="${esc(r.id)}" ${recOpen === r.id ? "" : "hidden"}><td colspan="6">
+          <div style="white-space:pre-wrap;font-size:13px;line-height:1.5">${esc(r.transcript)}</div></td></tr>` : ""}`).join("")}
+      </tbody></table>` : `<div class="empty">Noch keine Aufzeichnungen.</div>`;
   }
 
   // ---------------- Fax ----------------
@@ -153,7 +181,7 @@
     const err = $("#errors");
     err.style.display = j.error ? "block" : "none";
     err.textContent = j.error || "";
-    renderVm(); renderFax(); renderSd(); renderPb();
+    renderVm(); renderRec(); renderFax(); renderSd(); renderPb();
     clearTimeout(poll);
     if (U.fax.enabled && U.fax.sent.some(x => x.status === "calling")) poll = setTimeout(load, 5000);
   }
@@ -166,6 +194,13 @@
       if (player) player.pause();
       player = new Audio(`/api/voicemail/audio/${d.play}`);
       player.play().catch(() => alert("Abspielen nicht möglich."));
+    } else if (d.recplay) {
+      if (player) player.pause();
+      player = new Audio(`/api/recording/files/${encodeURIComponent(d.recplay)}`);
+      player.play().catch(() => alert("Abspielen nicht möglich."));
+    } else if (d.rectext) {
+      const row = document.querySelector(`tr[data-recrow="${d.rectext}"]`);
+      if (row) { row.hidden = !row.hidden; recOpen = row.hidden ? null : d.rectext; }
     } else if (d.move || d.vmdel) {
       if (d.vmdel && !confirm("Nachricht löschen?")) return;
       e.target.disabled = true;

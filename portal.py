@@ -8,6 +8,7 @@ Zwei Rollen:
       - Faxe senden (Absender: eigene Nummern) und die empfangenen Faxe der eigenen Faxnummern
       - Kurzwahltasten der eigenen Telefone
       - Telefonbuch (gemeinsam fuer alle): Namen zu Rufnummern eintragen
+      - Gespraechsaufzeichnungen, an denen eine der eigenen Rufnummern beteiligt war (anhoeren, herunterladen)
 
 Welche Rufnummern (Durchwahlen, Faxnummern) zu welchem Benutzer gehoeren, legt der Administrator fest
 (Tab Benutzer). Ablage: <VM_CONFIG_DIR>/cme-users.json.
@@ -72,6 +73,9 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     def pb():
         return app.config.get("PHONEBOOK") or {}
 
+    def rec():
+        return app.config.get("RECORDING") or {}
+
     def my_boxes(nums: list[str]) -> set[str]:
         v = vm()
         if not v:
@@ -112,6 +116,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     def chk_pool(m, nums):
         return any(p["tag"] == m.group(1) for p in my_pools(nums))
 
+    def chk_rec(m, nums):
+        r = rec()
+        return bool(r) and r["may"](m.group(1), nums)
+
     def always(m, nums):  # noqa: ARG001
         return True
 
@@ -125,6 +133,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         ("GET", r"/api/vmapps/fax/sent/([0-9a-f]{10,40})\.pdf", chk_fax_out),
         ("POST", r"/api/vmapps/fax/sent/([0-9a-f]{10,40})/retry", chk_fax_out),
         ("DELETE", r"/api/vmapps/fax/sent/([0-9a-f]{10,40})", chk_fax_out),
+        ("GET", r"/api/recording/files/([0-9]{8}-[0-9]{6}-[0-9a-f]{6})", chk_rec),
         ("PUT", r"/api/phonebook/speeddials/(\d+)", chk_pool),
         ("POST", r"/api/phonebook/entries", always),
         ("PUT", r"/api/phonebook/entries/[0-9A-Za-z]{1,40}", always),
@@ -204,7 +213,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         u = me() or {}
         nums = my_numbers(u)
         out = {"ok": True, "user": {k: u.get(k) for k in ("name", "email", "provider", "admin")}, "numbers": [],
-               "voicemail": [], "fax": {"enabled": False}, "pools": [], "phonebook": []}
+               "voicemail": [], "fax": {"enabled": False}, "pools": [], "phonebook": [], "recordings": None}
         v = vm()
         dns = {}
         try:
@@ -235,6 +244,13 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                                       if n["kind"] in ("fax", "phone")]}
         out["pools"] = [{"tag": p["tag"], "desc": p["desc"], "type": p["type"], "lines": p["lines"], "speed": p["speed"]}
                         for p in my_pools(nums)]
+        r = rec()
+        if r and r["enabled"]():
+            try:
+                out["recordings"] = r["list"](nums)
+            except Exception as e:
+                out["recordings"] = []
+                out["error"] = f"Aufzeichnungen: {type(e).__name__}: {e}"
         if pb().get("entries"):
             out["phonebook"] = sorted(pb()["entries"](), key=lambda e: (bool(e.get("name")), -e.get("last", 0)))
         return jsonify(out)
