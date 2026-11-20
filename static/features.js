@@ -213,5 +213,61 @@
     }
   });
 
-  loadPickup(); loadCor(); loadConf();
+  // ======================= Autoregistrierung =======================
+  let ac = document.getElementById("autoreg-card");
+  if (!ac) {
+    ac = document.createElement("section");
+    ac.className = "card";
+    ac.id = "autoreg-card";
+    cc.after(ac);
+  }
+  let A = null;
+
+  function renderAutoreg() {
+    ac.innerHTML = `<h2>Autoregistrierung <span class="count"></span>
+        <span class="right muted" style="font-weight:400;font-size:12px">voice register global / auto-register</span></h2>
+      <div class="body"><div class="hint">Eingeschaltet melden sich neue SIP-Telefone (z. B. ATA 190) ohne vorher angelegten Pool an
+        und bekommen die nächste freie Nummer aus dem Bereich. Am Telefon wird dafür das Passwort eingegeben.
+        Nach der Einrichtung besser wieder ausschalten, damit sich keine fremden Geräte anmelden.</div>
+      <form id="f-autoreg">
+        <label class="check"><input type="checkbox" name="enabled" ${A.enabled ? "checked" : ""}> Autoregistrierung eingeschaltet</label>
+        <div class="row">
+          <div><label>Rufnummern von</label><input name="start" class="mono" inputmode="numeric" value="${esc(A.start)}" placeholder="300"></div>
+          <div><label>bis</label><input name="end" class="mono" inputmode="numeric" value="${esc(A.end)}" placeholder="399"></div>
+        </div>
+        <div class="row">
+          <div><label>Passwort ${A.password ? "(gesetzt – leer lassen, um es zu behalten)" : "*"}</label>
+            <input name="password" class="mono" autocomplete="new-password" placeholder="${A.password ? "••••••" : ""}"></div>
+          <div></div>
+        </div>
+        <div class="actions"><button class="primary" type="submit">Am Router übernehmen</button>
+          ${A.enabled ? badge("warn", "eingeschaltet") : badge("neutral", "ausgeschaltet")}</div>
+        <div class="msg" id="m-autoreg"></div>
+      </form>
+      ${A.pools.length ? `<div class="hint" style="margin-top:12px">Automatisch angelegt: ${A.pools.map(p =>
+        `Pool ${esc(p.tag)}${p.type ? " (" + esc(p.type) + ")" : ""} – ${p.numbers.map(esc).join(", ")}`).join("; ")}.
+        Über „Bearbeiten“ in der Telefonliste lassen sich Beschreibung und Rufnummern dauerhaft festlegen.</div>` : ""}
+      </div>`;
+  }
+
+  async function loadAutoreg() {
+    const j = await api("/api/autoreg");
+    if (!j.ok) { ac.innerHTML = `<h2>Autoregistrierung</h2><div class="empty">${esc(j.error || "Fehler")}</div>`; return; }
+    A = j;
+    renderAutoreg();
+  }
+
+  ac.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, btn = f.querySelector("button[type=submit]");
+    btn.disabled = true;
+    const j = await api("/api/autoreg", { method: "PUT", body: JSON.stringify({
+      enabled: f.enabled.checked, start: f.start.value, end: f.end.value, password: f.password.value }) });
+    btn.disabled = false;
+    if (!j.ok) { showMsg($("#m-autoreg"), false, j.error || "Fehler"); return; }
+    await loadAutoreg();
+    showMsg($("#m-autoreg"), true, j.unchanged ? "Keine Änderung." : `Übernommen.${cfg(j)}`);
+  });
+
+  loadPickup(); loadCor(); loadAutoreg(); loadConf();
 })();

@@ -19,6 +19,10 @@ Berechtigungen (COR, feste Stufen)
   Hintergrund nachgezogen, wenn sich der Provider-Dial-Peer aendert. Dial-Peers nur fuer Notrufe
   (110, 112, 115, 116...) bleiben ohne Sperre.
 
+Autoregistrierung (SIP)
+  voice register global / auto-register mit password, auto-assign <von> to <bis> und
+  service-enable / no service-enable (ein/aus).
+
 Konferenzraeume (Asterisk ConfBridge)
   cme/extensions_conf.conf   [cme-conf] mit den Nummern, je Raum [conf-<id>] (PIN-Abfrage)
   cme/confbridge_cme.conf    je Raum Bridge-, Teilnehmer- und Moderatorprofil
@@ -180,6 +184,41 @@ def parse_peers(cfg: str) -> dict[str, dict]:
         elif t.startswith("corlist outgoing "):
             cur["corlist"] = t.split()[2]
     return peers
+
+
+def parse_autoreg(cfg: str) -> dict:
+    """voice register global / auto-register -> {present, enabled, password, start, end}"""
+    res = {"present": False, "enabled": False, "password": False, "start": "", "end": "", "template": ""}
+    glob = sub = False
+    disabled = False
+    for line in cfg.splitlines():
+        if not line.startswith(" "):
+            glob = line.strip() == "voice register global"
+            sub = False
+            continue
+        if not glob:
+            continue
+        if re.match(r"^ \S", line):
+            sub = line.strip() == "auto-register"
+            if sub:
+                res["present"] = True
+            continue
+        if not sub:
+            continue
+        t = line.strip()
+        if t.startswith("password "):
+            res["password"] = True
+        elif t == "no service-enable":
+            disabled = True
+        else:
+            m = re.match(r"^auto-assign (\d+) to (\d+)", t)
+            if m:
+                res["start"], res["end"] = m.groups()
+            m = re.match(r"^template (\d+)", t)
+            if m:
+                res["template"] = m.group(1)
+    res["enabled"] = res["present"] and not disabled
+    return res
 
 
 def register(app, router, apply, demo: bool, ctx: dict) -> None:
@@ -484,6 +523,61 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
 
     if not demo:
         threading.Thread(target=cor_sync_loop, daemon=True, name="cor-sync").start()
+
+    # =====================================================================
+    # Autoregistrierung (SIP-Telefone melden sich ohne vorher angelegten Pool an)
+    # =====================================================================
+
+    def autoreg_state() -> dict:
+        st = parse_autoreg(router.show("show running-config | section voice register global"))
+        dns, pools, _ = parse_voice_register(show_vr())
+        auto = [p for p in pools.values() if p["desc"] == "AUTO-REG"]
+        st["pools"] = [{"tag": p["tag"], "type": p["type"],
+                        "numbers": [dns[d]["number"] for d in p["dns"] if d in dns]} for p in auto]
+        return st
+
+    @app.get("/api/autoreg")
+    def autoreg_get():
+        return jsonify(ok=True, **autoreg_state())
+
+    @app.put("/api/autoreg")
+    def autoreg_put():
+        """Body: {enabled: bool, password: neu|"", start, end}"""
+        b = request.get_json(force=True) or {}
+        cur = autoreg_state()
+        enabled = bool(b.get("enabled"))
+        pw = str(b.get("password") or "").strip()
+        start, end = str(b.get("start") or "").strip(), str(b.get("end") or "").strip()
+        if pw and not re.fullmatch(r"[A-Za-z0-9]{4,32}", pw):
+            raise FeatError("Passwort: 4–32 Buchstaben/Ziffern ohne Sonderzeichen.")
+        if start or end:
+            if not (start.isdigit() and end.isdigit()):
+                raise FeatError("Rufnummernbereich: von und bis als Ziffern angeben.")
+            if len(start) != len(end) or int(start) > int(end):
+                raise FeatError("Rufnummernbereich: „von“ muss kleiner als „bis“ sein und gleich viele Stellen haben.")
+            if int(end) - int(start) > 999:
+                raise FeatError("Rufnummernbereich: höchstens 1000 Nummern.")
+        if enabled:
+            if not (pw or cur["password"]):
+                raise FeatError("Zum Einschalten bitte ein Passwort festlegen.")
+            if not ((start and end) or cur["start"]):
+                raise FeatError("Zum Einschalten bitte den Rufnummernbereich angeben.")
+        sub = []
+        if enabled != cur["enabled"]:
+            sub.append("  service-enable" if enabled else "  no service-enable")
+        if pw:
+            sub.append(f"  password {pw}")
+        if start and end and (start, end) != (cur["start"], cur["end"]):
+            sub.append(f"  auto-assign {start} to {end}")
+        if not sub:
+            return jsonify(ok=True, config=[], unchanged=True)
+        res = apply(["voice register global", " auto-register"] + sub)
+        if res.get("ok"):
+            now = autoreg_state()
+            if now["enabled"] != enabled or (start and end and (now["start"], now["end"]) != (start, end)):
+                res.update(ok=False, error="Der Router hat die Einstellung nicht übernommen.\n\n"
+                           + "\n".join([l for l in (res.get("output") or "").splitlines() if l.strip()][-20:]))
+        return reply(res)
 
     # =====================================================================
     # Konferenzraeume (Asterisk ConfBridge)
