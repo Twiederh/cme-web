@@ -59,6 +59,8 @@
           <br><b>Rechtlich:</b> Gespräche dürfen nur mit Einwilligung aller Beteiligten aufgezeichnet werden (§ 201 StGB).</div>
       </div>
 
+      ${activePart()}
+
       ${h2("Einrichtung am Router")}
       <div class="body">
         <table><thead><tr><th></th><th>Dial-Peer</th><th>Beschreibung</th><th>Ziel / eingehend</th><th>Status</th></tr></thead><tbody>
@@ -85,7 +87,12 @@
         <form id="f-recset">
           <div class="row">
             <div><label class="check"><input type="checkbox" name="enabled" ${s.enabled ? "checked" : ""}> Aufzeichnen (aus = pausiert, der Router bleibt eingerichtet)</label>
-              <label class="check"><input type="checkbox" name="transcript" ${s.transcript ? "checked" : ""}> Abschrift erstellen (Whisper, lokal)</label>
+              <label style="margin-top:6px">Aufnahme je Gespräch</label>
+              <select name="mode">
+                <option value="always" ${s.mode !== "demand" ? "selected" : ""}>immer – läuft ab Gesprächsbeginn, lässt sich ausschalten</option>
+                <option value="demand" ${s.mode === "demand" ? "selected" : ""}>nur auf Wunsch – startet aus, wird bei Bedarf eingeschaltet</option>
+              </select>
+              <label class="check" style="margin-top:6px"><input type="checkbox" name="transcript" ${s.transcript ? "checked" : ""}> Abschrift erstellen (Whisper, lokal)</label>
               <label class="check"><input type="checkbox" name="mail" ${s.mail ? "checked" : ""} ${R.mail_ready ? "" : "disabled"}> Aufnahme per E-Mail schicken
                 ${R.mail_ready ? "" : '<span class="muted">(VM_SMTP_USER fehlt)</span>'}</label></div>
             <div class="row" style="margin:0">
@@ -125,7 +132,7 @@
       ${R.recordings.length ? `<table><thead><tr><th>Zeit</th><th>Richtung</th><th>Intern</th><th>Extern</th><th>Dauer</th><th>Abschrift / Mail</th><th></th></tr></thead><tbody>
         ${R.recordings.map(r => `<tr><td>${fmtTime(r.start)}</td><td>${esc(DIR[r.direction] || "–")}</td>
           <td class="mono">${esc(numName(r.internal) || "–")}</td><td class="mono">${esc(r.external || "–")}</td>
-          <td>${fmtDur(r.duration)} <span class="muted">${fmtSize(r.size)}</span></td>
+          <td>${fmtDur(r.duration)} <span class="muted">${fmtSize(r.size)}</span>${r.partial ? ` <span title="Während des Gesprächs aus- oder eingeschaltet; Pausen sind Stille">${badge("neutral", "teilweise")}</span>` : ""}</td>
           <td>${{ ok: badge("ok", "Abschrift"), pending: badge("neutral", "Abschrift läuft …"), failed: badge("bad", "Abschrift fehlgeschlagen") }[r.transcript_status] || ""}
             ${r.mailed ? `<span class="muted" title="${esc(r.mailed)}">✉</span>` : (r.mail_error ? `<span title="${esc(r.mail_error)}">${badge("warn", "Mail fehlgeschlagen")}</span>` : "")}</td>
           <td><div class="actions">
@@ -145,6 +152,23 @@
     const q = $("#rec-q");
     let timer = null;
     q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { query = q.value; load(true); }, 400); });
+  }
+
+  // Laufende Gespraeche: Aufnahme ein-/ausschalten
+  function activePart() {
+    const list = R.active || [];
+    if (!list.length) return "";
+    const since = (t) => fmtDur(Date.now() / 1000 - t);
+    return `${h2("Laufende Gespräche")}
+      <table><thead><tr><th>Seit</th><th>Beteiligte</th><th>Aufnahme</th><th></th></tr></thead><tbody>
+        ${list.map(a => `<tr><td>${since(a.start)}</td>
+          <td class="mono">${(a.numbers || []).map(n => esc(numName(n))).join("<br>") || "–"}</td>
+          <td>${a.recording ? badge("bad", "● läuft") : badge("neutral", "○ aus")}</td>
+          <td><button class="small ${a.recording ? "danger" : "primary"}" data-rec-toggle="${esc(a.id)}" data-on="${a.recording ? "0" : "1"}">
+            ${a.recording ? "Aufnahme stoppen" : "Aufnahme starten"}</button></td></tr>`).join("")}
+      </tbody></table>
+      <div class="body" style="padding-top:6px"><div class="hint">Ausgeschaltete Abschnitte werden in der Aufnahme zu Stille.
+        Am Telefon geht das auch: Taste <b>Dienste</b> → „Aufnahme … ein/aus“ (Telefondienst wie bei der Visual Voicemail).</div></div>`;
   }
 
   function noticePart() {
@@ -203,7 +227,7 @@
       const emails = {};
       f.querySelectorAll("input[name^='email:']").forEach(i => { if (i.value.trim()) emails[i.name.slice(6)] = i.value.trim(); });
       const body = { enabled: f.enabled.checked, transcript: f.transcript.checked, mail: f.mail.checked,
-                     retention_days: f.retention_days.value, min_secs: f.min_secs.value, emails,
+                     retention_days: f.retention_days.value, min_secs: f.min_secs.value, emails, mode: f.mode.value,
                      default_email: f.default_email.value, notice: f.notice.checked, prefix: f.prefix.value };
       const j = await api("/api/recording/settings", { method: "PUT", body: JSON.stringify(body) });
       if (!j.ok) { showMsg($("#m-recset"), false, j.error || "Fehler"); return; }
@@ -253,6 +277,11 @@
       if (!j.ok) { showMsg($("#m-rec-router"), false, j.error || "Fehler"); return; }
       await load();
       showMsg($("#m-rec-router"), true, "Entfernt.\n\n" + (j.config || []).join("\n"));
+    } else if (d.recToggle) {
+      t.disabled = true;
+      const j = await api(`/api/recording/active/${d.recToggle}`, { method: "POST", body: JSON.stringify({ on: d.on === "1" }) });
+      if (!j.ok) { t.disabled = false; alert(j.error || "Fehler"); return; }
+      await load();
     } else if (d.recPlay) {
       play(`/api/recording/files/${d.recPlay}`);
     } else if (d.recText) {
@@ -289,4 +318,10 @@
     const a = document.activeElement;
     if (!document.hidden && card.offsetParent !== null && !(a && card.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) load();
   }, 30000);
+  // waehrend Gespraechen oefter, damit der Ein/Aus-Zustand stimmt
+  setInterval(() => {
+    const a = document.activeElement;
+    if ((R.active || []).length && !document.hidden && card.offsetParent !== null
+        && !(a && card.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) load();
+  }, 5000);
 })();

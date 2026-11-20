@@ -9,6 +9,8 @@ Router:  media profile recorder / media class ... siprec an den gewaehlten Trunk
 Asterisk: cme/extensions_rec.conf mit [cme-recnotice]: Ansage als Early Media, dann zur Nummer.
 Recorder: liest cme-recording.json (Einstellungen, interne und eigene Rufnummern),
           schreibt Aufnahmen und .status.json nach VM_REC_DIR.
+Ein/Aus waehrend des Gespraechs: .control.json in VM_REC_DIR (Weboberflaeche und Telefondienst /ipphone/rec);
+Modus "demand" = jedes Gespraech beginnt ohne Aufnahme.
 """
 
 from __future__ import annotations
@@ -17,11 +19,12 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 import wave
 from pathlib import Path
 
-from flask import jsonify, request, send_file
+from flask import Response, jsonify, request, send_file
 
 RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 RE_NUM = re.compile(r"^\+?[0-9]{1,32}$")
@@ -56,7 +59,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
     def settings() -> dict:
         s = {"enabled": True, "transcript": True, "mail": False, "emails": {}, "default_email": "",
              "retention_days": 90, "min_secs": 3, "notice": True, "prefix": "8199", "notice_tts": None,
-             "peers": [], "internal": [], "own": []}
+             "peers": [], "internal": [], "own": [], "mode": "always"}
         try:
             s.update(json.loads((cfgdir / "cme-recording.json").read_text()))
         except (FileNotFoundError, ValueError):
@@ -318,7 +321,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         vm = ctx["settings"]()["mailboxes"]
         s.pop("demo_router", None)
         return jsonify(ok=True, enabled=True, settings=s, router=st, router_error=err, host_ip=host_ip,
-                       recorder=recorder_status(), numbers=nums, mail_ready=ctx["mail_ready"],
+                       recorder=recorder_status(), active=active_calls(), numbers=nums, mail_ready=ctx["mail_ready"],
                        vm_emails={k: v.get("email", "") for k, v in vm.items() if v.get("email")},
                        notice={"exists": notice_wav.exists()}, tts=tools["tts_info"](),
                        recordings=recordings(request.args.get("q", "")))
@@ -353,6 +356,10 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         if any(n["number"].startswith(prefix) for n in ctx["numbers"]()):
             raise RecError(f"Mit {prefix} beginnt schon eine interne Rufnummer.")
         router_change = prefix != s["prefix"] or bool(b.get("notice")) != bool(s.get("notice"))
+        mode = str(b.get("mode") or s.get("mode") or "always")
+        if mode not in ("always", "demand"):
+            raise RecError("Modus: always oder demand.")
+        s.update(mode=mode)
         s.update(enabled=bool(b.get("enabled")), transcript=bool(b.get("transcript")), mail=bool(b.get("mail")),
                  emails=emails, default_email=default, retention_days=days, min_secs=mins,
                  notice=bool(b.get("notice")), prefix=prefix)
@@ -456,6 +463,161 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         s["notice_tts"] = None
         save(s, refresh=False)
         return jsonify(ok=True)
+
+    # ---------------- Aufnahme ein/aus waehrend des Gespraechs ----------------
+    # cme-web schreibt recdir/.control.json ({aufnahme-id: true|false}); der Recorder liest sie zweimal je Sekunde.
+
+    ctl_lock = threading.Lock()
+
+    def set_control(rid: str, on: bool) -> None:
+        with ctl_lock:
+            path = recdir / ".control.json"
+            try:
+                cur = json.loads(path.read_text() or "{}")
+            except (FileNotFoundError, ValueError):
+                cur = {}
+            active = {a["id"] for a in recorder_status().get("active", [])}
+            cur = {k: v for k, v in cur.items() if k in active}     # beendete Gespraeche aufraeumen
+            cur[rid] = bool(on)
+            tmp = recdir / ".control.json.tmp"
+            tmp.write_text(json.dumps(cur))
+            tmp.replace(path)
+            if demo:       # im Demo-Modus gibt es keinen Recorder: Status direkt nachziehen
+                st_path = recdir / ".status.json"
+                try:
+                    st = json.loads(st_path.read_text())
+                    for a in st.get("active", []):
+                        if a["id"] == rid:
+                            a["recording"] = bool(on)
+                    st_path.write_text(json.dumps(st))
+                except (FileNotFoundError, ValueError):
+                    pass
+
+    def active_calls() -> list[dict]:
+        st = recorder_status()
+        if not st.get("online"):
+            return []
+        try:
+            want = json.loads((recdir / ".control.json").read_text() or "{}")
+        except (FileNotFoundError, ValueError):
+            want = {}
+        out = []
+        for a in st.get("active", []):
+            a = dict(a)
+            # gerade umgeschaltet, Recorder hat den Status noch nicht geschrieben
+            if a["id"] in want and time.time() - st.get("time", 0) < 3:
+                a["recording"] = bool(want[a["id"]])
+            out.append(a)
+        return out
+
+    @app.post("/api/recording/active/<rid>")
+    def rec_toggle(rid):
+        """Body: {on: bool}"""
+        if not RE_ID.match(rid):
+            raise RecError("Ungültiges Gespräch.")
+        if rid not in {a["id"] for a in recorder_status().get("active", [])}:
+            raise RecError("Das Gespräch ist schon beendet.")
+        on = bool((request.get_json(force=True) or {}).get("on"))
+        set_control(rid, on)
+        return jsonify(ok=True, on=on)
+
+    # ---------------- Telefondienst: Aufnahme am Telefon ein-/ausschalten ----------------
+    # Ueber den Telefon-Port (vvm.py, /ipphone/...). Das Telefon wird an seiner IP erkannt und sieht nur
+    # Gespraeche, an denen eine seiner Rufnummern beteiligt ist.
+
+    import vvm as _vvm
+    PH = "/ipphone/rec"
+    pcache = {"t": 0.0, "map": ({}, {})}
+
+    def phone_numbers(ip: str) -> list[str]:
+        if time.time() - pcache["t"] > 20:
+            pcache["map"] = (_vvm.parse_pool_ips(router.show("show voice register pool all brief")),
+                             _vvm.parse_pool_numbers(router.show("show running-config | section voice register")))
+            pcache["t"] = time.time()
+        ips, nums = pcache["map"]
+        pool = ips.get(ip) or (next(iter(ips.values()), None) if demo else None)
+        return nums.get(pool, []) if pool else []
+
+    def tail(n: str) -> str:
+        d = re.sub(r"\D", "", n or "")
+        return d[-8:] if len(d) >= 8 else d
+
+    def calls_for(ip: str) -> list[dict]:
+        mine = {tail(n) for n in phone_numbers(ip) if tail(n)}
+        return [a for a in active_calls() if mine & {tail(n) for n in a.get("numbers", [])}]
+
+    def other_side(a: dict, ip: str) -> str:
+        mine = {tail(n) for n in phone_numbers(ip)}
+        rest = [n for n in a.get("numbers", []) if tail(n) not in mine]
+        return rest[0] if rest else "?"
+
+    def phone_page(note: str = ""):
+        ip = request.remote_addr or ""
+        base = request.host_url.rstrip("/") + PH
+        back = request.host_url.rstrip("/") + _vvm.PREFIX
+        calls = calls_for(ip)
+        if not calls:
+            return _vvm.xml_resp(_vvm.xml_text("Gesprächsaufnahme", note, "Kein Gespräch mit Aufzeichnung aktiv.",
+                                               [("Aktual.", base), ("Zurück", back), ("Beenden", _vvm.EXIT)]))
+        if len(calls) > 1:
+            items = [(f"{'● läuft' if a['recording'] else '○ aus'}  {other_side(a, ip)}  ({_vvm.fmt_dur(int(time.time() - a['start']))})",
+                      f"{base}/{a['id']}") for a in calls]
+            return _vvm.xml_resp(_vvm.xml_menu("Gesprächsaufnahme", note or "Gespräch wählen", items,
+                                               [("Auswahl", "SoftKey:Select"), ("Aktual.", base), ("Beenden", _vvm.EXIT)]))
+        return call_page(calls[0], note)
+
+    def call_page(a: dict, note: str = ""):
+        ip = request.remote_addr or ""
+        base = request.host_url.rstrip("/") + PH
+        u = f"{base}/{a['id']}"
+        text = (f"Gespräch mit {other_side(a, ip)}\nDauer: {_vvm.fmt_dur(int(time.time() - a['start']))}\n\n"
+                + ("Die Aufnahme läuft." if a["recording"] else "Die Aufnahme ist ausgeschaltet."))
+        keys = [("Stopp", f"{u}/off")] if a["recording"] else [("Start", f"{u}/on")]
+        keys += [("Aktual.", u), ("Beenden", _vvm.EXIT)]
+        return _vvm.xml_resp(_vvm.xml_text("Gesprächsaufnahme", note or ("● Aufnahme" if a["recording"] else "○ keine Aufnahme"),
+                                           text, keys))
+
+    def phone_guard():
+        if request.environ.get("cme.phone") != "1":
+            return Response("Nicht gefunden", status=404)
+        return None
+
+    @app.get(PH)
+    def rec_phone():
+        return phone_guard() or phone_page()
+
+    @app.get(f"{PH}/<rid>")
+    def rec_phone_call(rid):
+        g = phone_guard()
+        if g:
+            return g
+        a = next((x for x in calls_for(request.remote_addr or "") if x["id"] == rid), None) if RE_ID.match(rid) else None
+        return call_page(a) if a else phone_page("Gespräch beendet")
+
+    @app.get(f"{PH}/<rid>/<act>")
+    def rec_phone_set(rid, act):
+        g = phone_guard()
+        if g:
+            return g
+        a = next((x for x in calls_for(request.remote_addr or "") if x["id"] == rid), None) if RE_ID.match(rid) else None
+        if not a or act not in ("on", "off"):
+            return phone_page("Gespräch beendet")
+        set_control(rid, act == "on")
+        a["recording"] = act == "on"
+        return call_page(a, "Aufnahme eingeschaltet" if act == "on" else "Aufnahme ausgeschaltet")
+
+    def phone_menu_item(ip: str):
+        """Eintrag im Menue des Telefondienstes (vvm.py)."""
+        if not ctx["enabled"] or not settings().get("enabled", True):
+            return None
+        calls = calls_for(ip)
+        url = request.host_url.rstrip("/") + PH
+        if calls:
+            on = any(a["recording"] for a in calls)
+            return (f"{'● Aufnahme läuft' if on else '○ Aufnahme aus'} – ein/aus", url, True)
+        return ("Gesprächsaufnahme", url, False)
+
+    app.config.setdefault("PHONE_MENU", []).append(phone_menu_item)
 
     # Asterisk-Datei beim Start anlegen (z. B. nach einem Update)
     if ctx["enabled"] and not (cfgdir / "extensions_rec.conf").exists():
