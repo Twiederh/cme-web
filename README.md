@@ -279,6 +279,12 @@ werden aus den vorhandenen Aliasen der Listen ermittelt; gibt es keine, gilt
 `bootflash:/its` (änderbar mit `CME_MEDIA_DIR`). Beim Löschen werden Eintrag, Datei und
 Alias entfernt. Danach wie immer „Konfiguration speichern“.
 
+Vorschaubilder und Klingeltöne liest die Seite nur einmal vom Router (das Auslesen über
+SSH ist langsam) und speichert sie lokal in `media-cache` im Volume `vm-config`
+(anderer Ort mit `CME_MEDIA_CACHE`). Fehlende Dateien holt sie im Hintergrund; neu
+hochgeladene landen gleich im Cache. Alle 30 Minuten vergleicht sie die Dateigrößen mit
+dem Router und holt geänderte Dateien neu.
+
 ### Codec-Listen
 
 In der Karte **Codec-Listen** werden `voice class codec`-Listen angelegt, sortiert,
