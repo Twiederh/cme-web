@@ -267,6 +267,23 @@ def register(app, router, demo: bool, ctx: dict) -> None:
         if g:
             return g
         pool, numbers, boxes = lookup(phone_ip())
+        # weitere Eintraege anderer Module (z. B. Gespraechsaufnahme ein/aus aus recording.py)
+        extra = []
+        for fn in app.config.get("PHONE_MENU", []):
+            try:
+                it = fn(phone_ip())
+            except Exception:
+                it = None
+            if it:
+                extra.append(it)
+        if extra and pool is not None:
+            items = [(n, u) for n, u, first in extra if first]
+            for b in boxes:
+                msgs = list_messages(spool, mbid(b))
+                new = sum(m["folder"] == "INBOX" for m in msgs)
+                items.append((f"Voicemail {b}  –  {new} neu, {len(msgs) - new} alt", f"{base()}/{b}"))
+            items += [(n, u) for n, u, first in extra if not first]
+            return xml_resp(xml_menu("Dienste", "Auswahl", items, [("Auswahl", "SoftKey:Select"), ("Beenden", EXIT)]))
         if not boxes:
             if pool is None:
                 why = f"Kein registriertes Telefon mit der Adresse {phone_ip()} gefunden."
