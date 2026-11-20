@@ -273,6 +273,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         files = sorted(recdir.glob("*.json"), reverse=True) if recdir.is_dir() else []
         q = q.strip().lower()
         for p in files:
+            if not RE_ID.match(p.stem):
+                continue          # .status.json, .control.json usw. sind keine Aufnahmen
             try:
                 m = json.loads(p.read_text())
             except (ValueError, OSError):
