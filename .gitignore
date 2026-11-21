@@ -8,3 +8,5 @@ DerivedData/
 server/.env
 __pycache__/
 .DS_Store
+build/
+build-logs/
