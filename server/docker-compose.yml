@@ -1,5 +1,14 @@
 # Portainer-Stack "cme-softphone-gateway" auf docker01
 #
+# Portainer: Stacks → Add stack → Repository
+#   URL:          https://gitea.wiederhol.de/thomas/cme-softphone
+#   Compose path: server/docker-compose.yml
+#   Env:          RELAY_LOCALPUSH_SECRET, APNS_KEY_ID, APNS_TEAM_ID, (APNS_ENV, FLEXISIP_IMAGE)
+#
+# Traefik bewusst NICHT davor: SIP (UDP/TCP) und der Local-Push-Kanal sind keine HTTP-Dienste.
+# Ein Proxy davor würde die Absender-IPs verstecken (NAT-/Contact-Behandlung in Flexisip bricht)
+# und RTP läuft ohnehin direkt zwischen Telefon und CME.
+#
 # Beide Container laufen im Host-Netz:
 #  - Flexisip braucht SIP auf der LAN-IP und muss CME (192.168.11.4) direkt erreichen
 #  - der Relay muss für Flexisip unter 127.0.0.1:8090 erreichbar sein und
