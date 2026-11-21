@@ -26,6 +26,22 @@ enum SIPTransport: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Betriebsart der Mac-App.
+enum MacMode: String, Codable, CaseIterable, Identifiable {
+    /// Der Mac telefoniert selbst (liblinphone, eigenes Headset/Mikrofon).
+    case softphone
+    /// Der Mac steuert ein Cisco-SIP-Tischtelefon (XML Execute + Statusabo).
+    case deskPhone
+    var id: String { rawValue }
+    var label: String { self == .softphone ? "Softphone (Mac telefoniert)" : "Tischtelefon steuern" }
+}
+
+/// Welches SIP-Event-Paket CME für das Statusabo liefert.
+enum StatusEventPackage: String, Codable, CaseIterable, Identifiable {
+    case dialog, presence
+    var id: String { rawValue }
+}
+
 enum MediaEncryptionSetting: String, Codable, CaseIterable, Identifiable {
     case none, srtp
     var id: String { rawValue }
@@ -68,6 +84,26 @@ final class PhoneSettings: ObservableObject {
     @Published var videoEnabled: Bool { didSet { save() } }
     @Published var mediaEncryption: MediaEncryptionSetting { didSet { save() } }
 
+    // MARK: macOS / Tischtelefon
+    @Published var macMode: MacMode { didSet { save() } }
+    /// IP oder Hostname des Cisco-Telefons (z.B. 8851 am Schreibtisch).
+    @Published var deskPhoneHost: String { didSet { save() } }
+    /// Nebenstelle des Tischtelefons (für Statusabo / Anzeige), z.B. "10".
+    @Published var deskPhoneExtension: String { didSet { save() } }
+    /// Zugangsdaten für CGI/Execute (CME: "authentication credential …").
+    @Published var deskPhoneUser: String { didSet { save() } }
+    @Published var deskPhonePassword: String { didSet { save() } }
+    /// Leitung für SendDigits (meist 1).
+    @Published var deskPhoneLine: Int { didSet { save() } }
+    /// Tasten-URIs (modellabhängig, daher einstellbar).
+    @Published var keyAnswer: String { didSet { save() } }
+    @Published var keyHangup: String { didSet { save() } }
+    @Published var keyHold: String { didSet { save() } }
+    @Published var keyDecline: String { didSet { save() } }
+    @Published var statusEvent: StatusEventPackage { didSet { save() } }
+    /// Mitteilung bei eingehendem Anruf am Tischtelefon.
+    @Published var deskPhoneNotify: Bool { didSet { save() } }
+
     static let defaultAudio: [CodecEntry] = [
         .init(mime: "G722", enabled: true),
         .init(mime: "PCMA", enabled: true),
@@ -100,6 +136,18 @@ final class PhoneSettings: ObservableObject {
         videoCodecs = Self.decode(d.data(forKey: "videoCodecs")) ?? Self.defaultVideo
         videoEnabled = d.object(forKey: "videoEnabled") as? Bool ?? true
         mediaEncryption = MediaEncryptionSetting(rawValue: d.string(forKey: "mediaEncryption") ?? "") ?? .none
+        macMode = MacMode(rawValue: d.string(forKey: "macMode") ?? "") ?? .softphone
+        deskPhoneHost = d.string(forKey: "deskPhoneHost") ?? ""
+        deskPhoneExtension = d.string(forKey: "deskPhoneExtension") ?? ""
+        deskPhoneUser = d.string(forKey: "deskPhoneUser") ?? "cmephone"
+        deskPhonePassword = d.string(forKey: "deskPhonePassword") ?? ""
+        deskPhoneLine = d.object(forKey: "deskPhoneLine") as? Int ?? 1
+        keyAnswer = d.string(forKey: "keyAnswer") ?? "Key:Speaker"
+        keyHangup = d.string(forKey: "keyHangup") ?? "Key:Speaker"
+        keyHold = d.string(forKey: "keyHold") ?? "Key:Hold"
+        keyDecline = d.string(forKey: "keyDecline") ?? "Key:Soft3"
+        statusEvent = StatusEventPackage(rawValue: d.string(forKey: "statusEvent") ?? "") ?? .dialog
+        deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
         loading = false
     }
 
@@ -134,5 +182,17 @@ final class PhoneSettings: ObservableObject {
         d.set(try? JSONEncoder().encode(videoCodecs), forKey: "videoCodecs")
         d.set(videoEnabled, forKey: "videoEnabled")
         d.set(mediaEncryption.rawValue, forKey: "mediaEncryption")
+        d.set(macMode.rawValue, forKey: "macMode")
+        d.set(deskPhoneHost, forKey: "deskPhoneHost")
+        d.set(deskPhoneExtension, forKey: "deskPhoneExtension")
+        d.set(deskPhoneUser, forKey: "deskPhoneUser")
+        d.set(deskPhonePassword, forKey: "deskPhonePassword")
+        d.set(deskPhoneLine, forKey: "deskPhoneLine")
+        d.set(keyAnswer, forKey: "keyAnswer")
+        d.set(keyHangup, forKey: "keyHangup")
+        d.set(keyHold, forKey: "keyHold")
+        d.set(keyDecline, forKey: "keyDecline")
+        d.set(statusEvent.rawValue, forKey: "statusEvent")
+        d.set(deskPhoneNotify, forKey: "deskPhoneNotify")
     }
 }
