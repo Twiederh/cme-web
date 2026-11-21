@@ -347,8 +347,15 @@ final class SIPManager: ObservableObject {
 
     func setVideoViews(remote: PlatformView?, preview: PlatformView?) {
         guard let core else { return }
+        #if os(iOS)
+        // iOS-Wrapper erwartet direkt UIView
+        core.nativeVideoWindow = remote
+        core.nativePreviewWindow = preview
+        #else
+        // macOS-Wrapper erwartet einen Zeiger auf die NSView
         core.nativeVideoWindow = remote.map { Unmanaged.passUnretained($0).toOpaque() }
         core.nativePreviewWindow = preview.map { Unmanaged.passUnretained($0).toOpaque() }
+        #endif
     }
 
     /// Von Local Push: holt den Anruf (INVITE) aktiv ab, Flexisip liefert ihn per fork-late aus.
