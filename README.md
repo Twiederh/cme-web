@@ -1,7 +1,9 @@
-# CME Phone – SIP-Softphone für Cisco CME mit CallKit (iPhone & iPad)
+# CME Phone – SIP-Softphone für Cisco CME (iPhone, iPad, Mac)
 
 Eigenes Softphone für die Cisco-CME-Anlage (vcube, ISR 1100, IOS XE 17.12).
 SwiftUI-Oberfläche + CallKit, SIP/RTP/Video über **liblinphone** (Linphone SDK).
+Die **macOS-Version** telefoniert wahlweise selbst oder steuert ein Cisco-SIP-Tischtelefon
+(siehe [macOS-Version](#macos-version)).
 
 | | |
 |---|---|
@@ -138,6 +140,77 @@ Einstellungen in der App:
 
 ---
 
+## macOS-Version
+
+Eigenes Xcode-Projekt (`project-mac.yml`), gleicher SIP-Kern wie auf iOS. Die App läuft im Fenster
+**und** in der Menüleiste weiter, wenn das Fenster zu ist.
+
+### Zwei Betriebsarten (umschaltbar in Symbolleiste und Menüleiste)
+
+| | Softphone | Tischtelefon steuern |
+|---|---|---|
+| Wer telefoniert | der Mac (Headset, Studio Display, Mac-Mikrofon) | dein Cisco 8851/8845/8865 |
+| Wählen | SIP-INVITE vom Mac | `Dial:<nummer>` per CGI/Execute ans Telefon |
+| Annehmen / Auflegen / Halten | SIP | Tasten-URIs (`Key:Speaker`, `Key:Hold` …, einstellbar) |
+| DTMF | RFC 2833 | `SendDigits:<ziffern>:<leitung>` |
+| Status / eingehende Anrufe | SIP-Anrufstatus | SIP-Statusabo (`SUBSCRIBE` dialog oder presence) auf die Nebenstelle des Telefons → Mitteilung mit „Annehmen“/„Ablehnen“ |
+| Video | H.264 / H.265 | am Telefon (8845/8865) |
+
+Außerdem in beiden Modi: `tel:`-, `sip:`- und `callto:`-Links (Kontakte, Safari, Mail) öffnen CME Phone
+und wählen je nach Modus über den Mac oder über das Tischtelefon. Tastenkürzel: ⇧⌘A annehmen,
+⇧⌘E auflegen (Tischtelefon). Audiogeräte sind in den Einstellungen wählbar.
+
+### Warum nicht CSTA?
+
+Cisco hat CTI/CSTA ab **Unified CME 12.6 (IOS XE 16.11.1a)** entfernt. Auf dem vcube (17.12) sind die
+Befehle deaktiviert. Auch vorher ließen sich per CSTA nur **SCCP**-Telefone steuern, keine SIP-Telefone.
+Die 88xx laufen bei dir als SIP. Der einzige Weg, sie an CME fernzusteuern, ist deshalb die
+**Cisco IP Phone XML-Schnittstelle** (`CiscoIPPhoneExecute`). Die Steuerung steckt hinter dem
+Protokoll `DeskPhoneBackend`. Falls du später auf **CUCM 15** gehst, kann dort ein JTAPI-/CTI-Backend
+mit derselben Oberfläche dazukommen.
+
+### Einrichtung
+
+1. `cme/deskphone-control.cfg` anpassen und einspielen:
+   * `url authentication` + `authentication credential cmephone <passwort>`, dann Telefon neu starten
+   * Presence/BLF: `sip-ua presence enable`, `presence / allow subscribe / watcher all`, `allow watch` an der DN des Tischtelefons
+   * eigener Pool für den Mac (z.B. Nst. 23)
+2. Test im Terminal (muss am Telefon wählen):
+   ```bash
+   curl -u cmephone:<passwort> --data-urlencode 'XML=<CiscoIPPhoneExecute><ExecuteItem URL="Dial:23"/></CiscoIPPhoneExecute>' http://<telefon-ip>/CGI/Execute
+   ```
+   Antwort `CiscoIPPhoneError Number="4"` heißt: Authentifizierung schlägt fehl (URL/Credential/Neustart prüfen).
+3. Projekt erzeugen:
+   ```bash
+   xcodegen generate --spec project-mac.yml
+   open CMEPhoneMac.xcodeproj
+   ```
+   Das Swift-Paket für macOS ist `https://gitlab.linphone.org/BC/public/linphone-sdk-swift-macos` (Branch `stable`).
+   Falls Xcode es nicht findet: in Xcode *File → Add Package Dependencies* die aktuelle URL aus dem
+   Linphone-Wiki eintragen (Produkt `linphonesw`).
+4. In der App unter *Einstellungen → Konto* die Mac-Nebenstelle (23) und CME eintragen, unter
+   *Tischtelefon* IP, Nebenstelle (10), Benutzer/Passwort. Modus „Tischtelefon“ wählen.
+5. Unter *Tischtelefon → Experte* die Tasten-URIs für dein Modell ausprobieren und unter
+   *Einstellungen → Tischtelefon* zuordnen. Welche `Key:`-URIs ein 88xx annimmt, hängt von der Firmware ab.
+   `Dial:` und `SendDigits:` funktionieren zuverlässig, Annehmen und Auflegen meist über `Key:Speaker`
+   bzw. `Key:Headset` oder einen Softkey (`Key:Soft1` …).
+
+### Tests (macOS)
+
+| # | Test | Erwartung |
+|---|---|---|
+| M1 | Softphone: 23 → 10 | Mac telefoniert, Codec G.722 |
+| M2 | Softphone: 10 → 23 | Mitteilung mit Annehmen/Ablehnen, Klingelton |
+| M3 | Tischtelefon: Wählen 0711… | 8851 geht in Freisprechen und wählt |
+| M4 | Tischtelefon: Anruf auf 10 | Status „Klingelt“ + Mitteilung, „Annehmen“ nimmt am Telefon ab |
+| M5 | `tel:`-Link in Safari | wählt je nach Modus |
+| M6 | Statusabo | `show presence subscription summary` zeigt das Abo von 23 auf 10 |
+
+Wenn M4 keinen Status zeigt: in den Einstellungen das Event-Paket von `dialog` auf `presence` umstellen.
+CME liefert je nach Konfiguration nur eines davon.
+
+---
+
 ## Testplan
 
 | # | Test | Erwartung | Wenn nicht |
@@ -161,19 +234,24 @@ CME keine registrierten Telefone, sondern hängen an einem SIP-Trunk.
 ## Projektstruktur
 
 ```
-project.yml                 XcodeGen-Definition (App + Extension, SPM linphonesw)
-CMEPhone/App/               App-Einstieg, AppDelegate
-CMEPhone/Core/
+project.yml                 XcodeGen iOS/iPadOS (App + Local-Push-Extension)
+project-mac.yml             XcodeGen macOS
+CMEPhone/App/               iOS: App-Einstieg, AppDelegate
+CMEPhone/Core/              gemeinsam iOS + macOS
   SIPManager.swift          liblinphone-Core: Konto, Codec-Reihenfolge, Anrufe, Video
-  CallKitProvider.swift     CXProvider/CXCallController, Call-ID ↔ UUID, Audio-Session
-  LocalPushController.swift NEAppPushManager-Konfiguration + Delegate
-  PhoneSettings.swift       Einstellungen (App-Group-UserDefaults)
-CMEPhone/UI/                SwiftUI: Wählen, aktiver Anruf + Video, Einstellungen, Protokoll
+  PhoneSettings.swift       Einstellungen (App-Group-UserDefaults), inkl. Mac/Tischtelefon
+  CallKitProvider.swift     nur iOS: CallKit (als `CallCenter`)
+  LocalPushController.swift nur iOS: NEAppPushManager
+CMEPhone/UI/                iOS: Wählen, aktiver Anruf + Video, Einstellungen, Protokoll
+CMEPhoneMac/App/            macOS: App, Menüleiste, tel:-Links, CallCenter (Mitteilungen)
+CMEPhoneMac/DeskPhone/      Tischtelefon: CiscoXML (Execute), DialogInfo (Statusabo), DeskPhoneController
+CMEPhoneMac/UI/             macOS: Hauptfenster, Wählen, Anruf + Video, Tischtelefon, Einstellungen
 LocalPushProvider/          NEAppPushProvider (TCP zum Relay, reportIncomingCall)
 Shared/                     gemeinsame Konstanten + Local-Push-Protokoll
 server/flexisip/            flexisip.conf (Push-Gateway vor CME)
 server/push-relay/          Python-Relay (Local Push + APNs HTTP/2, .p8-Token-Auth)
-cme/softphone.cfg           IOS-Konfiguration für CME
+cme/softphone.cfg           IOS-Konfiguration für CME (Softphones)
+cme/deskphone-control.cfg   IOS-Konfiguration für Tischtelefon-Steuerung + Mac-Pool
 ```
 
 ## Stand und offene Punkte
@@ -182,6 +260,10 @@ cme/softphone.cfg           IOS-Konfiguration für CME
   nach Doku und Tutorials umgesetzt, kleine Signaturabweichungen der aktuellen SDK-Version
   (z.B. `activateAudioSession(actived:)`, `setVideodevice`) korrigiert Xcode bzw. der Claude Agent in Xcode schnell.
 * Der push-relay ist getestet: Local-Push-Zustellung mit ACK, Secret-Prüfung, APNs-JWT, Rückfall auf APNs.
+* Getestet (Swift unter Linux): Aufbau und Antwortauswertung von CiscoIPPhoneExecute, Auswertung von
+  dialog-info- und PIDF-NOTIFYs (17 Fälle).
+* Die CME-Befehle für `url authentication`/`authentication credential` und Presence sind gegen 17.12 zu prüfen.
+* Tests ohne Xcode: `tests/run.sh` (Swift-Toolchain + Python 3 mit `aiohttp`, `httpx[http2]`, `PyJWT[crypto]`).
 * Flexisip-Konfiguration und CME-Befehle (`video`/`camera` im SIP-Pool, `codec transparent`) müssen
   gegen deine Versionen geprüft werden.
 * Passwort (falls genutzt) liegt in UserDefaults, ein Keychain-Umbau steht noch aus.
