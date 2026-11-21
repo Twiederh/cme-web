@@ -112,13 +112,23 @@ sudo cp server/flexisip/flexisip.conf /opt/containers/cme-softphone/flexisip/
 sudo sed -i 's/DOCKER01_IP/192.168.11.20/g; s/SIP_GW_NAME/sip-gw.wiederhol.de/g' \
      /opt/containers/cme-softphone/flexisip/flexisip.conf
 sudo cp AuthKey_XXXX.p8 /opt/containers/cme-softphone/apns/AuthKey.p8
-cp server/.env.example server/.env   # Secret, Key-ID, Team-ID eintragen
 ```
 
-Danach in Portainer einen Stack aus `server/docker-compose.yml` anlegen (Build-Kontext = `server/`)
-und die Werte aus `.env` als Umgebungsvariablen eintragen.
+Danach in Portainer: **Stacks → Add stack → Repository**
+* Repository-URL `https://gitea.wiederhol.de/thomas/cme-softphone` (mit Gitea-Zugangsdaten, das Repo ist privat)
+* Compose path `server/docker-compose.yml`
+* Umgebungsvariablen: `RELAY_LOCALPUSH_SECRET`, `APNS_KEY_ID`, `APNS_TEAM_ID`, optional `APNS_ENV`, `FLEXISIP_IMAGE`
 
-* DNS `sip-gw.wiederhol.de` → LAN-IP von docker01 (lokaler DNS in der UDM).
+Portainer baut den push-relay dabei aus `server/push-relay/` selbst. Das Flexisip-Image muss vorher
+wie in Schritt 3 auf docker01 gebaut sein.
+
+**Traefik:** Flexisip und der Relay laufen bewusst im Host-Netz und **nicht hinter Traefik**. SIP
+(UDP/TCP) und der Local-Push-Kanal sind keine HTTP-Dienste. Ein Proxy dazwischen würde die
+Absender-IPs verstecken, und damit funktioniert Flexisips NAT- und Contact-Behandlung nicht mehr.
+RTP läuft ohnehin direkt zwischen Gerät und CME. Für die SIP-Verbindung brauchst du also nur den
+DNS-Eintrag und die Firewall-Regeln:
+
+* DNS `sip-gw.wiederhol.de` → LAN-IP von docker01 (lokaler DNS in der UDM, kein Traefik-Router).
 * Firewall: aus WLAN/VPN zu docker01 **TCP/UDP 5060** und **TCP 5070** erlauben.
   Port 8090 bleibt lokal (127.0.0.1).
 * Test: `curl http://127.0.0.1:8090/health` auf docker01.
