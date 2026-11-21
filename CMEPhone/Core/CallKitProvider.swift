@@ -209,10 +209,10 @@ extension CallKitProvider: CXProviderDelegate {
     }
 
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        MainActor.assumeIsolated { self.sip.core?.activateAudioSession(actived: true) }
+        MainActor.assumeIsolated { self.sip.core?.activateAudioSession(activated: true) }
     }
 
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
-        MainActor.assumeIsolated { self.sip.core?.activateAudioSession(actived: false) }
+        MainActor.assumeIsolated { self.sip.core?.activateAudioSession(activated: false) }
     }
 }
