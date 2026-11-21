@@ -256,9 +256,9 @@ cme/deskphone-control.cfg   IOS-Konfiguration für Tischtelefon-Steuerung + Mac-
 
 ## Stand und offene Punkte
 
-* **Nicht kompiliert.** Der Code wurde ohne Xcode geschrieben. Die liblinphone-Swift-API ist
-  nach Doku und Tutorials umgesetzt, kleine Signaturabweichungen der aktuellen SDK-Version
-  (z.B. `activateAudioSession(actived:)`, `setVideodevice`) korrigiert Xcode bzw. der Claude Agent in Xcode schnell.
+* **Kompiliert** mit Xcode 27.2 – macOS und iOS, bisher ohne Signierung: `zsh build.command`
+  (Logs in `build-logs/`). Signiert bauen: in Xcode → Einstellungen → Accounts mit der Apple-ID
+  anmelden, dann `SIGN=1 zsh build.command`. Noch nicht auf Geräten bzw. gegen CME getestet.
 * Der push-relay ist getestet: Local-Push-Zustellung mit ACK, Secret-Prüfung, APNs-JWT, Rückfall auf APNs.
 * Getestet (Swift unter Linux): Aufbau und Antwortauswertung von CiscoIPPhoneExecute, Auswertung von
   dialog-info- und PIDF-NOTIFYs (17 Fälle).
