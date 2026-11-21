@@ -1,0 +1,41 @@
+# Portainer-Stack "cme-softphone-gateway" auf docker01
+#
+# Beide Container laufen im Host-Netz:
+#  - Flexisip braucht SIP auf der LAN-IP und muss CME (192.168.11.4) direkt erreichen
+#  - der Relay muss für Flexisip unter 127.0.0.1:8090 erreichbar sein und
+#    für die iPhones/iPads unter <docker01>:5070 (Local Push)
+#
+# Flexisip-Image: offizielles Dockerfile aus dem Flexisip-Repo bauen
+# (siehe README, Abschnitt "Flexisip-Image bauen") und als flexisip:local taggen.
+
+services:
+  flexisip:
+    image: ${FLEXISIP_IMAGE:-flexisip:local}
+    container_name: flexisip
+    network_mode: host
+    restart: unless-stopped
+    command: ["flexisip", "--server", "proxy", "-c", "/etc/flexisip/flexisip.conf"]
+    volumes:
+      - /opt/containers/cme-softphone/flexisip:/etc/flexisip:ro
+      - /opt/containers/cme-softphone/flexisip-log:/var/opt/belledonne-communications/log/flexisip
+
+  push-relay:
+    build: ./push-relay
+    image: cme-push-relay:latest
+    container_name: cme-push-relay
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      RELAY_HTTP_HOST: 127.0.0.1
+      RELAY_HTTP_PORT: "8090"
+      RELAY_LOCALPUSH_HOST: 0.0.0.0
+      RELAY_LOCALPUSH_PORT: "5070"
+      RELAY_LOCALPUSH_SECRET: ${RELAY_LOCALPUSH_SECRET:?Secret setzen (openssl rand -hex 24)}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_BUNDLE_ID: de.wiederhol.cmephone
+      APNS_ENV: ${APNS_ENV:-auto}          # auto | sandbox | production
+      APNS_KEY_PATH: /run/secrets/apns.p8
+      LOG_LEVEL: INFO
+    volumes:
+      - /opt/containers/cme-softphone/apns/AuthKey.p8:/run/secrets/apns.p8:ro
