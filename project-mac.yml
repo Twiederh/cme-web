@@ -1,0 +1,69 @@
+# Eigenes Xcode-Projekt für macOS (CMEPhoneMac.xcodeproj), weil das Linphone-SDK
+# für iOS und macOS als zwei getrennte Swift-Pakete mit gleichem Produktnamen kommt.
+#   xcodegen generate --spec project-mac.yml
+name: CMEPhoneMac
+options:
+  bundleIdPrefix: de.wiederhol
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""          # <- Team-ID eintragen
+    SWIFT_VERSION: "5.10"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+
+packages:
+  linphonesw:
+    url: https://gitlab.linphone.org/BC/public/linphone-sdk-swift-macos
+    branch: stable
+
+targets:
+  CMEPhoneMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: CMEPhoneMac
+      - path: Shared
+      - path: CMEPhone/Core
+        excludes:
+          - CallKitProvider.swift        # iOS: CallKit
+          - LocalPushController.swift    # iOS: Local Push
+    dependencies:
+      - package: linphonesw
+        product: linphonesw
+      - sdk: UserNotifications.framework
+    info:
+      path: CMEPhoneMac/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: CME Phone
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.business
+        NSMicrophoneUsageDescription: Für Telefonate über die Cisco-Telefonanlage.
+        NSCameraUsageDescription: Für Videoanrufe.
+        NSLocalNetworkUsageDescription: Verbindung zur Telefonanlage und zum Cisco-Tischtelefon.
+        NSAppTransportSecurity:
+          # Cisco-Telefone sprechen CGI/Execute nur per HTTP – im LAN (IP-Adressen) erlauben
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: de.wiederhol.cmephone.call
+            CFBundleURLSchemes: [tel, sip, sips, callto]
+            CFBundleTypeRole: Viewer
+          - CFBundleURLName: de.wiederhol.cmephone.app
+            CFBundleURLSchemes: [cmephone]
+            CFBundleTypeRole: Viewer
+    entitlements:
+      path: CMEPhoneMac/Resources/CMEPhoneMac.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true     # eingehende SIP/RTP-Pakete
+        com.apple.security.device.audio-input: true
+        com.apple.security.device.camera: true
+        com.apple.security.application-groups: [group.de.wiederhol.cmephone]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: de.wiederhol.cmephone.mac
