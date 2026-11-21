@@ -7,7 +7,7 @@ options:
 
 settings:
   base:
-    DEVELOPMENT_TEAM: ""          # <- deine Team-ID eintragen (oder in Xcode setzen)
+    DEVELOPMENT_TEAM: "83BLV56527"
     SWIFT_VERSION: "5.10"
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"  # iPhone + iPad
