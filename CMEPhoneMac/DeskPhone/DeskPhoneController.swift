@@ -143,8 +143,8 @@ final class DeskPhoneController: ObservableObject {
             let pkg = settings.statusEvent.rawValue
             let resource = try Factory.Instance.createAddress(addr: "sip:\(settings.deskPhoneExtension)@\(settings.cmeHost)")
             let ev = try core.createSubscribe(resource: resource, event: pkg, expires: 3600)
-            ev.addCustomHeader(headerName: "Accept",
-                               headerValue: pkg == "dialog" ? "application/dialog-info+xml" : "application/pidf+xml")
+            ev.addCustomHeader(name: "Accept",
+                               value: pkg == "dialog" ? "application/dialog-info+xml" : "application/pidf+xml")
             try ev.sendSubscribe(body: nil)
             event = ev
             subscriptionState = "Abo gesendet (\(pkg))"
@@ -154,7 +154,7 @@ final class DeskPhoneController: ObservableObject {
     }
 
     func stopMonitoring() {
-        try? event?.terminate()
+        event?.terminate()
         event = nil
         status = .unknown
     }
