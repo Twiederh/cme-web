@@ -1,10 +1,17 @@
 import Foundation
 import Combine
-import UIKit
 import linphonesw
+#if canImport(UIKit)
+import UIKit
+typealias PlatformView = UIView
+#else
+import AppKit
+typealias PlatformView = NSView
+#endif
 
 /// Zentraler Wrapper um den liblinphone-Core: Konto, Codecs, Anrufe, Video.
-/// Läuft komplett auf dem Main-Thread (liblinphone iteriert auf iOS automatisch im Main-Loop).
+/// Läuft komplett auf dem Main-Thread (liblinphone iteriert automatisch im Main-Loop).
+/// Gemeinsam für iOS/iPadOS (CallKit) und macOS (eigene Anruf-UI über `CallCenter`).
 @MainActor
 final class SIPManager: ObservableObject {
     static let shared = SIPManager()
@@ -46,6 +53,19 @@ final class SIPManager: ObservableObject {
     private var coreDelegate: CoreDelegate!
     private let settings = PhoneSettings.shared
     private var durationTimer: Timer?
+    /// Zusätzliche Beobachter (z.B. Statusabo für das Tischtelefon auf macOS).
+    private var callStateHandlers: [(Call, Call.State) -> Void] = []
+    private var extraDelegates: [CoreDelegate] = []
+
+    /// Zusätzlichen Core-Delegate anhängen (z.B. für NOTIFY des Statusabos).
+    func addCoreDelegate(_ delegate: CoreDelegate) {
+        extraDelegates.append(delegate)
+        core?.addDelegate(delegate: delegate)
+    }
+
+    func addCallStateHandler(_ handler: @escaping (Call, Call.State) -> Void) {
+        callStateHandlers.append(handler)
+    }
 
     private init() {}
 
@@ -66,10 +86,15 @@ final class SIPManager: ObservableObject {
             return
         }
 
+        #if os(iOS)
         // CallKit übernimmt die AVAudioSession – liblinphone darf sie nicht selbst aktivieren.
         core.callkitEnabled = true
         // SDK verwaltet PushKit selbst und fügt RFC-8599-Parameter (pn-provider/pn-prid/pn-param) in den Contact ein.
         core.pushNotificationEnabled = true
+        #else
+        // macOS: kein PushKit – der Mac bleibt dauerhaft registriert.
+        core.pushNotificationEnabled = false
+        #endif
         core.keepAliveEnabled = true
         core.ipv6Enabled = true
         // RFC 2833 / rtp-nte – passt zu "dtmf-relay rtp-nte" in CME.
@@ -89,6 +114,7 @@ final class SIPManager: ObservableObject {
             }
         )
         core.addDelegate(delegate: coreDelegate)
+        for d in extraDelegates { core.addDelegate(delegate: d) }
 
         applyMediaSettings()
 
@@ -130,6 +156,7 @@ final class SIPManager: ObservableObject {
             params.registerEnabled = true
             params.expires = 600
 
+            #if os(iOS)
             // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.
             params.pushNotificationAllowed = settings.useGateway
             params.remotePushNotificationAllowed = false
@@ -137,6 +164,10 @@ final class SIPManager: ObservableObject {
             params.pushNotificationConfig?.provider = "apns.dev"
             #else
             params.pushNotificationConfig?.provider = "apns"
+            #endif
+            #else
+            params.pushNotificationAllowed = false
+            params.remotePushNotificationAllowed = false
             #endif
 
             if !settings.password.isEmpty {
@@ -223,7 +254,9 @@ final class SIPManager: ObservableObject {
             let params = try core.createCallParams(call: nil)
             params.videoEnabled = video && settings.videoEnabled
             params.mediaEncryption = settings.mediaEncryption == .srtp ? .SRTP : .None
+            #if os(iOS)
             core.configureAudioSession()
+            #endif
             return core.inviteAddressWithParams(addr: addr, params: params)
         } catch {
             log("Anruf fehlgeschlagen: \(error)")
@@ -240,7 +273,9 @@ final class SIPManager: ObservableObject {
         do {
             let params = try core.createCallParams(call: call)
             params.videoEnabled = settings.videoEnabled && (call.remoteParams?.videoEnabled ?? false)
+            #if os(iOS)
             core.configureAudioSession()
+            #endif
             try call.acceptWithParams(params: params)
         } catch { log("Annehmen fehlgeschlagen: \(error)") }
     }
@@ -266,12 +301,22 @@ final class SIPManager: ObservableObject {
     }
 
     func toggleSpeaker() {
+        #if os(iOS)
         guard let core else { return }
         let wantSpeaker = !speakerOn
         if let dev = core.audioDevices.first(where: { $0.type == (wantSpeaker ? .Speaker : .Microphone) }) {
             core.outputAudioDevice = dev
             speakerOn = wantSpeaker
         }
+        #endif
+    }
+
+    /// Audio-Geräte (v.a. macOS: Headset, Studio Display, Mac-Lautsprecher).
+    var audioDevices: [AudioDevice] { core?.audioDevices ?? [] }
+
+    func selectAudio(input: AudioDevice?, output: AudioDevice?) {
+        if let input { core?.inputAudioDevice = input; core?.defaultInputAudioDevice = input }
+        if let output { core?.outputAudioDevice = output; core?.defaultOutputAudioDevice = output }
     }
 
     func setVideo(callId: String, enabled: Bool) {
@@ -300,7 +345,7 @@ final class SIPManager: ObservableObject {
         } catch { log("Transfer: \(error)") }
     }
 
-    func setVideoViews(remote: UIView?, preview: UIView?) {
+    func setVideoViews(remote: PlatformView?, preview: PlatformView?) {
         guard let core else { return }
         core.nativeVideoWindow = remote.map { Unmanaged.passUnretained($0).toOpaque() }
         core.nativePreviewWindow = preview.map { Unmanaged.passUnretained($0).toOpaque() }
@@ -323,7 +368,9 @@ final class SIPManager: ObservableObject {
             if let tok = account.params?.pushNotificationConfig?.voipToken, !tok.isEmpty {
                 if voipToken != tok {
                     voipToken = tok
+                    #if os(iOS)
                     LocalPushController.shared.update(deviceToken: tok)
+                    #endif
                 }
             }
         case .Failed: registration = .failed(message)
@@ -336,7 +383,7 @@ final class SIPManager: ObservableObject {
     private func onCallState(call: Call, state: Call.State, message: String) {
         let callId = call.callLog?.callId ?? ""
         log("Call \(callId.prefix(8)): \(state) \(message)")
-        let callKit = CallKitProvider.shared
+        let callKit = CallCenter.shared
 
         switch state {
         case .PushIncomingReceived, .IncomingReceived:
@@ -351,12 +398,13 @@ final class SIPManager: ObservableObject {
             if call.dir == .Outgoing { callKit.reportOutgoingConnected(callId: callId) }
             startDurationTimer()
         case .End, .Error:
-            callKit.reportEnded(callId: callId, reason: state == .Error ? .failed : .remoteEnded)
+            callKit.reportEnded(callId: callId, failed: state == .Error)
         case .Released:
             callKit.forget(callId: callId)
         default: break
         }
         refreshCalls()
+        callStateHandlers.forEach { $0(call, state) }
     }
 
     func refreshCalls() {
