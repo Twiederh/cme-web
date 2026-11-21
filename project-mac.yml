@@ -10,7 +10,7 @@ options:
 
 settings:
   base:
-    DEVELOPMENT_TEAM: ""          # <- Team-ID eintragen
+    DEVELOPMENT_TEAM: "83BLV56527"
     SWIFT_VERSION: "5.10"
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
