@@ -3,6 +3,10 @@ import CallKit
 import AVFoundation
 import linphonesw
 
+/// Plattformneutraler Name, den der gemeinsame Kern (SIPManager) verwendet.
+/// Auf macOS gibt es stattdessen eine eigene `CallCenter`-Klasse ohne CallKit.
+typealias CallCenter = CallKitProvider
+
 /// CallKit-Integration: jeder SIP-Anruf (Call-ID) bekommt eine CallKit-UUID.
 /// Alle Aktionen (Annehmen, Auflegen, Halten, Stumm, DTMF) laufen über CXProvider,
 /// damit Sperrbildschirm, Freisprechen, CarPlay, Bluetooth und "Zuletzt" in der Telefon-App funktionieren.
@@ -98,9 +102,9 @@ final class CallKitProvider: NSObject {
 
     // MARK: - Ende
 
-    func reportEnded(callId: String, reason: CXCallEndedReason) {
+    func reportEnded(callId: String, failed: Bool) {
         guard let uuid = uuidByCallId[callId] else { return }
-        provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+        provider.reportCall(with: uuid, endedAt: Date(), reason: failed ? .failed : .remoteEnded)
     }
 
     func forget(callId: String) {
