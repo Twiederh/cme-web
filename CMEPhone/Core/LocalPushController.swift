@@ -1,5 +1,5 @@
 import Foundation
-import NetworkExtension
+@preconcurrency import NetworkExtension
 
 /// Konfiguriert die Local-Push-Extension (NEAppPushManager) für die Heim-WLANs.
 /// Im Heim-WLAN hält iOS die Extension am Leben; sie hält eine TCP-Verbindung zum push-relay.
