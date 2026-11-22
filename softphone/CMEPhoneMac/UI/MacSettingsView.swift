@@ -25,7 +25,7 @@ private struct AccountTab: View {
     var body: some View {
         Form {
             Section {
-                TextField("Adresse", text: $settings.cmeWebURL, prompt: Text("https://cme.example.de"))
+                TextField("cme-web-Adresse", text: $settings.cmeWebURL, prompt: Text("https://cme.wiederhol.de"))
                 SecureField("App-Schlüssel", text: $settings.appToken)
                 TextField("Nebenstelle des Macs", text: $settings.extensionNumber)
                 TextField("Anzeigename", text: $settings.displayName)
@@ -47,7 +47,7 @@ private struct AccountTab: View {
                 HStack {
                     MacRegistrationBadge(status: sip.registration)
                     Spacer()
-                    Text(settings.useGateway ? "über \(settings.gatewayHost):\(settings.gatewayPort)" : "direkt an \(settings.cmeHost)")
+                    Text(settings.useGateway ? "über \(settings.gatewayHost):\(String(settings.gatewayPort))" : "direkt an \(settings.cmeHost)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !settings.voicemailNumber.isEmpty {
@@ -59,7 +59,7 @@ private struct AccountTab: View {
                 Toggle("Über Push-Gateway (Flexisip) statt direkt an CME", isOn: $settings.useGateway)
                 if settings.useGateway {
                     TextField("Gateway", text: $settings.gatewayHost)
-                    Stepper("Port \(settings.gatewayPort)", value: $settings.gatewayPort, in: 1...65535)
+                    Stepper("Port \(String(settings.gatewayPort))", value: $settings.gatewayPort, in: 1...65535)
                 }
                 Picker("Transport", selection: $settings.transport) {
                     ForEach(SIPTransport.allCases) { Text($0.rawValue.uppercased()).tag($0) }
