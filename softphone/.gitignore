@@ -1,0 +1,12 @@
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+*.p8
+server/.env
+__pycache__/
+.DS_Store
+build/
+build-logs/
