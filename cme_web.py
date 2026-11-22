@@ -45,9 +45,22 @@ BASE = Path(__file__).resolve().parent
 
 # "" = Fremdgeraet (z.B. Gigaset): kein "type" in der Konfiguration
 PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "8945", "ATA190", "7821", "7841", "7861",
-               "Jabber-CSF-Client", "Jabber-iPhone", "Jabber-Android"]
+               "Jabber-CSF-Client", "Jabber-iPhone", "Jabber-Android", "CME-Softphone"]
 # Softclients werden in CME ueber einen Geraetenamen (id device-id-name) erkannt, nicht ueber die MAC
 SOFT_CLIENT_PREFIX = "Jabber-"
+# CME Phone (eigenes Softphone, https://gitea.wiederhol.de/thomas/cme-softphone): registriert sich ueber den
+# Push-Gateway Flexisip. Alle Softphones kommen von dessen IP; CME ordnet den Pool ueber "id network <IP>" und die
+# Nummer im REGISTER zu. In IOS gibt es dafuer keinen "type" - "CME-Softphone" ist nur ein Name in cme-web.
+SOFTPHONE_TYPE = "CME-Softphone"
+SOFTPHONE_GW = os.environ.get("CME_SOFTPHONE_GW") or os.environ.get("VM_HOST_IP", "")
+RE_IPV4 = re.compile(r"^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$")
+
+
+def ios_type(ptype: str) -> str:
+    """Typ fuer die Router-Konfiguration (CME-Softphone hat keinen)."""
+    return "" if ptype == SOFTPHONE_TYPE else ptype
+
+
 CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8"]
 # Codecs fuer Codec-Listen (voice class codec); was der Router kennt, haengt von der IOS-Version ab
 LIST_CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8", "g729br8", "ilbc", "opus"]
@@ -233,6 +246,9 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 parts = s.split()
                 cur["id_ip"] = parts[2]
                 cur["id_mask"] = parts[4] if len(parts) > 4 and parts[3] == "mask" else ""
+                cur["id_network"] = parts[1] == "network"
+                if cur["id_network"] and not cur.get("type"):
+                    cur["type"] = SOFTPHONE_TYPE    # Softphone ueber Flexisip (kein IOS-Typ)
             elif s.startswith("type "):
                 cur["type"] = s.split(None, 1)[1]
             elif s.startswith("description "):
@@ -975,7 +991,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     voicemail.register(app, router, apply, isinstance(router, DemoRouter))
 
     # Oberflaechen-Module, die in index.html eingehaengt werden
-    extra_scripts = ["/static/voicemail.js", "/static/translation.js"]
+    extra_scripts = ["/static/voicemail.js", "/static/translation.js", "/static/softphone.js"]
+
+    @app.get("/static/softphone.js")
+    def softphone_js():
+        # Telefontyp CME Softphone im Formular "Telefon anlegen"
+        return send_from_directory(BASE / "static", "softphone.js", mimetype="text/javascript", max_age=0)
 
     @app.get("/")
     def index():
@@ -986,7 +1007,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
     @app.get("/api/meta")
     def meta():
-        return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, list_codecs=LIST_CODECS,
+        return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, list_codecs=LIST_CODECS, softphone_gw=SOFTPHONE_GW,
                        hunt_types=HUNT_TYPES,
                        raw_commands=RAW_COMMANDS,
                        demo=isinstance(router, DemoRouter))
@@ -1172,6 +1193,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             # Jabber & Co.: Erkennung ueber den Geraetenamen (z.B. CSFTHOMAS)
             id_kind = "device"
             device_id = check(data.get("device_id"), RE_DEVICE, "Geraetename").upper()
+        elif ptype == SOFTPHONE_TYPE:
+            # CME Phone: Erkennung ueber die IP des Push-Gateways (Flexisip), fuer alle Softphones dieselbe
+            id_kind = "network"
+            ip = str(data.get("gw_ip") or SOFTPHONE_GW).strip()
+            if not RE_IPV4.match(ip):
+                raise InputError("IP des Push-Gateways (Flexisip, z. B. docker01) fehlt oder ist ungueltig.")
         else:
             id_kind = data.get("id_kind") or "mac"
             if id_kind != "mac":
@@ -1207,7 +1234,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             other = next((p for p in st["phones"] if p["mac"].upper() == mac and p["tag"] != own_tag), None)
             if other:
                 raise InputError(f"MAC {mac} ist schon Pool {other['tag']} zugeordnet.")
-        if ip:
+        if ip and id_kind != "network":    # Softphones teilen sich die Gateway-IP
             other = next((p for p in st["phones"] if p.get("id_ip") == ip and p["tag"] != own_tag), None)
             if other:
                 raise InputError(f"IP {ip} ist schon Pool {other['tag']} zugeordnet.")
@@ -1222,7 +1249,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
     def mobility_key(data: dict, ptype: str) -> bool:
         want = bool(data.get("mobility_key"))
-        if want and (ptype in NO_SOFTKEY_TYPES or ptype.startswith(SOFT_CLIENT_PREFIX)):
+        if want and (ptype in NO_SOFTKEY_TYPES or ptype.startswith(SOFT_CLIENT_PREFIX) or ptype == SOFTPHONE_TYPE):
             raise InputError("Die Mobility-Taste gibt es nur bei Cisco-Tischtelefonen mit Softkeys "
                              "(nicht bei 6901, ATA, Jabber oder Fremdgeraeten).")
         return want
@@ -1258,6 +1285,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
     def id_line(v: dict) -> str:
         if v["id_kind"] == "device":
             return f" id device-id-name {v['device_id']}"
+        if v["id_kind"] == "network":
+            return f" id network {v['ip']} mask {v['mask']}"
         return f" id mac {v['mac']}" if v["id_kind"] == "mac" else f" id ip {v['ip']} mask {v['mask']}"
 
     def verify_pool(res: dict, tag: str, v: dict) -> None:
@@ -1268,7 +1297,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         problem = None
         if pool is None:
             problem = f"Der Router hat voice register pool {tag} nicht übernommen."
-        elif v["id_kind"] == "ip" and pool.get("id_ip") != v["ip"]:
+        elif v["id_kind"] in ("ip", "network") and pool.get("id_ip") != v["ip"]:
             problem = f"In Pool {tag} fehlt danach die IP-Kennung {v['ip']}."
         elif v["id_kind"] == "mac" and pool.get("mac") != v["mac"]:
             problem = f"In Pool {tag} fehlt danach die MAC {v['mac']}."
@@ -1295,7 +1324,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         tag = str(max([int(p["tag"]) for p in st["phones"]] + [0]) + 1)
 
         lines = [f"voice register pool {tag}", id_line(v)]
-        if v["type"]:
+        if ios_type(v["type"]):
             lines.append(f" type {v['type']}")
         if v["id_kind"] == "device":
             # Jabber ohne Presence-Server: nur als Telefon
@@ -1324,21 +1353,24 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         v = phone_input(data, st, tag)
 
         lines = [f"voice register pool {tag}"]
-        cur_kind = "device" if cur.get("device_id") else ("ip" if cur.get("id_ip") else "mac")
+        cur_kind = "device" if cur.get("device_id") else (
+            ("network" if cur.get("id_network") else "ip") if cur.get("id_ip") else "mac")
         changed_id = (v["id_kind"] != cur_kind
                       or (cur_kind == "mac" and v["mac"] != cur["mac"].upper())
                       or (cur_kind == "device" and v["device_id"] != cur["device_id"].upper())
-                      or (cur_kind == "ip" and (v["ip"], v["mask"]) != (cur["id_ip"], cur.get("id_mask") or v["mask"])))
+                      or (cur_kind in ("ip", "network")
+                          and (v["ip"], v["mask"]) != (cur["id_ip"], cur.get("id_mask") or v["mask"])))
         if changed_id:
             if cur.get("device_id"):
                 lines.append(f" no id device-id-name {cur['device_id']}")
             elif cur.get("id_ip"):
-                lines.append(f" no id ip {cur['id_ip']} mask {cur.get('id_mask') or '255.255.255.255'}")
+                kw = "network" if cur.get("id_network") else "ip"
+                lines.append(f" no id {kw} {cur['id_ip']} mask {cur.get('id_mask') or '255.255.255.255'}")
             elif cur["mac"]:
                 lines.append(f" no id mac {cur['mac']}")
             lines.append(id_line(v))
-        if v["type"] != cur["type"]:
-            lines.append(f" type {v['type']}" if v["type"] else f" no type {cur['type']}")
+        if ios_type(v["type"]) != ios_type(cur["type"]):
+            lines.append(f" type {v['type']}" if ios_type(v["type"]) else f" no type {cur['type']}")
         if v["id_kind"] == "device" and cur.get("phone_mode") != "phone-only":
             lines.append(" phone-mode phone-only")
         elif v["id_kind"] != "device" and cur.get("phone_mode"):
