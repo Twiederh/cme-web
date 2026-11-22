@@ -63,7 +63,7 @@ targets:
       properties:
         aps-environment: development
         com.apple.security.application-groups: [group.de.wiederhol.cmephone]
-        com.apple.developer.networking.networkextension: [app-push-provider]
+        # Local Push (app-push-provider) vergibt Apple nur auf Antrag – build.command fügt es mit LOCALPUSH=1 ein
         # Auswählbar unter Einstellungen → Apps → Standard-Apps → Anrufe (iOS 18.2+)
         com.apple.developer.calling-app: true
     settings:
@@ -92,7 +92,7 @@ targets:
       path: LocalPushProvider/LocalPushProvider.entitlements
       properties:
         com.apple.security.application-groups: [group.de.wiederhol.cmephone]
-        com.apple.developer.networking.networkextension: [app-push-provider]
+        # Local Push (app-push-provider) vergibt Apple nur auf Antrag – build.command fügt es mit LOCALPUSH=1 ein
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.wiederhol.cmephone.localpush
