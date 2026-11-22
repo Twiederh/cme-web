@@ -1394,7 +1394,11 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         new_lines = [(str(i), d) for i, d in enumerate(v["dns"], 1)]
         # Nur geaenderte Leitungen anfassen: erst entfernen, dann neu setzen
         lines += [f" no number {ln} dn {dn}" for ln, dn in old_lines if (ln, dn) not in new_lines]
-        lines += [f" number {ln} dn {dn}" for ln, dn in new_lines if (ln, dn) not in old_lines]
+        if changed_id:
+            # CME verwirft beim Wechsel der Kennung (no id ...) die Leitungen des Pools: alle neu setzen
+            lines += [f" number {ln} dn {dn}" for ln, dn in new_lines]
+        else:
+            lines += [f" number {ln} dn {dn}" for ln, dn in new_lines if (ln, dn) not in old_lines]
 
         username = (data.get("username") or "").strip()
         password = (data.get("password") or "").strip()
