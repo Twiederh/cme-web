@@ -84,6 +84,9 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         import tempfile
         data = Path(tempfile.gettempdir()) / "cme-web-demo-push"
     store = cfgdir / "cme-phoneapp.json"
+    # SIP-Zugangsdaten der CME-Phone-Pools: der Router speichert Passwoerter verschluesselt (password 6/7),
+    # die App braucht sie aber im Klartext -> cme-web merkt sie sich, wenn es sie setzt.
+    creds_path = cfgdir / "cme-phoneapp-creds.json"
     apns_dir = data / "apns"
     key_path, meta_path = apns_dir / "AuthKey.p8", apns_dir / "apns.json"
     secret_path = data / "localpush-secret"
@@ -122,6 +125,54 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             except OSError:
                 pass
             return s
+
+    def creds_all() -> dict:
+        try:
+            return json.loads(creds_path.read_text())
+        except (FileNotFoundError, ValueError):
+            return {}
+
+    def creds_store(device: str, username: str, password: str) -> None:
+        with lock:
+            c = creds_all()
+            c[device.upper()] = {"username": username, "password": password, "set": time.strftime("%Y-%m-%d %H:%M")}
+            _write(creds_path, json.dumps(c, indent=1), 0o600)
+
+    # fuer cme_web.py: Telefon anlegen/bearbeiten mit Passwort -> hier merken
+    app.config["PHONEAPP_CREDS"] = creds_store
+
+    def app_pools() -> list[dict]:
+        """Pools mit Geraetename CMEP... aus der Router-Konfiguration."""
+        try:
+            out = router.show("show running-config | section voice register pool")
+        except Exception:  # noqa: BLE001
+            return []
+        pools, cur = [], None
+        for line in out.splitlines():
+            m = re.match(r"^voice register pool\s+(\d+)", line)
+            if m:
+                cur = {"tag": m.group(1), "device": "", "username": "", "plain": "", "dns": []}
+                pools.append(cur)
+                continue
+            if cur is None:
+                continue
+            parts = line.split()
+            if parts[:2] == ["id", "device-id-name"] and len(parts) == 3:
+                cur["device"] = parts[2].upper()
+            elif parts[:1] == ["username"] and len(parts) >= 4 and parts[2] == "password":
+                cur["username"] = parts[1]
+                cur["plain"] = parts[3] if len(parts) == 4 else ""
+            elif parts[:1] == ["number"] and len(parts) >= 4:
+                cur["dns"].append(parts[3])
+        return [p for p in pools if p["device"].startswith(DEVICE_PREFIX)]
+
+    def new_pw() -> str:
+        import string
+        abc = string.ascii_letters + string.digits
+        while True:
+            pw = "".join(secrets.choice(abc) for _ in range(12))
+            if re.search(r"\d", pw) and re.search(r"[A-Z]", pw) and re.search(r"[a-z]", pw):
+                return pw
 
     def lp_secret() -> str:
         try:
@@ -242,6 +293,38 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             save(s)
         return jsonify(ok=True)
 
+    @app.get("/api/phoneapp/devices")
+    def admin_devices():
+        saved = creds_all()
+        out = []
+        for p in app_pools():
+            sv = saved.get(p["device"])
+            ok = bool(sv and (not p["username"] or sv["username"] == p["username"])) or bool(p["plain"])
+            out.append({"tag": p["tag"], "device": p["device"], "username": p["username"], "dns": p["dns"],
+                        "creds": ok, "set": (sv or {}).get("set", "")})
+        return jsonify(ok=True, devices=out)
+
+    @app.post("/api/phoneapp/devices/<tag>/credentials")
+    def admin_set_credentials(tag):
+        """Neues SIP-Passwort fuer einen CME-Phone-Pool setzen und fuer die Apps merken."""
+        pool = next((p for p in app_pools() if p["tag"] == tag), None)
+        if not pool:
+            raise AppError(f"Pool {tag} ist kein CME-Phone-Pool.")
+        username = pool["username"] or pool["device"]
+        pw = new_pw()
+        out = router.configure([f"voice register pool {tag}", f" username {username} password {pw}",
+                                "voice register global", " create profile"])
+        bad = [l for l in str(out).splitlines() if l.strip().startswith("%") or "is in use" in l
+               or "Invalid" in l or "Error" in l and "jabber-config" not in l]
+        if bad:
+            raise AppError("Der Router hat das Passwort nicht übernommen:\n" + "\n".join(bad[:5]))
+        try:
+            router.save()
+        except Exception:  # noqa: BLE001
+            pass
+        creds_store(pool["device"], username, pw)
+        return jsonify(ok=True, username=username)
+
     @app.post("/api/phoneapp/renew")
     def admin_renew():
         """{"what": "token" | "secret"} - neuer App-Schluessel bzw. neues Local-Push-Secret"""
@@ -297,28 +380,15 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         return None
 
     def pool_credentials(ext: str) -> dict:
-        """SIP-Zugangsdaten des Pools mit Geraetename CMEP<ext> (CME verlangt sie von Soft-Clients).
-        cme-web legt sie beim Anlegen des Telefons selbst an (username <nummer> password <zufall>)."""
+        """SIP-Zugangsdaten des Pools CMEP<ext>: aus cme-web (hier gesetzt) oder Klartext aus dem Router.
+        Passt der gespeicherte Benutzer nicht mehr zum Pool, gilt er als veraltet."""
         want = (DEVICE_PREFIX + ext.lstrip("+")).upper()
-        try:
-            out = router.show("show running-config | section voice register pool")
-        except Exception:  # noqa: BLE001
-            return {}
-        cur, found = [], None
-        for line in out.splitlines() + ["voice register pool"]:
-            if line.startswith("voice register pool"):
-                if any(l.strip().upper() == f"ID DEVICE-ID-NAME {want}" for l in cur):
-                    found = cur
-                    break
-                cur = []
-            cur.append(line)
-        if not found:
-            return {}
-        for l in found:
-            parts = l.split()
-            # nur Klartext-Passwoerter (username X password Y), keine verschluesselten (password 7 ...)
-            if len(parts) == 4 and parts[0] == "username" and parts[2] == "password":
-                return {"username": parts[1], "password": parts[3]}
+        pool = next((p for p in app_pools() if p["device"] == want), None)
+        saved = creds_all().get(want)
+        if saved and (pool is None or not pool["username"] or pool["username"] == saved["username"]):
+            return {"username": saved["username"], "password": saved["password"]}
+        if pool and pool["username"] and pool["plain"]:
+            return {"username": pool["username"], "password": pool["plain"]}
         return {}
 
     @app.get("/client/v1/info")

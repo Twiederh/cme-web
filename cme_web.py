@@ -1292,6 +1292,16 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             return f" id network {v['ip']} mask {v['mask']}"
         return f" id mac {v['mac']}" if v["id_kind"] == "mac" else f" id ip {v['ip']} mask {v['mask']}"
 
+    def remember_app_creds(res: dict, v: dict, username: str, password: str) -> None:
+        """CME Phone: Passwort fuer die App merken (der Router speichert es verschluesselt), phoneapp.py."""
+        store = app.config.get("PHONEAPP_CREDS")
+        if store and res.get("ok") and password and v.get("id_kind") == "device" \
+                and str(v.get("device_id", "")).upper().startswith("CMEP"):
+            try:
+                store(v["device_id"], username, password)
+            except OSError:
+                pass
+
     def verify_pool(res: dict, tag: str, v: dict) -> None:
         """Liest die Konfiguration neu und prueft, ob der Router den Pool uebernommen hat."""
         if not res["ok"]:
@@ -1342,6 +1352,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         res = apply(lines)
         res.update(tag=tag, username=username, password=password)
         verify_pool(res, tag, v)
+        remember_app_creds(res, v, username, password)
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.put("/api/phones/<tag>")
@@ -1423,6 +1434,8 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         res = apply(lines)
         res.update(tag=tag, username=username or cur["username"], password=password or None)
         verify_pool(res, tag, v)
+        if password:
+            remember_app_creds(res, v, username or cur["username"], password)
         return jsonify(res), (200 if res["ok"] else 400)
 
     @app.delete("/api/phones/<tag>")

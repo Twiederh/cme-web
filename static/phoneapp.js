@@ -19,7 +19,7 @@
   const secretTxt = (v) => reveal ? esc(v) : (v ? "•".repeat(12) : '<span class="muted">–</span>');
 
   async function load() {
-    const j = await api("/api/phoneapp");
+    const [j, d] = await Promise.all([api("/api/phoneapp"), api("/api/phoneapp/devices")]);
     const b = $("#pa-body");
     if (!j.ok) { b.innerHTML = `<div class="msg bad" style="display:block">${esc(j.error || "Fehler")}</div>`; return; }
     const r = j.relay || {}, a = j.apns || {}, devs = (r.localpush || {}).devices || [];
@@ -40,6 +40,16 @@
         : '<span class="muted">kein Gerät</span>'}</span></div>
       <div class="kv"><span class="muted">Letzter Anruf-Push</span><span>${lp}</span></div>
       <div class="kv"><span class="muted">Letzter APNs-Versand</span><span class="mono">${esc((r.apns || {}).last_result || "–")}</span></div>
+
+      <h3>Geräte (Pools vom Typ CME Phone)</h3>
+      <div class="hint">Alle Apps derselben Rufnummer (iPhone, iPad, Mac) nutzen einen Pool. CME verlangt von ihnen
+        Benutzer und Passwort; der Router speichert das Passwort verschlüsselt, deshalb merkt cme-web es sich und
+        gibt es an die Apps weiter. Fehlt es, hier <b>Zugangsdaten setzen</b> – das setzt ein neues Passwort im Pool.</div>
+      ${(d && d.devices && d.devices.length) ? d.devices.map(x => `
+        <div class="kv"><span><span class="mono">${esc(x.device)}</span> <span class="muted">Pool ${esc(x.tag)}</span></span>
+          <span>${x.creds ? badge("ok", "Zugangsdaten hinterlegt") : badge("bad", "Zugangsdaten fehlen")}
+            <button class="small" data-act="creds" data-tag="${esc(x.tag)}">${x.creds ? "Neu setzen" : "Zugangsdaten setzen"}</button></span></div>`).join("")
+        : '<div class="empty">Noch kein Telefon vom Typ CME Phone (Tab Telefone).</div>'}
 
       <h3>Einrichtung in der App</h3>
       <div class="hint">iPhone/iPad: <b>Einstellungen → Apps → CME Phone</b>. Mac: Menüleiste → <b>Einstellungen</b>.
@@ -110,6 +120,13 @@
       if (!confirm(`Wirklich ${what} erzeugen?`)) return;
       await api("/api/phoneapp/renew", { method: "POST", body: JSON.stringify({ what: b.dataset.what }) });
       reveal = true;
+      return load();
+    }
+    if (act === "creds") {
+      if (!confirm(`Neues SIP-Passwort für Pool ${b.dataset.tag} setzen? Die Apps holen es sich beim nächsten Abruf.`)) return;
+      b.disabled = true;
+      const r = await api(`/api/phoneapp/devices/${b.dataset.tag}/credentials`, { method: "POST", body: "{}" });
+      if (!r.ok) { alert(r.error || "Fehler"); b.disabled = false; return; }
       return load();
     }
     if (act === "del-apns") {
