@@ -11,6 +11,10 @@
 FROM debian:trixie
 
 ARG FLEXISIP_VERSION=2.6.2
+# Linphone-SDK-Stand, den Flexisip 2.6.2 als Submodul einbindet (Tag 5.5.16).
+# Muss vorgegeben werden: der flache Klon hat keine Git-Tags, "git describe" schlägt sonst fehl.
+# Bei einem Flexisip-Update anpassen: git ls-remote --tags https://gitlab.linphone.org/BC/public/linphone-sdk.git | grep <submodul-sha>
+ARG LINPHONESDK_VERSION=5.5.16
 ARG NJOBS=4
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -32,6 +36,10 @@ RUN cmake -S flexisip -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DCMAKE_INSTALL_PREFIX=/opt/belledonne-communications \
       -DSYSCONF_INSTALL_DIR=/etc \
+      -DFLEXISIP_VERSION="${FLEXISIP_VERSION}" \
+      -DLINPHONESDK_VERSION="${LINPHONESDK_VERSION}" \
+      -DLINPHONESDK_STATE=releases \
+      -DLINPHONESDK_BRANCH=release \
       -DENABLE_STRICT=OFF \
       -DENABLE_SANITIZERS=OFF \
       -DENABLE_SYSTEMD=OFF \

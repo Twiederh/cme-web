@@ -27,6 +27,7 @@ services:
       context: ./flexisip
       args:
         FLEXISIP_VERSION: "2.6.2"
+        LINPHONESDK_VERSION: "5.5.16"
         NJOBS: "4"
     image: flexisip:local
     container_name: flexisip
