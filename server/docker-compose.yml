@@ -4,6 +4,10 @@
 #   URL:          https://gitea.wiederhol.de/thomas/cme-softphone
 #   Compose path: server/docker-compose.yml
 #   Env:          RELAY_LOCALPUSH_SECRET, RELAY_ADMIN_PASSWORD
+#   Optional:     RELAY_LOCALPUSH_PORT (5070), RELAY_ADMIN_PORT (8091), RELAY_HTTP_PORT (8090),
+#                 falls auf docker01 schon belegt (Host-Netz!). Prüfen: ss -tulpn | grep -E ':(5070|8090|8091)\b'
+#                 Bei geändertem RELAY_HTTP_PORT auch external-push-uri in flexisip.conf anpassen,
+#                 bei geändertem RELAY_LOCALPUSH_PORT den Relay-Port in der App.
 #   APNs-Schlüssel: im Browser hochladen unter http://<docker01>:8091/ (Benutzer "admin")
 #   "Enable relative path volumes": AUS (alle Pfade sind absolut)
 #
@@ -48,12 +52,12 @@ services:
     restart: unless-stopped
     environment:
       RELAY_HTTP_HOST: 127.0.0.1
-      RELAY_HTTP_PORT: "8090"
+      RELAY_HTTP_PORT: ${RELAY_HTTP_PORT:-8090}
       RELAY_LOCALPUSH_HOST: 0.0.0.0
-      RELAY_LOCALPUSH_PORT: "5070"
+      RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5070}
       RELAY_LOCALPUSH_SECRET: ${RELAY_LOCALPUSH_SECRET:?Secret setzen (openssl rand -hex 24)}
       # Verwaltung (APNs-Schlüssel hochladen): http://<docker01>:8091/, Benutzer "admin"
-      RELAY_ADMIN_PORT: "8091"
+      RELAY_ADMIN_PORT: ${RELAY_ADMIN_PORT:-8091}
       RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:?Admin-Passwort für die Verwaltung setzen}
       RELAY_DATA_DIR: /data
       APNS_BUNDLE_ID: de.wiederhol.cmephone
