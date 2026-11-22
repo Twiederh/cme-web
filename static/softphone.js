@@ -18,7 +18,9 @@
     <b>Gerätenamen</b> an – CME nimmt im CME-Modus nur MAC-Adressen oder Gerätenamen an. Der Name ist <span class="mono">CMEP</span> + Nebenstelle
     (z. B. <span class="mono">CMEP21</span>) – genau so schickt ihn die App bei der Anmeldung mit. Am Router wird der Pool als <span class="mono">type Jabber-CSF-Client</span> mit
     <span class="mono">id device-id-name</span> angelegt. In der App nur <b>Nebenstelle</b> (Rufnummer der ersten
-    Leitung), <b>cme-web-Adresse</b> und <b>App-Schlüssel</b> eintragen – alles Weitere holt sie sich aus dem Tab <b>Softphone</b>.`;
+    Leitung), <b>cme-web-Adresse</b> und <b>App-Schlüssel</b> eintragen – alles Weitere holt sie sich aus dem Tab <b>Softphone</b>.<br><b>Mehrere Geräte mit derselben Nummer</b> (iPhone, iPad, Mac): ein einziger CME-Phone-Pool je Rufnummer genügt –
+    alle Apps melden sich mit demselben Gerätenamen an, Flexisip lässt sie gemeinsam klingeln. Zusammen mit einem
+    Tischtelefon die Rufnummer als <b>Shared Line</b> anlegen.`;
   document.getElementById("jabber-hint").after(hint);
   const devInput = f.device_id;
   const devLabel = document.querySelector("#wrap-device label");

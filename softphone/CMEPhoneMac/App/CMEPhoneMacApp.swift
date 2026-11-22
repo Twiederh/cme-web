@@ -131,7 +131,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             DeskPhoneController.shared.stopMonitoring()
-            SIPManager.shared.core?.stop()
+            // Bewusst KEIN core.stop(): das würde die Anmeldung abmelden. Alle Geräte einer Rufnummer teilen sich
+            // an CME einen Pool (eine Anmeldung über Flexisip) – ein Abmelden des Macs würde auch iPhone und iPad
+            // bei CME austragen. Flexisip entfernt den Mac nach Ablauf selbst.
         }
     }
 }
