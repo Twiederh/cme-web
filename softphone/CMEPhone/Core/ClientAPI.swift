@@ -7,6 +7,8 @@ enum ClientAPI {
         struct Gateway: Decodable { var host: String; var port: Int; var transport: String }
         struct LocalPush: Decodable { var host: String; var port: Int; var secret: String; var ssids: [String] }
         struct Recording: Decodable { var available: Bool; var mode: String }
+        /// SIP-Zugangsdaten des Pools (CME verlangt sie von Soft-Clients); leer, wenn cme-web keine kennt
+        struct Auth: Decodable { var username: String?; var password: String? }
         var ext: String
         var deviceName: String
         var cmeHost: String
@@ -14,9 +16,10 @@ enum ClientAPI {
         var localpush: LocalPush
         var voicemail: String
         var recording: Recording
+        var auth: Auth?
 
         enum CodingKeys: String, CodingKey {
-            case ext, gateway, localpush, voicemail, recording
+            case ext, gateway, localpush, voicemail, recording, auth
             case deviceName = "device_name"
             case cmeHost = "cme_host"
         }

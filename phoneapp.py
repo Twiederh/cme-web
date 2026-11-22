@@ -296,6 +296,31 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             return jsonify(ok=False, error="App-Schlüssel fehlt oder ist falsch."), 401
         return None
 
+    def pool_credentials(ext: str) -> dict:
+        """SIP-Zugangsdaten des Pools mit Geraetename CMEP<ext> (CME verlangt sie von Soft-Clients).
+        cme-web legt sie beim Anlegen des Telefons selbst an (username <nummer> password <zufall>)."""
+        want = (DEVICE_PREFIX + ext.lstrip("+")).upper()
+        try:
+            out = router.show("show running-config | section voice register pool")
+        except Exception:  # noqa: BLE001
+            return {}
+        cur, found = [], None
+        for line in out.splitlines() + ["voice register pool"]:
+            if line.startswith("voice register pool"):
+                if any(l.strip().upper() == f"ID DEVICE-ID-NAME {want}" for l in cur):
+                    found = cur
+                    break
+                cur = []
+            cur.append(line)
+        if not found:
+            return {}
+        for l in found:
+            parts = l.split()
+            # nur Klartext-Passwoerter (username X password Y), keine verschluesselten (password 7 ...)
+            if len(parts) == 4 and parts[0] == "username" and parts[2] == "password":
+                return {"username": parts[1], "password": parts[3]}
+        return {}
+
     @app.get("/client/v1/info")
     def client_info():
         ext = ext_arg()
@@ -309,6 +334,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                        localpush={"host": s["gateway_host"], "port": s["localpush_port"], "secret": lp_secret(),
                                   "ssids": [x for x in s.get("ssids", "").split(",") if x]},
                        voicemail=pilot(),
+                       auth=pool_credentials(ext),
                        recording={"available": bool(r), "mode": (r["settings"]().get("mode", "always") if r else "")})
 
     @app.get("/client/v1/calls")

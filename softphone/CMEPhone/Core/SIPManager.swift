@@ -187,9 +187,11 @@ final class SIPManager: ObservableObject {
             #endif
 
             if !settings.password.isEmpty {
+                // CME (Soft-Client-Pool): username <nummer ohne +> password <…> – Realm/Domain offen lassen
+                let user = settings.authUser.isEmpty ? String(settings.extensionNumber.drop(while: { $0 == "+" })) : settings.authUser
                 let auth = try Factory.Instance.createAuthInfo(
-                    username: settings.extensionNumber, userid: nil, passwd: settings.password,
-                    ha1: nil, realm: nil, domain: settings.cmeHost)
+                    username: user, userid: nil, passwd: settings.password,
+                    ha1: nil, realm: nil, domain: nil)
                 core.addAuthInfo(info: auth)
             }
 

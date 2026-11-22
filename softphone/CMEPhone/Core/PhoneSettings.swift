@@ -78,8 +78,10 @@ final class PhoneSettings: ObservableObject {
     @Published var displayName: String { didSet { save() } }
     /// SIP-Domain = Adresse der CME (Request-URI-Ziel). Standard: 192.168.11.4
     @Published var cmeHost: String { didSet { save() } }
-    /// Optionales Passwort (nur falls im Pool `authenticate` aktiv ist).
+    /// SIP-Passwort des Pools (CME verlangt es von Soft-Clients; kommt aus cme-web)
     @Published var password: String { didSet { save() } }
+    /// SIP-Benutzername des Pools (leer = Nebenstelle ohne "+")
+    @Published var authUser: String { didSet { save() } }
 
     // MARK: Push-Gateway (Flexisip)
     /// Wenn aktiv, registriert sich die App über Flexisip (Outbound-Proxy), sonst direkt an CME.
@@ -153,6 +155,7 @@ final class PhoneSettings: ObservableObject {
         displayName = d.string(forKey: "displayName") ?? ""
         cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
         password = d.string(forKey: "password") ?? ""
+        authUser = d.string(forKey: "authUser") ?? ""
         useGateway = d.object(forKey: "useGateway") as? Bool ?? true
         gatewayHost = d.string(forKey: "gatewayHost") ?? "sip-gw.wiederhol.de"
         gatewayPort = d.object(forKey: "gatewayPort") as? Int ?? 5062
@@ -243,7 +246,7 @@ final class PhoneSettings: ObservableObject {
 
     /// Alles, was eine Neuanmeldung erfordert.
     var accountFingerprint: String {
-        [extensionNumber, displayName, cmeHost, password, "\(useGateway)", gatewayHost, "\(gatewayPort)",
+        [extensionNumber, displayName, cmeHost, password, authUser, "\(useGateway)", gatewayHost, "\(gatewayPort)",
          transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)"].joined(separator: "|")
     }
 
@@ -266,6 +269,10 @@ final class PhoneSettings: ObservableObject {
             if !info.localpush.ssids.isEmpty { localPushSSIDs = info.localpush.ssids.joined(separator: ", ") }
         }
         voicemailNumber = info.voicemail
+        if let a = info.auth, let pw = a.password, !pw.isEmpty {
+            password = pw
+            authUser = a.username ?? ""
+        }
         loading = false
         save()
         return before != accountFingerprint
@@ -293,6 +300,7 @@ final class PhoneSettings: ObservableObject {
         d.set(displayName, forKey: "displayName")
         d.set(cmeHost, forKey: "cmeHost")
         d.set(password, forKey: "password")
+        d.set(authUser, forKey: "authUser")
         d.set(useGateway, forKey: "useGateway")
         d.set(gatewayHost, forKey: "gatewayHost")
         d.set(gatewayPort, forKey: "gatewayPort")
