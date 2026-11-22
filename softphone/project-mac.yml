@@ -73,4 +73,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.wiederhol.cmephone.mac
+        PRODUCT_NAME: CMEPhone              # CMEPhone.app
+        PRODUCT_MODULE_NAME: CMEPhoneMac
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

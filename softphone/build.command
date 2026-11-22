@@ -70,4 +70,4 @@ say "iOS: $([ $IOS -eq 0 ] && echo ERFOLG || echo "FEHLER ($IOS)")"
 grep -E "error:" build-logs/build-ios.log | sort -u | head -60 >> "$LOG"
 
 say "=== fertig: macOS=$MAC iOS=$IOS ==="
-[ $MAC -eq 0 ] && say "Mac-App: $DD/Build/Products/Debug/CMEPhoneMac.app"
+[ $MAC -eq 0 ] && say "Mac-App: $DD/Build/Products/Debug/CMEPhone.app"
