@@ -25,7 +25,7 @@ private struct AccountTab: View {
     var body: some View {
         Form {
             Section {
-                TextField("cme-web-Adresse", text: $settings.cmeWebURL, prompt: Text("https://cme.wiederhol.de"))
+                TextField("cme-web-Adresse", text: $settings.cmeWebURL, prompt: Text("https://…"))
                 SecureField("App-Schlüssel", text: $settings.appToken)
                 TextField("Nebenstelle des Macs", text: $settings.extensionNumber)
                 TextField("Anzeigename", text: $settings.displayName)
@@ -34,10 +34,16 @@ private struct AccountTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Von cme-web holen und anmelden") {
+                        settings.cmeWebURL = settings.cmeWebURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                        settings.appToken = settings.appToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                        settings.extensionNumber = settings.extensionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard settings.hasCmeWeb, !settings.extensionNumber.isEmpty else {
+                            settings.provisioningStatus = "Bitte cme-web-Adresse, App-Schlüssel und Nebenstelle eintragen"
+                            return
+                        }
                         Provisioning.refresh()
                         sip.applyAccount()
                     }
-                    .disabled(!settings.hasCmeWeb || settings.extensionNumber.isEmpty)
                 }
             } header: { Text("cme-web") } footer: {
                 Text("cme-web → Tab Softphone: Adresse und App-Schlüssel. In cme-web den Mac als Telefon vom Typ „CME Phone“ mit Gerätename \(settings.deviceName) anlegen. "
