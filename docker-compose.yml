@@ -44,6 +44,7 @@ services:
       CME_PHONE_URL_PORT: ${CME_PHONE_PORT:-8081}
       # CME Phone (Tab Softphone, siehe softphone/README.md)
       PHONEAPP_DATA_DIR: /data/push
+      SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_GW_PORT: ${SIP_GW_PORT:-5062}
       RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5072}
@@ -141,6 +142,8 @@ services:
     restart: unless-stopped
     environment:
       HOST_IP: ${VM_HOST_IP:?VM_HOST_IP = LAN-IP des Docker-Hosts setzen}
+      CME_IP: ${CME_HOST}
+      SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_PORT: ${SIP_GW_PORT:-5062}
       RELAY_PORT: ${RELAY_HTTP_PORT:-8092}

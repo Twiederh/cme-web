@@ -7,7 +7,9 @@
 ##                                                      +-- schläft das Gerät: HTTP -> cme-push-relay
 ##                                                          -> Local Push (Heim-WLAN) oder APNs VoIP-Push
 ##
-## Die App registriert sich mit Identität sip:<nst>@<CME> und nutzt Flexisip als Outbound-Proxy.
+## Die App registriert sich mit Identität sip:<nst>@<SIP_DOMAIN> und nutzt Flexisip als Outbound-Proxy.
+## SIP_DOMAIN muss ein NAME sein (keine IP): Den Registrar mit IP-Domain verwirft Flexisip stillschweigend,
+## wenn die IP nicht ihm selbst gehört. Weitergeleitet wird per Route an die IP der Anlage (CME_IP).
 ## Flexisip leitet das REGISTER an CME weiter (Request-URI = CME), ersetzt dabei den Contact durch
 ## seine eigene Adresse (ContactRouteInserter) und registriert das Gerät erst lokal,
 ## wenn CME mit 200 OK antwortet (reg-on-response).
@@ -98,3 +100,5 @@ enabled=false
 
 [module::Forward]
 enabled=true
+# REGISTER und Anrufe der Apps (Domain ${SIP_DOMAIN}) per Route an CME – entrypoint.sh schreibt die Datei.
+routes-config-path=/run/flexisip-routes.conf

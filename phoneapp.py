@@ -301,8 +301,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         ext = ext_arg()
         s = settings()
         r = rec()
+        # SIP-Domain der Apps: ein Name (Flexisip nimmt Anmeldungen mit fremder IP-Domain nicht an),
+        # Flexisip leitet ihn per Route an CME_HOST weiter
         return jsonify(ok=True, ext=ext, device_name=DEVICE_PREFIX + ext.lstrip("+"),
-                       cme_host=os.environ.get("CME_HOST", ""),
+                       cme_host=os.environ.get("SIP_DOMAIN", "").strip() or os.environ.get("CME_HOST", ""),
                        gateway={"host": s["gateway_host"], "port": s["gateway_port"], "transport": "tcp"},
                        localpush={"host": s["gateway_host"], "port": s["localpush_port"], "secret": lp_secret(),
                                   "ssids": [x for x in s.get("ssids", "").split(",") if x]},
