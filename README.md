@@ -73,7 +73,9 @@ steht während des Gesprächs unter dem Namen.
    * `de.wiederhol.cmephone`: Capabilities *Push Notifications*, *App Groups*, *Network Extensions*
    * `de.wiederhol.cmephone.localpush`: *App Groups*, *Network Extensions*
 2. **App Group** `group.de.wiederhol.cmephone` anlegen und beiden IDs zuweisen.
-3. **Keys → +** → *Apple Push Notifications service (APNs)* → `.p8` herunterladen. Key-ID und Team-ID notieren.
+3. **Keys → +** → *Apple Push Notifications service (APNs)* → *Configure*: Environment **Sandbox & Production**,
+   Key Restriction **Team Scoped (All Topics)** → `.p8` herunterladen (geht nur einmal!). Hochladen in
+   der Verwaltung des push-relay (Schritt 4), Key-ID wird aus dem Dateinamen übernommen, Team-ID `83BLV56527`.
 4. Local Push (`app-push-provider`) ist Teil der Network-Extension-Capability. Falls Xcode beim Signieren
    meckert, muss das Entitlement bei Apple beantragt werden (Formular „Local Push Connectivity“).
    Bis dahin funktioniert APNs allein.
@@ -110,21 +112,27 @@ Timeout der Weboberfläche laufen.
 ### 4. Stack auf docker01
 
 ```bash
-sudo mkdir -p /opt/containers/cme-softphone/{flexisip,flexisip-log,apns}
+sudo mkdir -p /opt/containers/cme-softphone/{flexisip,flexisip-log}
 sudo cp /tmp/cme-softphone/server/flexisip/flexisip.conf /opt/containers/cme-softphone/flexisip/
 sudo sed -i "s/DOCKER01_IP/$(hostname -I | cut -d" " -f1)/g; s/SIP_GW_NAME/sip-gw.wiederhol.de/g" \
      /opt/containers/cme-softphone/flexisip/flexisip.conf
-sudo cp AuthKey_XXXX.p8 /opt/containers/cme-softphone/apns/AuthKey.p8
 ```
 
 Danach in Portainer: **Stacks → Add stack → Repository**
 * Repository-URL `https://gitea.wiederhol.de/thomas/cme-softphone` (mit Gitea-Zugangsdaten, das Repo ist privat)
 * Compose path `server/docker-compose.yml`
-* Umgebungsvariablen: `RELAY_LOCALPUSH_SECRET`, `APNS_KEY_ID`, `APNS_TEAM_ID`, optional `APNS_ENV`
+* Umgebungsvariablen: `RELAY_LOCALPUSH_SECRET` (`openssl rand -hex 24`) und `RELAY_ADMIN_PASSWORD`
 * „Enable relative path volumes“ **aus** lassen, alle Pfade sind absolut
 
 Portainer baut den push-relay dabei aus `server/push-relay/` selbst. Das Flexisip-Image muss vorher
 wie in Schritt 3 auf docker01 gebaut sein.
+
+**APNs-Schlüssel hochladen:** Nach dem Deploy im Browser `http://<docker01>:8091/` öffnen, Benutzer
+`admin`, Passwort = `RELAY_ADMIN_PASSWORD`. Dort die `.p8`-Datei auswählen. Die Key-ID wird aus dem
+Dateinamen übernommen, die Team-ID ist vorausgefüllt. Umgebung `auto` lassen und speichern. Der
+Schlüssel ist sofort aktiv, ohne Neustart, und liegt im Docker-Volume `relay-data`. Die Seite zeigt
+außerdem den letzten APNs-Versand und die per Local Push verbundenen Geräte. Port 8091 in der UDM nur
+aus deinem Admin-Netz freigeben.
 
 **Traefik:** Flexisip und der Relay laufen bewusst im Host-Netz und **nicht hinter Traefik**. SIP
 (UDP/TCP) und der Local-Push-Kanal sind keine HTTP-Dienste. Ein Proxy dazwischen würde die
@@ -133,8 +141,8 @@ RTP läuft ohnehin direkt zwischen Gerät und CME. Für die SIP-Verbindung brauc
 DNS-Eintrag und die Firewall-Regeln:
 
 * DNS `sip-gw.wiederhol.de` → LAN-IP von docker01 (lokaler DNS in der UDM, kein Traefik-Router).
-* Firewall: aus WLAN/VPN zu docker01 **TCP/UDP 5060** und **TCP 5070** erlauben.
-  Port 8090 bleibt lokal (127.0.0.1).
+* Firewall: aus WLAN/VPN zu docker01 **TCP/UDP 5060** und **TCP 5070** erlauben, **TCP 8091**
+  (Verwaltung) nur aus dem Admin-Netz. Port 8090 bleibt lokal (127.0.0.1).
 * Test: `curl http://127.0.0.1:8090/health` auf docker01.
 
 ### 5. CME konfigurieren
@@ -233,7 +241,7 @@ CME liefert je nach Konfiguration nur eines davon.
 | 2 | 21 → 10 (Tischtelefon) | Verbindung, Codec G.722 | Protokoll-Tab ansehen, `debug ccsip messages` |
 | 3 | 10 → 21, App im Vordergrund | Klingelt per CallKit | CME muss die `CtRt…;doroute`-Parameter im Contact behalten, prüfen mit `debug ccsip messages` |
 | 4 | 10 → 21, App beendet, im WLAN | Klingelt über Local Push | `curl :8090/devices` zeigt Gerät? Relay-Log |
-| 5 | wie 4, mobil + VPN | Klingelt über APNs | Relay-Log: APNs-Status; `APNS_ENV=sandbox` für Debug-Builds |
+| 5 | wie 4, mobil + VPN | Klingelt über APNs | Verwaltung `:8091`: „Letzter APNs-Versand“; Umgebung ggf. auf Sandbox stellen |
 | 6 | Video 21 → 8865 | H.264-Video | `voice-class codec 21` mit `video codec h264` am Pool |
 | 7 | iPhone ↔ iPad | Opus + H.265, falls CME durchreicht | Experiment §5 in `softphone.cfg` |
 | 8 | Extern (sipgate) | G.711 A-law | Dial-Peer-Codecs des Trunks |
@@ -263,7 +271,8 @@ CMEPhoneMac/UI/             macOS: Hauptfenster, Wählen, Anruf + Video, Tischte
 LocalPushProvider/          NEAppPushProvider (TCP zum Relay, reportIncomingCall)
 Shared/                     gemeinsame Konstanten + Local-Push-Protokoll
 server/flexisip/            flexisip.conf (Push-Gateway vor CME)
-server/push-relay/          Python-Relay (Local Push + APNs HTTP/2, .p8-Token-Auth)
+server/push-relay/          Python-Relay (Local Push + APNs HTTP/2, .p8-Token-Auth, Verwaltung :8091)
+server/flexisip/Dockerfile  Flexisip 2.6.2 aus den Quellen (Debian 13, nur Proxy)
 cme/softphone.cfg           IOS-Konfiguration für CME (Softphones)
 cme/deskphone-control.cfg   IOS-Konfiguration für Tischtelefon-Steuerung + Mac-Pool
 ```
@@ -273,7 +282,8 @@ cme/deskphone-control.cfg   IOS-Konfiguration für Tischtelefon-Steuerung + Mac-
 * **Kompiliert** mit Xcode 27.2 – macOS und iOS, bisher ohne Signierung: `zsh build.command`
   (Logs in `build-logs/`). Signiert bauen: in Xcode → Einstellungen → Accounts mit der Apple-ID
   anmelden, dann `SIGN=1 zsh build.command`. Noch nicht auf Geräten bzw. gegen CME getestet.
-* Der push-relay ist getestet: Local-Push-Zustellung mit ACK, Secret-Prüfung, APNs-JWT, Rückfall auf APNs.
+* Der push-relay ist getestet: Local-Push-Zustellung mit ACK, Secret-Prüfung, APNs-JWT, Rückfall auf APNs,
+  Verwaltung (Anmeldung, CSRF, Prüfung auf EC-P-256-Schlüssel, Speichern/Löschen).
 * Getestet (Swift unter Linux): Aufbau und Antwortauswertung von CiscoIPPhoneExecute, Auswertung von
   dialog-info- und PIDF-NOTIFYs (17 Fälle).
 * Die CME-Befehle für `url authentication`/`authentication credential` und Presence sind gegen 17.12 zu prüfen.
