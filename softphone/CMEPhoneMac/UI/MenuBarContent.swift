@@ -50,7 +50,7 @@ struct MenuBarContent: View {
         Button("Wähltastatur …") { DialpadPanel.shared.show() }
             .keyboardShortcut("d")
 
-        SettingsLink { Text("Einstellungen …") }
+        Button("Einstellungen …") { SettingsWindow.shared.show() }
             .keyboardShortcut(",")
 
         Divider()

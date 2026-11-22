@@ -24,12 +24,9 @@ struct CMEPhoneMacApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Settings {
-            MacSettingsView()
-                .environmentObject(SIPManager.shared)
-                .environmentObject(PhoneSettings.shared)
-                .environmentObject(DeskPhoneController.shared)
-        }
+        // Kein Settings-Scene: das eigene Fenster (SettingsWindow) lässt sich auch beim Start und
+        // beim erneuten Öffnen der App aus dem Finder zeigen.
+        Settings { EmptyView() }
     }
 
     private var menuIcon: String {
@@ -95,6 +92,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             SIPManager.shared.start()
             ToastController.shared.setup()
             Provisioning.refresh()
+            // Erster Start: Einstellungen zeigen, sonst sieht man außer dem Menüleisten-Symbol nichts
+            if !settings.isConfigured { SettingsWindow.shared.show() }
 
             // Statusabo für das Tischtelefon, sobald der Mac angemeldet ist und der Modus passt
             Publishers.CombineLatest(SIPManager.shared.$registration.removeDuplicates(), settings.$macMode.removeDuplicates())
@@ -123,10 +122,40 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// App im Finder/Launchpad erneut geöffnet: Einstellungen zeigen (es gibt kein Hauptfenster).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        MainActor.assumeIsolated { SettingsWindow.shared.show() }
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             DeskPhoneController.shared.stopMonitoring()
             SIPManager.shared.core?.stop()
         }
+    }
+}
+
+/// Einstellungsfenster (statt Settings-Scene, damit es sich überall öffnen lässt).
+@MainActor
+final class SettingsWindow {
+    static let shared = SettingsWindow()
+    private var window: NSWindow?
+
+    func show() {
+        if window == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 560),
+                             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            w.title = "CME Phone – Einstellungen"
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: MacSettingsView()
+                .environmentObject(SIPManager.shared)
+                .environmentObject(PhoneSettings.shared)
+                .environmentObject(DeskPhoneController.shared))
+            w.center()
+            window = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
     }
 }
