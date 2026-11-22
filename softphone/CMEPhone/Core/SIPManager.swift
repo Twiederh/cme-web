@@ -55,6 +55,7 @@ final class SIPManager: ObservableObject {
     private var coreDelegate: CoreDelegate!
     private let settings = PhoneSettings.shared
     private var durationTimer: Timer?
+    private var iterateTimer: Timer?
     /// Zusätzliche Beobachter (z.B. Statusabo für das Tischtelefon auf macOS).
     private var callStateHandlers: [(Call, Call.State) -> Void] = []
     private var extraDelegates: [CoreDelegate] = []
@@ -96,6 +97,15 @@ final class SIPManager: ObservableObject {
         #else
         // macOS: kein PushKit – der Mac bleibt dauerhaft registriert.
         core.pushNotificationEnabled = false
+        // macOS: liblinphone selbst takten. Das eingebaute Auto-Iterate läuft in der Menüleisten-App nicht
+        // zuverlässig (ohne Iterate wird nie ein REGISTER verschickt). Modus .common, damit es auch bei
+        // geöffnetem Menü weiterläuft.
+        core.autoIterateEnabled = false
+        let t = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.core?.iterate() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        iterateTimer = t
         #endif
         core.keepAliveEnabled = true
         core.ipv6Enabled = true
