@@ -111,8 +111,8 @@ Timeout der Weboberfläche laufen.
 
 ```bash
 sudo mkdir -p /opt/containers/cme-softphone/{flexisip,flexisip-log,apns}
-sudo cp server/flexisip/flexisip.conf /opt/containers/cme-softphone/flexisip/
-sudo sed -i 's/DOCKER01_IP/192.168.11.20/g; s/SIP_GW_NAME/sip-gw.wiederhol.de/g' \
+sudo cp /tmp/cme-softphone/server/flexisip/flexisip.conf /opt/containers/cme-softphone/flexisip/
+sudo sed -i "s/DOCKER01_IP/$(hostname -I | cut -d" " -f1)/g; s/SIP_GW_NAME/sip-gw.wiederhol.de/g" \
      /opt/containers/cme-softphone/flexisip/flexisip.conf
 sudo cp AuthKey_XXXX.p8 /opt/containers/cme-softphone/apns/AuthKey.p8
 ```
