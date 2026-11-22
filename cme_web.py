@@ -48,17 +48,18 @@ PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "8945
                "Jabber-CSF-Client", "Jabber-iPhone", "Jabber-Android", "CME-Softphone"]
 # Softclients werden in CME ueber einen Geraetenamen (id device-id-name) erkannt, nicht ueber die MAC
 SOFT_CLIENT_PREFIX = "Jabber-"
-# CME Phone (eigenes Softphone, https://gitea.wiederhol.de/thomas/cme-softphone): registriert sich ueber den
-# Push-Gateway Flexisip. Alle Softphones kommen von dessen IP; CME ordnet den Pool ueber "id network <IP>" und die
-# Nummer im REGISTER zu. In IOS gibt es dafuer keinen "type" - "CME-Softphone" ist nur ein Name in cme-web.
+# CME Phone (eigenes Softphone, https://gitea.wiederhol.de/thomas/cme-softphone): CME nimmt im CME-Modus nur
+# MAC-Adressen oder - fuer Softclients - einen Geraetenamen an. Das Softphone meldet sich deshalb wie Jabber an:
+# Pool mit "id device-id-name CMEP..." und "type Jabber-CSF-Client"; die App schickt den Namen im Contact-Header
+# (+u.sip!devicename.ccm.cisco.com="CMEP..."). Am Praefix CMEP erkennt cme-web das Softphone wieder.
 SOFTPHONE_TYPE = "CME-Softphone"
-SOFTPHONE_GW = os.environ.get("CME_SOFTPHONE_GW") or os.environ.get("VM_HOST_IP", "")
-RE_IPV4 = re.compile(r"^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$")
+SOFTPHONE_IOS_TYPE = "Jabber-CSF-Client"
+SOFTPHONE_PREFIX = "CMEP"
 
 
 def ios_type(ptype: str) -> str:
-    """Typ fuer die Router-Konfiguration (CME-Softphone hat keinen)."""
-    return "" if ptype == SOFTPHONE_TYPE else ptype
+    """Typ fuer die Router-Konfiguration (CME-Softphone meldet sich wie Jabber fuer Windows/Mac an)."""
+    return SOFTPHONE_IOS_TYPE if ptype == SOFTPHONE_TYPE else ptype
 
 
 CODECS = ["g711alaw", "g711ulaw", "g722-64", "g729r8"]
@@ -247,8 +248,6 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                 cur["id_ip"] = parts[2]
                 cur["id_mask"] = parts[4] if len(parts) > 4 and parts[3] == "mask" else ""
                 cur["id_network"] = parts[1] == "network"
-                if cur["id_network"] and not cur.get("type"):
-                    cur["type"] = SOFTPHONE_TYPE    # Softphone ueber Flexisip (kein IOS-Typ)
             elif s.startswith("type "):
                 cur["type"] = s.split(None, 1)[1]
             elif s.startswith("description "):
@@ -271,6 +270,9 @@ def parse_voice_register_config(out: str) -> tuple[dict, dict]:
                     cur["numbers"].append({"ln": mm.group(1), "dn": mm.group(2)})
     for d in list(dns.values()) + list(pools.values()):
         d.pop("_kind", None)
+    for p in pools.values():
+        if p["device_id"].upper().startswith(SOFTPHONE_PREFIX) and p["type"] in ("", SOFTPHONE_IOS_TYPE):
+            p["type"] = SOFTPHONE_TYPE          # CME Phone (meldet sich wie Jabber an)
     return dns, pools
 
 
@@ -1007,7 +1009,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
     @app.get("/api/meta")
     def meta():
-        return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, list_codecs=LIST_CODECS, softphone_gw=SOFTPHONE_GW,
+        return jsonify(phone_types=PHONE_TYPES, codecs=CODECS, list_codecs=LIST_CODECS, softphone_prefix=SOFTPHONE_PREFIX,
                        hunt_types=HUNT_TYPES,
                        raw_commands=RAW_COMMANDS,
                        demo=isinstance(router, DemoRouter))
@@ -1194,11 +1196,12 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             id_kind = "device"
             device_id = check(data.get("device_id"), RE_DEVICE, "Geraetename").upper()
         elif ptype == SOFTPHONE_TYPE:
-            # CME Phone: Erkennung ueber die IP des Push-Gateways (Flexisip), fuer alle Softphones dieselbe
-            id_kind = "network"
-            ip = str(data.get("gw_ip") or SOFTPHONE_GW).strip()
-            if not RE_IPV4.match(ip):
-                raise InputError("IP des Push-Gateways (Flexisip, z. B. docker01) fehlt oder ist ungueltig.")
+            # CME Phone: wie Jabber ueber den Geraetenamen, immer mit Praefix CMEP (z.B. CMEP21)
+            id_kind = "device"
+            raw = str(data.get("device_id") or "").strip().upper()
+            if raw and not raw.startswith(SOFTPHONE_PREFIX):
+                raw = SOFTPHONE_PREFIX + raw
+            device_id = check(raw, RE_DEVICE, "Geraetename")
         else:
             id_kind = data.get("id_kind") or "mac"
             if id_kind != "mac":
@@ -1234,7 +1237,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             other = next((p for p in st["phones"] if p["mac"].upper() == mac and p["tag"] != own_tag), None)
             if other:
                 raise InputError(f"MAC {mac} ist schon Pool {other['tag']} zugeordnet.")
-        if ip and id_kind != "network":    # Softphones teilen sich die Gateway-IP
+        if ip:
             other = next((p for p in st["phones"] if p.get("id_ip") == ip and p["tag"] != own_tag), None)
             if other:
                 raise InputError(f"IP {ip} ist schon Pool {other['tag']} zugeordnet.")
@@ -1325,7 +1328,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
 
         lines = [f"voice register pool {tag}", id_line(v)]
         if ios_type(v["type"]):
-            lines.append(f" type {v['type']}")
+            lines.append(f" type {ios_type(v['type'])}")
         if v["id_kind"] == "device":
             # Jabber ohne Presence-Server: nur als Telefon
             lines.append(" phone-mode phone-only")
@@ -1370,7 +1373,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
                 lines.append(f" no id mac {cur['mac']}")
             lines.append(id_line(v))
         if ios_type(v["type"]) != ios_type(cur["type"]):
-            lines.append(f" type {v['type']}" if ios_type(v["type"]) else f" no type {cur['type']}")
+            lines.append(f" type {ios_type(v['type'])}" if ios_type(v["type"]) else f" no type {ios_type(cur['type'])}")
         if v["id_kind"] == "device" and cur.get("phone_mode") != "phone-only":
             lines.append(" phone-mode phone-only")
         elif v["id_kind"] != "device" and cur.get("phone_mode"):
