@@ -81,7 +81,7 @@ final class CallHistory: ObservableObject {
             let wasConnected = connected.remove(id) != nil
             let number = call.remoteAddress?.username ?? ""
             let dir: Entry.Direction = incoming ? (wasConnected ? .incoming : .missed) : .outgoing
-            add(Entry(date: call.callLog?.startDate.map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? Date(),
+            add(Entry(date: call.callLog.map { Date(timeIntervalSince1970: TimeInterval($0.startDate)) } ?? Date(),
                       number: number, name: call.remoteAddress?.displayName ?? "",
                       direction: dir, viaDeskPhone: false, duration: call.callLog?.duration ?? 0))
         default: break
