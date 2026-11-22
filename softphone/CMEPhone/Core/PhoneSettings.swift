@@ -48,11 +48,29 @@ enum MediaEncryptionSetting: String, Codable, CaseIterable, Identifiable {
     var label: String { self == .none ? "Aus (RTP)" : "SRTP (SDES, nur mit TLS)" }
 }
 
-/// Persistente Einstellungen (App-Group-UserDefaults, damit Werte für Diagnose auch
-/// in der Extension lesbar sind).
+/// Persistente Einstellungen.
+/// iOS: UserDefaults der App – die werden in der Einstellungen-App bearbeitet (Settings.bundle),
+///      die App hat keine eigene Einstellungsseite.
+/// macOS: App-Group-UserDefaults (Einstellungsfenster der Menüleisten-App).
+/// Gateway, CME, Local Push und Voicemail-Nummer holt die App aus cme-web (`Provisioning`),
+/// wenn cme-web-Adresse und App-Schlüssel eingetragen sind.
 final class PhoneSettings: ObservableObject {
     static let shared = PhoneSettings()
+    #if os(iOS)
+    private let defaults = UserDefaults.standard
+    #else
     private let defaults = UserDefaults(suiteName: SharedConfig.appGroup) ?? .standard
+    #endif
+
+    // MARK: cme-web (liefert den Rest der Einstellungen)
+    /// z.B. https://cme.wiederhol.de
+    @Published var cmeWebURL: String { didSet { save() } }
+    /// App-Schlüssel aus cme-web (Tab Softphone)
+    @Published var appToken: String { didSet { save() } }
+    /// Voicemail-Nummer (aus cme-web) – Ziel für "Voicemail" bei eingehenden Anrufen
+    @Published var voicemailNumber: String { didSet { save() } }
+    /// Letzter Abruf aus cme-web (Anzeige)
+    @Published var provisioningStatus: String { didSet { save() } }
 
     // MARK: Konto
     /// Nebenstelle in CME, z.B. "21".
@@ -100,9 +118,17 @@ final class PhoneSettings: ObservableObject {
     @Published var keyHangup: String { didSet { save() } }
     @Published var keyHold: String { didSet { save() } }
     @Published var keyDecline: String { didSet { save() } }
+    /// Tasten-URI für "an Voicemail umleiten" am Tischtelefon (z.B. iDivert-Softkey).
+    @Published var keyVoicemail: String { didSet { save() } }
     @Published var statusEvent: StatusEventPackage { didSet { save() } }
-    /// Mitteilung bei eingehendem Anruf am Tischtelefon.
+    /// Call-Toast bei eingehendem Anruf am Tischtelefon.
     @Published var deskPhoneNotify: Bool { didSet { save() } }
+    /// Wählregel für Rückruf: Nummern mit mehr als 4 Stellen bekommen eine 0 (Amtsholung) vorangestellt.
+    @Published var callbackPrefixZero: Bool { didSet { save() } }
+    /// Interne Gespräche im Softphone-Modus lokal aufnehmen (externe nimmt cme-recorder auf).
+    @Published var localRecording: Bool { didSet { save() } }
+    /// Darstellung der Wähltastatur (Mac)
+    @Published var dialpadOutlined: Bool { didSet { save() } }
 
     static let defaultAudio: [CodecEntry] = [
         .init(mime: "G722", enabled: true),
@@ -119,6 +145,10 @@ final class PhoneSettings: ObservableObject {
 
     private init() {
         let d = defaults
+        cmeWebURL = d.string(forKey: "cmeWebURL") ?? ""
+        appToken = d.string(forKey: "appToken") ?? ""
+        voicemailNumber = d.string(forKey: "voicemailNumber") ?? ""
+        provisioningStatus = d.string(forKey: "provisioningStatus") ?? ""
         extensionNumber = d.string(forKey: "extensionNumber") ?? ""
         displayName = d.string(forKey: "displayName") ?? ""
         cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
@@ -146,9 +176,99 @@ final class PhoneSettings: ObservableObject {
         keyHangup = d.string(forKey: "keyHangup") ?? "Key:Speaker"
         keyHold = d.string(forKey: "keyHold") ?? "Key:Hold"
         keyDecline = d.string(forKey: "keyDecline") ?? "Key:Soft3"
+        keyVoicemail = d.string(forKey: "keyVoicemail") ?? "Key:Soft2"
         statusEvent = StatusEventPackage(rawValue: d.string(forKey: "statusEvent") ?? "") ?? .dialog
         deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
+        callbackPrefixZero = d.object(forKey: "callbackPrefixZero") as? Bool ?? true
+        localRecording = d.object(forKey: "localRecording") as? Bool ?? true
+        dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
         loading = false
+        #if os(iOS)
+        registerSettingsBundleDefaults()
+        readSettingsBundle()
+        #endif
+    }
+
+    /// Gerätename am Router (Pool "CME Phone" in cme-web: id device-id-name CMEP<Nebenstelle>).
+    var deviceName: String { "CMEP" + extensionNumber.filter { $0.isNumber } }
+
+    var hasCmeWeb: Bool { !cmeWebURL.trimmingCharacters(in: .whitespaces).isEmpty && !appToken.isEmpty }
+
+    #if os(iOS)
+    // MARK: Einstellungen-App (Settings.bundle)
+    // Schalter für die Audio-Codecs (Reihenfolge fest: G.722, G.711 A-law, G.711 µ-law, Opus)
+    private static let codecSwitches = ["G722": "codec_G722", "PCMA": "codec_PCMA", "PCMU": "codec_PCMU", "opus": "codec_opus"]
+
+    private func registerSettingsBundleDefaults() {
+        var reg: [String: Any] = ["useGateway": true, "videoEnabled": true, "localPushEnabled": true,
+                                  "cmeHost": "192.168.11.4", "gatewayPort": 5062, "relayPort": 5072]
+        for key in Self.codecSwitches.values { reg[key] = true }
+        defaults.register(defaults: reg)
+    }
+
+    /// Übernimmt die Werte, die in der Einstellungen-App geändert wurden.
+    /// Gibt true zurück, wenn sich etwas Anmelderelevantes geändert hat.
+    @discardableResult
+    func readSettingsBundle() -> Bool {
+        let d = defaults
+        let before = accountFingerprint
+        loading = true
+        cmeWebURL = (d.string(forKey: "cmeWebURL") ?? "").trimmingCharacters(in: .whitespaces)
+        appToken = (d.string(forKey: "appToken") ?? "").trimmingCharacters(in: .whitespaces)
+        extensionNumber = (d.string(forKey: "extensionNumber") ?? "").trimmingCharacters(in: .whitespaces)
+        displayName = d.string(forKey: "displayName") ?? ""
+        cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
+        gatewayHost = d.string(forKey: "gatewayHost") ?? gatewayHost
+        gatewayPort = d.object(forKey: "gatewayPort") as? Int ?? Int(d.string(forKey: "gatewayPort") ?? "") ?? 5062
+        useGateway = d.bool(forKey: "useGateway")
+        videoEnabled = d.bool(forKey: "videoEnabled")
+        localPushEnabled = d.bool(forKey: "localPushEnabled")
+        audioCodecs = Self.defaultAudio.map { CodecEntry(mime: $0.mime, enabled: d.bool(forKey: Self.codecSwitches[$0.mime] ?? "")) }
+        loading = false
+        save()
+        return before != accountFingerprint
+    }
+
+    /// Werte der Einstellungen-App als Text – ändert sich nur, wenn dort etwas geändert wurde
+    /// (UserDefaults.didChangeNotification kommt auch bei eigenen Schreibzugriffen).
+    var settingsBundleFingerprint: String {
+        let keys = ["cmeWebURL", "appToken", "extensionNumber", "displayName", "cmeHost", "gatewayHost", "gatewayPort",
+                    "useGateway", "videoEnabled", "localPushEnabled"] + Self.codecSwitches.values.sorted()
+        return keys.map { "\(defaults.object(forKey: $0) ?? "")" }.joined(separator: "|")
+    }
+
+    /// Statuszeile in der Einstellungen-App (PSTitleValueSpecifier "status")
+    func publishStatus(_ text: String) { defaults.set(text, forKey: "status") }
+    #endif
+
+    /// Alles, was eine Neuanmeldung erfordert.
+    var accountFingerprint: String {
+        [extensionNumber, displayName, cmeHost, password, "\(useGateway)", gatewayHost, "\(gatewayPort)",
+         transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)"].joined(separator: "|")
+    }
+
+    /// Werte aus cme-web übernehmen (GET /client/v1/info).
+    @discardableResult
+    func apply(info: ClientAPI.Info) -> Bool {
+        let before = accountFingerprint
+        loading = true
+        if !info.cmeHost.isEmpty { cmeHost = info.cmeHost }
+        if !info.gateway.host.isEmpty {
+            useGateway = true
+            gatewayHost = info.gateway.host
+            gatewayPort = info.gateway.port
+            transport = SIPTransport(rawValue: info.gateway.transport) ?? .tcp
+        }
+        if !info.localpush.host.isEmpty {
+            relayHost = info.localpush.host
+            relayPort = info.localpush.port
+            relaySecret = info.localpush.secret
+            if !info.localpush.ssids.isEmpty { localPushSSIDs = info.localpush.ssids.joined(separator: ", ") }
+        }
+        voicemailNumber = info.voicemail
+        loading = false
+        save()
+        return before != accountFingerprint
     }
 
     var isConfigured: Bool { !extensionNumber.isEmpty && !cmeHost.isEmpty }
@@ -165,6 +285,10 @@ final class PhoneSettings: ObservableObject {
     private func save() {
         guard !loading else { return }
         let d = defaults
+        d.set(cmeWebURL, forKey: "cmeWebURL")
+        d.set(appToken, forKey: "appToken")
+        d.set(voicemailNumber, forKey: "voicemailNumber")
+        d.set(provisioningStatus, forKey: "provisioningStatus")
         d.set(extensionNumber, forKey: "extensionNumber")
         d.set(displayName, forKey: "displayName")
         d.set(cmeHost, forKey: "cmeHost")
@@ -192,7 +316,18 @@ final class PhoneSettings: ObservableObject {
         d.set(keyHangup, forKey: "keyHangup")
         d.set(keyHold, forKey: "keyHold")
         d.set(keyDecline, forKey: "keyDecline")
+        d.set(keyVoicemail, forKey: "keyVoicemail")
         d.set(statusEvent.rawValue, forKey: "statusEvent")
         d.set(deskPhoneNotify, forKey: "deskPhoneNotify")
+        d.set(callbackPrefixZero, forKey: "callbackPrefixZero")
+        d.set(localRecording, forKey: "localRecording")
+        d.set(dialpadOutlined, forKey: "dialpadOutlined")
+        #if os(iOS)
+        // Codec-Schalter der Einstellungen-App mitführen
+        for c in audioCodecs { if let k = Self.codecSwitches[c.mime] { d.set(c.enabled, forKey: k) } }
+        // Für die Local-Push-Extension (nur Diagnose) auch in die App-Group spiegeln
+        let g = UserDefaults(suiteName: SharedConfig.appGroup)
+        g?.set(relayHost, forKey: "relayHost"); g?.set(relayPort, forKey: "relayPort")
+        #endif
     }
 }

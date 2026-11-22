@@ -78,7 +78,6 @@ final class DeskPhoneController: ObservableObject {
     private let settings = PhoneSettings.shared
     private var event: Event?
     private var delegate: CoreDelegate?
-    private var lastNotifiedDialog: String?
 
     private init() {
         backend = CiscoXMLBackend()
@@ -161,16 +160,8 @@ final class DeskPhoneController: ObservableObject {
 
     private func handle(_ new: LineStatus) {
         let old = status
-        status = new
+        status = new          // Call-Toast (ToastController) beobachtet den Status
         SIPManager.shared.log("Tischtelefon \(settings.deskPhoneExtension): \(new.state.label) \(new.remoteNumber ?? "")")
-        // Mitteilung nur beim Übergang nach "klingelt", einmal pro Dialog
-        if new.state == .ringing, old.state != .ringing, settings.deskPhoneNotify,
-           new.dialogId == nil || new.dialogId != lastNotifiedDialog {
-            lastNotifiedDialog = new.dialogId
-            CallCenter.shared.notifyDeskPhoneRinging(number: new.remoteNumber, name: new.remoteName)
-        }
-        if new.state != .ringing {
-            CallCenter.shared.clearDeskPhoneNotification()
-        }
+        CallHistory.shared.deskPhone(old: old, new: new)
     }
 }

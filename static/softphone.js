@@ -1,4 +1,4 @@
-// Telefontyp "CME Softphone" (CME Phone, https://gitea.wiederhol.de/thomas/cme-softphone) im Formular
+// Telefontyp "CME Softphone" (CME Phone, Ordner softphone/) im Formular
 // "Telefon anlegen". CME nimmt im CME-Modus nur MAC-Adressen oder - fuer Softclients - einen Geraetenamen an;
 // das Softphone meldet sich deshalb wie Jabber mit Geraetenamen (CMEP...) an.
 // Haengt sich in index.html ein (TYPE_LABEL, updateTypeHint, META).
@@ -17,8 +17,8 @@
   hint.innerHTML = `<b>CME Phone</b> (eigenes Softphone für iPhone, iPad und Mac) meldet sich wie Jabber mit einem
     <b>Gerätenamen</b> an – CME nimmt im CME-Modus nur MAC-Adressen oder Gerätenamen an. Der Name ist <span class="mono">CMEP</span> + Nebenstelle
     (z. B. <span class="mono">CMEP21</span>) – genau so schickt ihn die App bei der Anmeldung mit. Am Router wird der Pool als <span class="mono">type Jabber-CSF-Client</span> mit
-    <span class="mono">id device-id-name</span> angelegt. In der App außerdem: <b>Nebenstelle</b> = Rufnummer der ersten
-    Leitung, <b>CME-Adresse</b> = IP des Routers, Push-Gateway <span class="mono">sip-gw.wiederhol.de:5062</span> (TCP).`;
+    <span class="mono">id device-id-name</span> angelegt. In der App nur <b>Nebenstelle</b> (Rufnummer der ersten
+    Leitung), <b>cme-web-Adresse</b> und <b>App-Schlüssel</b> eintragen – alles Weitere holt sie sich aus dem Tab <b>Softphone</b>.`;
   document.getElementById("jabber-hint").after(hint);
   const devInput = f.device_id;
   const devLabel = document.querySelector("#wrap-device label");

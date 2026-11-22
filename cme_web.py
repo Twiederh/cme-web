@@ -48,7 +48,7 @@ PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "8945
                "Jabber-CSF-Client", "Jabber-iPhone", "Jabber-Android", "CME-Softphone"]
 # Softclients werden in CME ueber einen Geraetenamen (id device-id-name) erkannt, nicht ueber die MAC
 SOFT_CLIENT_PREFIX = "Jabber-"
-# CME Phone (eigenes Softphone, https://gitea.wiederhol.de/thomas/cme-softphone): CME nimmt im CME-Modus nur
+# CME Phone (eigenes Softphone, Ordner softphone/ in diesem Repo): CME nimmt im CME-Modus nur
 # MAC-Adressen oder - fuer Softclients - einen Geraetenamen an. Das Softphone meldet sich deshalb wie Jabber an:
 # Pool mit "id device-id-name CMEP..." und "type Jabber-CSF-Client"; die App schickt den Namen im Contact-Header
 # (+u.sip!devicename.ccm.cisco.com="CMEP..."). Am Praefix CMEP erkennt cme-web das Softphone wieder.

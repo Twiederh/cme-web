@@ -5,6 +5,19 @@ und legt Rufnummern (`voice register dn`) und Telefone (`voice register pool`) a
 bearbeitet oder löscht sie – einschließlich Shared Lines.
 Der Container verbindet sich per SSH (netmiko) mit dem Router.
 
+Zum Stack gehören außerdem Voicemail (Asterisk), Gesprächsaufzeichnung (cme-recorder) und
+**CME Phone** – das eigene Softphone für iPhone, iPad und Mac (Ordner [`softphone/`](softphone/README.md))
+mit Push-Gateway (Flexisip) und push-relay. Eingerichtet wird es im Tab **Softphone**.
+
+| Container | Netz | Ports auf dem Docker-Host |
+|---|---|---|
+| cme-web | Bridge / Traefik | 8080 (ohne Traefik), 8081 Telefondienste |
+| cme-voicemail (Asterisk) | Bridge | UDP 5060, UDP 10000–10049 |
+| cme-recorder | Bridge | UDP/TCP 5070, UDP 10100–10139 |
+| cme-whisper | Bridge | – |
+| cme-flexisip | Host | TCP/UDP `SIP_GW_PORT` (5062) |
+| cme-push-relay | Host | TCP `RELAY_LOCALPUSH_PORT` (5072), 127.0.0.1:8092 |
+
 ## Installation mit Portainer
 
 1. **Stacks → Add stack**, Name z. B. `cme-web`
@@ -26,8 +39,13 @@ Der Container verbindet sich per SSH (netmiko) mit dem Router.
 | `CME_WEB_PASS` | | Passwort für die Weboberfläche |
 | `CME_WEB_PORT` | `8080` | Port auf dem Docker-Host |
 | `CME_DEMO` | `false` | `true` = Beispieldaten statt Router |
+| `VM_HOST_IP` | `192.168.1.110` | LAN-IP des Docker-Hosts (Voicemail, Aufzeichnung, Push-Gateway) |
+| `SIP_GW_NAME` | `sip-gw.example.de` | DNS-Name des Push-Gateways für die Apps (optional) |
+| `APNS_TEAM_ID` | `ABCDE12345` | Apple-Team-ID (Vorbelegung im Tab Softphone, optional) |
 
-4. **Deploy the stack**. Portainer baut das Image aus dem Dockerfile.
+4. **Deploy the stack**. Portainer baut die Images aus den Dockerfiles. Flexisip wird aus den Quellen
+   gebaut (20–40 Minuten); schneller und ohne Timeout der Weboberfläche vorher per SSH:
+   `docker build -t flexisip:local ./flexisip` im ausgecheckten Repo.
 5. Öffnen: `http://<docker-host>:8080`
 
 Updates: Im Stack **Pull and redeploy** (mit „Re-pull image and redeploy“) klicken,
@@ -401,6 +419,17 @@ Der Tab „Telefonbuch“ verwaltet Rufnummern mit Namen:
   Rufnummern mit Suche (`directoryURL` → `http://<docker-host>:8081/ipphone/dir`).
 - **Kurzwahltasten:** je Telefon `speed-dial <n> <nummer> label "<name>"` im Pool, danach
   `create profile` und Neustart.
+
+### CME Phone (Softphone)
+
+Eigene App für iPhone/iPad (nur über die Telefon-App und CallKit, Einstellungen in der
+Einstellungen-App) und Mac (Menüleiste, Call-Toast, wahlweise Softphone oder Steuerung eines
+Cisco-Tischtelefons). Im Tab **Softphone**: APNs-Schlüssel hochladen, Local Push, App-Schlüssel,
+Status. Am Router wird jede App als Telefon vom Typ **CME Phone** angelegt
+(`id device-id-name CMEP<Nebenstelle>`, `type Jabber-CSF-Client`).
+Die Apps holen sich ihre Einstellungen über `/client/v1/…` (Anmeldung mit dem App-Schlüssel)
+und schalten darüber auch die Gesprächsaufzeichnung ein und aus.
+Anleitung: [softphone/README.md](softphone/README.md).
 
 ## Abfragen für den Status
 

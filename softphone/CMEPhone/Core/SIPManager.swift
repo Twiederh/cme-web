@@ -40,6 +40,8 @@ final class SIPManager: ObservableObject {
         var audioCodec: String
         var videoCodec: String
         var duration: Int
+        /// Lokale Aufnahme läuft (nur Softphone, interne Gespräche)
+        var isRecording: Bool
     }
 
     @Published private(set) var registration: RegistrationStatus = .none
@@ -155,6 +157,10 @@ final class SIPManager: ObservableObject {
             params.outboundProxyEnabled = settings.useGateway
             params.registerEnabled = true
             params.expires = 600
+            // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
+            // cme-web legt die App als Pool "id device-id-name CMEP<Nebenstelle>" an; den Namen schickt die App
+            // wie Jabber im Contact mit.
+            params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
 
             #if os(iOS)
             // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.
@@ -254,6 +260,7 @@ final class SIPManager: ObservableObject {
             let params = try core.createCallParams(call: nil)
             params.videoEnabled = video && settings.videoEnabled
             params.mediaEncryption = settings.mediaEncryption == .srtp ? .SRTP : .None
+            params.recordFile = Self.recordingPath(remote: number)
             #if os(iOS)
             core.configureAudioSession()
             #endif
@@ -273,6 +280,7 @@ final class SIPManager: ObservableObject {
         do {
             let params = try core.createCallParams(call: call)
             params.videoEnabled = settings.videoEnabled && (call.remoteParams?.videoEnabled ?? false)
+            params.recordFile = Self.recordingPath(remote: call.remoteAddress?.username ?? "unbekannt")
             #if os(iOS)
             core.configureAudioSession()
             #endif
@@ -283,6 +291,48 @@ final class SIPManager: ObservableObject {
     func terminate(callId: String) {
         guard let call = call(withId: callId) else { return }
         try? call.terminate()
+    }
+
+    /// Eingehenden Anruf abweisen.
+    /// toVoicemail: 486 Busy – CME leitet dann per "call-forward b2bua busy" (setzt cme-web für Nummern mit
+    /// Postfach) an die Voicemail. Sonst 603 Decline.
+    func decline(callId: String, toVoicemail: Bool) {
+        guard let call = call(withId: callId) else { return }
+        do { try call.decline(reason: toVoicemail ? .Busy : .Declined) } catch {
+            log("Abweisen: \(error)")
+            try? call.terminate()
+        }
+    }
+
+    // MARK: - Lokale Aufnahme (interne Gespräche; externe nimmt cme-recorder auf)
+
+    /// Ordner für lokale Aufnahmen: macOS ~/Music/CME Phone, iOS Dokumente/Aufnahmen
+    static var recordingsFolder: URL {
+        #if os(macOS)
+        let base = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("CME Phone", isDirectory: true)
+        #else
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Aufnahmen", isDirectory: true)
+        #endif
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func recordingPath(remote: String) -> String {
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        let who = remote.filter { $0.isNumber || $0 == "+" }
+        return recordingsFolder.appendingPathComponent("\(df.string(from: Date())) \(who.isEmpty ? "Anruf" : who).wav").path
+    }
+
+    private var recordingCalls = Set<String>()
+
+    func setLocalRecording(callId: String, on: Bool) {
+        guard let call = call(withId: callId) else { return }
+        if on { call.startRecording(); recordingCalls.insert(callId) } else { call.stopRecording(); recordingCalls.remove(callId) }
+        log("Lokale Aufnahme \(on ? "an" : "aus"): \(call.params?.recordFile ?? "")")
+        refreshCalls()
     }
 
     func setHeld(callId: String, held: Bool) {
@@ -429,8 +479,10 @@ final class SIPManager: ObservableObject {
                 isPaused: c.state == .Paused || c.state == .Pausing,
                 audioCodec: params?.usedAudioPayloadType.map { "\($0.mimeType) \($0.clockRate / 1000) kHz" } ?? "–",
                 videoCodec: params?.usedVideoPayloadType?.mimeType ?? "–",
-                duration: c.duration)
+                duration: c.duration,
+                isRecording: recordingCalls.contains(id))
         }
+        recordingCalls.formIntersection(Set(calls.map(\.id)))
         if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
     }
 

@@ -43,7 +43,14 @@ targets:
         NSMicrophoneUsageDescription: Für Telefonate über die Cisco-Telefonanlage.
         NSCameraUsageDescription: Für Videoanrufe.
         NSLocalNetworkUsageDescription: Verbindung zur Telefonanlage und zum Push-Dienst im Heimnetz.
+        NSSiriUsageDescription: Anrufe über CME Phone mit Siri starten.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        # Anrufen aus "Zuletzt", Kontakte und Siri
+        NSUserActivityTypes: [INStartCallIntent, INStartAudioCallIntent, INStartVideoCallIntent]
+        # tel:-Links, wenn CME Phone als Standard-App für Anrufe gewählt ist (iOS 18.2+)
+        CFBundleURLTypes:
+          - CFBundleURLName: de.wiederhol.cmephone.call
+            CFBundleURLSchemes: [tel, cmephone]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     entitlements:
       path: CMEPhone/Resources/CMEPhone.entitlements
@@ -51,6 +58,8 @@ targets:
         aps-environment: development
         com.apple.security.application-groups: [group.de.wiederhol.cmephone]
         com.apple.developer.networking.networkextension: [app-push-provider]
+        # Auswählbar unter Einstellungen → Apps → Standard-Apps → Anrufe (iOS 18.2+)
+        com.apple.developer.calling-app: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.wiederhol.cmephone

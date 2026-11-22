@@ -2,6 +2,9 @@ import SwiftUI
 import AppKit
 import Combine
 
+/// Menüleisten-App (kein Dock-Symbol, kein Hauptfenster):
+///   Softphone / Telefonsteuerung · Anrufliste · Wähltastatur · Einstellungen
+/// Anrufe erscheinen als Call-Toast unten rechts.
 @main
 struct CMEPhoneMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
@@ -10,34 +13,16 @@ struct CMEPhoneMacApp: App {
     @ObservedObject private var desk = DeskPhoneController.shared
 
     var body: some Scene {
-        WindowGroup("CME Phone", id: "main") {
-            MacMainView()
-                .environmentObject(SIPManager.shared)
-                .environmentObject(PhoneSettings.shared)
-                .environmentObject(DeskPhoneController.shared)
-                .environmentObject(CallCenter.shared)
-                .frame(minWidth: 640, minHeight: 460)
-                .onOpenURL { URLRouter.handle($0) }
-        }
-        .handlesExternalEvents(matching: ["*"])
-        .commands {
-            CommandGroup(after: .newItem) {
-                Button("Tischtelefon: Annehmen") { DeskPhoneController.shared.answer() }
-                    .keyboardShortcut("a", modifiers: [.command, .shift])
-                Button("Tischtelefon: Auflegen") { DeskPhoneController.shared.hangup() }
-                    .keyboardShortcut("e", modifiers: [.command, .shift])
-            }
-        }
-
         MenuBarExtra {
-            MenuBarView()
+            MenuBarContent()
                 .environmentObject(SIPManager.shared)
                 .environmentObject(PhoneSettings.shared)
                 .environmentObject(DeskPhoneController.shared)
+                .environmentObject(CallHistory.shared)
         } label: {
             Image(systemName: menuIcon)
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
         Settings {
             MacSettingsView()
@@ -56,12 +41,12 @@ struct CMEPhoneMacApp: App {
             default: break
             }
         }
-        if case .ok = sip.registration { return "phone.fill" }
+        if case .ok = sip.registration { return settings.macMode == .deskPhone ? "phone.arrow.up.right.fill" : "phone.fill" }
         return "phone.badge.exclamationmark"
     }
 }
 
-/// tel:/sip:/callto:-Links (z.B. aus Kontakte, Safari, Mail) und cmephone://-Aufrufe.
+/// tel:/sip:/callto:-Links (z.B. aus Kontakte, Safari, Mail) und cmephone://dial/<nummer>.
 enum URLRouter {
     @MainActor
     static func handle(_ url: URL) {
@@ -77,19 +62,21 @@ enum URLRouter {
             guard !number.isEmpty else { return }
             dial(number)
         case "cmephone":
-            // cmephone://call  -> nur Fenster nach vorne (wird von CallCenter genutzt)
-            // cmephone://dial/0711123
-            if url.host == "dial" { dial(url.lastPathComponent) }
+            if url.host == "dial" { DialpadPanel.shared.show(number: url.lastPathComponent) }
         default: break
         }
-        NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Wählt je nach Modus über den Mac oder am Tischtelefon.
     @MainActor
-    static func dial(_ number: String, video: Bool = false) {
+    static func dial(_ number: String) {
         switch PhoneSettings.shared.macMode {
-        case .softphone: CallCenter.shared.startOutgoing(number: number, video: video)
-        case .deskPhone: DeskPhoneController.shared.dial(number)
+        case .softphone:
+            CallCenter.shared.startOutgoing(number: number, video: false)
+        case .deskPhone:
+            DeskPhoneController.shared.dial(number)
+            // Der Tischtelefon-Status meldet den Anruf nicht immer mit Nummer: hier merken
+            CallHistory.shared.noteDeskDial(number)
         }
     }
 }
@@ -99,33 +86,41 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
-            CallCenter.shared.setup()
+            let settings = PhoneSettings.shared
+            // Video gibt es in der Menüleisten-App nicht (kein Videofenster)
+            settings.videoEnabled = false
+            SIPManager.shared.addCallStateHandler { call, state in
+                MainActor.assumeIsolated { CallHistory.shared.softphone(call: call, state: state) }
+            }
             SIPManager.shared.start()
+            ToastController.shared.setup()
+            Provisioning.refresh()
 
-            // Statusabo für das Tischtelefon starten, sobald der Mac angemeldet ist.
-            SIPManager.shared.$registration
-                .removeDuplicates()
-                .sink { state in
+            // Statusabo für das Tischtelefon, sobald der Mac angemeldet ist und der Modus passt
+            Publishers.CombineLatest(SIPManager.shared.$registration.removeDuplicates(), settings.$macMode.removeDuplicates())
+                .receive(on: RunLoop.main)
+                .sink { reg, mode in
                     MainActor.assumeIsolated {
-                        if case .ok = state, PhoneSettings.shared.macMode == .deskPhone {
+                        if case .ok = reg, mode == .deskPhone {
                             DeskPhoneController.shared.startMonitoring()
+                        } else if mode == .softphone {
+                            DeskPhoneController.shared.stopMonitoring()
                         }
                     }
                 }
                 .store(in: &cancellables)
 
-            // Anruffenster nach vorne holen (öffnet notfalls ein neues Hauptfenster).
-            CallCenter.shared.$showCallWindow
-                .removeDuplicates()
-                .filter { $0 }
-                .sink { _ in
-                    if let url = URL(string: "cmephone://call") { NSWorkspace.shared.open(url) }
-                }
-                .store(in: &cancellables)
+            // Einstellungen aus cme-web regelmäßig auffrischen (z.B. neues Local-Push-Secret, Voicemail-Nummer)
+            Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+                Task { @MainActor in Provisioning.refresh() }
+            }
         }
     }
 
-    /// App läuft in der Menüleiste weiter, auch wenn das Fenster zu ist.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated { urls.forEach(URLRouter.handle) }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
