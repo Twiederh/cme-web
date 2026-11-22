@@ -263,7 +263,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         tok = settings().get("token", "")
         got = request.headers.get("Authorization", "")
         got = got[7:].strip() if got.lower().startswith("bearer ") else ""
-        if not tok or not got or not secrets.compare_digest(got, tok):
+        if not tok or not got or not secrets.compare_digest(got.encode(), tok.encode()):
             raise PermissionError
 
     def ext_arg(d: dict | None = None) -> str:
