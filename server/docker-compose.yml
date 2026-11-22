@@ -3,7 +3,8 @@
 # Portainer: Stacks → Add stack → Repository
 #   URL:          https://gitea.wiederhol.de/thomas/cme-softphone
 #   Compose path: server/docker-compose.yml
-#   Env:          RELAY_LOCALPUSH_SECRET, APNS_KEY_ID, APNS_TEAM_ID, (APNS_ENV, FLEXISIP_IMAGE)
+#   Env:          RELAY_LOCALPUSH_SECRET, APNS_KEY_ID, APNS_TEAM_ID, (APNS_ENV)
+#   "Enable relative path volumes": AUS (alle Pfade sind absolut)
 #
 # Traefik bewusst NICHT davor: SIP (UDP/TCP) und der Local-Push-Kanal sind keine HTTP-Dienste.
 # Ein Proxy davor würde die Absender-IPs verstecken (NAT-/Contact-Behandlung in Flexisip bricht)
@@ -14,12 +15,20 @@
 #  - der Relay muss für Flexisip unter 127.0.0.1:8090 erreichbar sein und
 #    für die iPhones/iPads unter <docker01>:5070 (Local Push)
 #
-# Flexisip-Image: offizielles Dockerfile aus dem Flexisip-Repo bauen
-# (siehe README, Abschnitt "Flexisip-Image bauen") und als flexisip:local taggen.
+# Flexisip-Image: wird beim ersten Deploy aus server/flexisip/Dockerfile gebaut (20–40 Min.).
+# Empfohlen (kein Portainer-Timeout): vorher einmal per SSH auf docker01 bauen:
+#   git clone https://gitea.wiederhol.de/thomas/cme-softphone.git /tmp/cme-softphone
+#   docker build -t flexisip:local /tmp/cme-softphone/server/flexisip
+# Ist das Image vorhanden, nutzt der Stack es direkt.
 
 services:
   flexisip:
-    image: ${FLEXISIP_IMAGE:-flexisip:local}
+    build:
+      context: ./flexisip
+      args:
+        FLEXISIP_VERSION: "2.6.2"
+        NJOBS: "4"
+    image: flexisip:local
     container_name: flexisip
     network_mode: host
     restart: unless-stopped

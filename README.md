@@ -94,15 +94,18 @@ Auf einem echten Gerät bauen, denn im Simulator gibt es weder PushKit noch Loca
 
 ### 3. Flexisip-Image bauen (einmalig, auf docker01)
 
-Belledonne bietet kein offizielles Image auf Docker Hub an, das Dockerfile liegt aber im Repo:
+Belledonne bietet kein aktuelles fertiges Image an. Die Dockerfiles im Flexisip-Repo basieren noch
+auf CentOS 7 bzw. Debian 9/10. Deshalb liegt ein eigenes Dockerfile in `server/flexisip/Dockerfile`.
+Es baut Flexisip 2.6.2 auf Debian 13, nur mit dem Proxy-Teil. Per SSH auf docker01:
 
 ```bash
-git clone --recursive https://gitlab.linphone.org/BC/public/flexisip.git
-cd flexisip
-docker build -t flexisip:local --build-arg njobs=8 -f docker/flex-from-src .
+git clone https://gitea.wiederhol.de/thomas/cme-softphone.git /tmp/cme-softphone
+docker build -t flexisip:local /tmp/cme-softphone/server/flexisip     # 20–40 Minuten
+docker run --rm flexisip:local flexisip --version                    # Test
 ```
 
-Alternativ ein Community-Image nutzen (`FLEXISIP_IMAGE=etnperlong/flexisip:latest` in `.env`, Pfade prüfen).
+Ohne diesen Schritt baut Portainer das Image beim ersten Deploy selbst. Das kann aber in einen
+Timeout der Weboberfläche laufen.
 
 ### 4. Stack auf docker01
 
@@ -117,7 +120,8 @@ sudo cp AuthKey_XXXX.p8 /opt/containers/cme-softphone/apns/AuthKey.p8
 Danach in Portainer: **Stacks → Add stack → Repository**
 * Repository-URL `https://gitea.wiederhol.de/thomas/cme-softphone` (mit Gitea-Zugangsdaten, das Repo ist privat)
 * Compose path `server/docker-compose.yml`
-* Umgebungsvariablen: `RELAY_LOCALPUSH_SECRET`, `APNS_KEY_ID`, `APNS_TEAM_ID`, optional `APNS_ENV`, `FLEXISIP_IMAGE`
+* Umgebungsvariablen: `RELAY_LOCALPUSH_SECRET`, `APNS_KEY_ID`, `APNS_TEAM_ID`, optional `APNS_ENV`
+* „Enable relative path volumes“ **aus** lassen, alle Pfade sind absolut
 
 Portainer baut den push-relay dabei aus `server/push-relay/` selbst. Das Flexisip-Image muss vorher
 wie in Schritt 3 auf docker01 gebaut sein.
