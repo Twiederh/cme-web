@@ -16,7 +16,7 @@ final class PushProvider: NEAppPushProvider {
     private var pingTimer: DispatchSourceTimer?
 
     private var host: String { providerConfiguration?[SharedConfig.ProviderKey.relayHost] as? String ?? "" }
-    private var port: Int { providerConfiguration?[SharedConfig.ProviderKey.relayPort] as? Int ?? 5070 }
+    private var port: Int { providerConfiguration?[SharedConfig.ProviderKey.relayPort] as? Int ?? 5072 }
     private var secret: String { providerConfiguration?[SharedConfig.ProviderKey.relaySecret] as? String ?? "" }
     private var token: String { providerConfiguration?[SharedConfig.ProviderKey.deviceToken] as? String ?? "" }
 

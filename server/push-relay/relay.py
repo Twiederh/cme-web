@@ -11,10 +11,10 @@ die `external-push-uri` auf (statt selbst mit APNs zu sprechen). Der Relay entsc
 
 Endpunkte
 ---------
-  HTTP  :8090  GET/POST /push   (von Flexisip, nur an 127.0.0.1 binden)
+  HTTP  :8092  GET/POST /push   (von Flexisip, nur an 127.0.0.1 binden)
                GET      /health
                GET      /devices (Diagnose: verbundene Local-Push-Geräte)
-  TCP   :5070  Local-Push-Kanal (zeilenbasiertes JSON, siehe Shared/SharedConfig.swift)
+  TCP   :5072  Local-Push-Kanal (zeilenbasiertes JSON, siehe Shared/SharedConfig.swift)
   HTTP  :8091  Verwaltung (Basic-Auth, nur wenn RELAY_ADMIN_PASSWORD gesetzt):
                APNs-Schlüssel (.p8) hochladen, Key-ID/Team-ID/Umgebung setzen, Status
 
@@ -51,9 +51,9 @@ log = logging.getLogger("relay")
 @dataclass
 class Config:
     http_host: str = os.getenv("RELAY_HTTP_HOST", "127.0.0.1")
-    http_port: int = int(os.getenv("RELAY_HTTP_PORT", "8090"))
+    http_port: int = int(os.getenv("RELAY_HTTP_PORT", "8092"))
     lp_host: str = os.getenv("RELAY_LOCALPUSH_HOST", "0.0.0.0")
-    lp_port: int = int(os.getenv("RELAY_LOCALPUSH_PORT", "5070"))
+    lp_port: int = int(os.getenv("RELAY_LOCALPUSH_PORT", "5072"))
     lp_secret: str = os.getenv("RELAY_LOCALPUSH_SECRET", "")
     apns_key_path: str = os.getenv("APNS_KEY_PATH", "/run/secrets/apns.p8")
     apns_key_id: str = os.getenv("APNS_KEY_ID", "")

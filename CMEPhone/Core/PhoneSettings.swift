@@ -125,12 +125,12 @@ final class PhoneSettings: ObservableObject {
         password = d.string(forKey: "password") ?? ""
         useGateway = d.object(forKey: "useGateway") as? Bool ?? true
         gatewayHost = d.string(forKey: "gatewayHost") ?? "sip-gw.wiederhol.de"
-        gatewayPort = d.object(forKey: "gatewayPort") as? Int ?? 5060
+        gatewayPort = d.object(forKey: "gatewayPort") as? Int ?? 5062
         transport = SIPTransport(rawValue: d.string(forKey: "transport") ?? "") ?? .tcp
         localPushEnabled = d.object(forKey: "localPushEnabled") as? Bool ?? true
         localPushSSIDs = d.string(forKey: "localPushSSIDs") ?? ""
         relayHost = d.string(forKey: "relayHost") ?? "sip-gw.wiederhol.de"
-        relayPort = d.object(forKey: "relayPort") as? Int ?? 5070
+        relayPort = d.object(forKey: "relayPort") as? Int ?? 5072
         relaySecret = d.string(forKey: "relaySecret") ?? ""
         audioCodecs = Self.decode(d.data(forKey: "audioCodecs")) ?? Self.defaultAudio
         videoCodecs = Self.decode(d.data(forKey: "videoCodecs")) ?? Self.defaultVideo

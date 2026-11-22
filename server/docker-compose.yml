@@ -4,8 +4,10 @@
 #   URL:          https://gitea.wiederhol.de/thomas/cme-softphone
 #   Compose path: server/docker-compose.yml
 #   Env:          RELAY_LOCALPUSH_SECRET, RELAY_ADMIN_PASSWORD
-#   Optional:     RELAY_LOCALPUSH_PORT (5070), RELAY_ADMIN_PORT (8091), RELAY_HTTP_PORT (8090),
-#                 falls auf docker01 schon belegt (Host-Netz!). Prüfen: ss -tulpn | grep -E ':(5070|8090|8091)\b'
+#   Ports (Host-Netz, auf docker01 sind 5060/5070/8090 schon belegt):
+#                 Flexisip SIP 5062 (in flexisip.conf), Local Push 5072, Push-Schnittstelle 8092 (nur lokal),
+#                 Verwaltung 8091. Ändern über RELAY_LOCALPUSH_PORT, RELAY_HTTP_PORT, RELAY_ADMIN_PORT.
+#                 Prüfen: ss -tulpn | grep -E ':(5062|5072|8091|8092)\b'
 #                 Bei geändertem RELAY_HTTP_PORT auch external-push-uri in flexisip.conf anpassen,
 #                 bei geändertem RELAY_LOCALPUSH_PORT den Relay-Port in der App.
 #   APNs-Schlüssel: im Browser hochladen unter http://<docker01>:8091/ (Benutzer "admin")
@@ -17,8 +19,8 @@
 #
 # Beide Container laufen im Host-Netz:
 #  - Flexisip braucht SIP auf der LAN-IP und muss CME (192.168.11.4) direkt erreichen
-#  - der Relay muss für Flexisip unter 127.0.0.1:8090 erreichbar sein,
-#    für die iPhones/iPads unter <docker01>:5070 (Local Push)
+#  - der Relay muss für Flexisip unter 127.0.0.1:8092 erreichbar sein,
+#    für die iPhones/iPads unter <docker01>:5072 (Local Push)
 #    und für dich unter <docker01>:8091 (Verwaltung, APNs-Schlüssel hochladen)
 #
 # Flexisip-Image: wird beim ersten Deploy aus server/flexisip/Dockerfile gebaut (20–40 Min.).
@@ -52,9 +54,9 @@ services:
     restart: unless-stopped
     environment:
       RELAY_HTTP_HOST: 127.0.0.1
-      RELAY_HTTP_PORT: ${RELAY_HTTP_PORT:-8090}
+      RELAY_HTTP_PORT: ${RELAY_HTTP_PORT:-8092}
       RELAY_LOCALPUSH_HOST: 0.0.0.0
-      RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5070}
+      RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5072}
       RELAY_LOCALPUSH_SECRET: ${RELAY_LOCALPUSH_SECRET:?Secret setzen (openssl rand -hex 24)}
       # Verwaltung (APNs-Schlüssel hochladen): http://<docker01>:8091/, Benutzer "admin"
       RELAY_ADMIN_PORT: ${RELAY_ADMIN_PORT:-8091}

@@ -7,5 +7,5 @@ COPY relay.py .
 RUN mkdir -p /data && chown nobody:nogroup /data
 VOLUME /data
 USER nobody
-EXPOSE 8090 5070 8091
+EXPOSE 8092 5072 8091
 CMD ["python", "-u", "relay.py"]

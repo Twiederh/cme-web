@@ -18,10 +18,10 @@ Die **macOS-Version** telefoniert wahlweise selbst oder steuert ein Cisco-SIP-Ti
 ## Architektur
 
 ```
-                         Heim-WLAN: Local Push (TCP 5070, ohne Internet)
+                         Heim-WLAN: Local Push (TCP 5072, ohne Internet)
                  ┌─────────────────────────────────────────────────────┐
                  │                                                     ▼
-┌──────────────┐ │  SIP (TCP 5060)   ┌──────────────┐   SIP    ┌──────────────────┐
+┌──────────────┐ │  SIP (TCP 5062)   ┌──────────────┐   SIP    ┌──────────────────┐
 │ iPhone/iPad  │─┴──────────────────▶│  Flexisip     │────────▶│ CME 192.168.11.4  │──▶ Giganetz / sipgate
 │ CME Phone    │◀────────────────────│  Push-Gateway │◀────────│ (vcube)           │──▶ 88xx, Gigaset, ATA
 │ +LocalPush-  │                     │  (docker01)   │         └──────────────────┘
@@ -118,6 +118,11 @@ sudo sed -i "s/DOCKER01_IP/$(hostname -I | cut -d" " -f1)/g; s/SIP_GW_NAME/sip-g
      /opt/containers/cme-softphone/flexisip/flexisip.conf
 ```
 
+**Ports:** Auf docker01 sind 5060, 5070 und 8090 schon von anderen Containern belegt. Der Stack nutzt
+deshalb **5062** (SIP/Flexisip), **5072** (Local Push), **8092** (nur lokal, Flexisip → Relay) und
+**8091** (Verwaltung). Vorher prüfen: `sudo ss -tulpn | grep -E ':(5062|5072|8091|8092)\b'` darf
+nichts ausgeben.
+
 Danach in Portainer: **Stacks → Add stack → Repository**
 * Repository-URL `https://gitea.wiederhol.de/thomas/cme-softphone` (mit Gitea-Zugangsdaten, das Repo ist privat)
 * Compose path `server/docker-compose.yml`
@@ -141,9 +146,9 @@ RTP läuft ohnehin direkt zwischen Gerät und CME. Für die SIP-Verbindung brauc
 DNS-Eintrag und die Firewall-Regeln:
 
 * DNS `sip-gw.wiederhol.de` → LAN-IP von docker01 (lokaler DNS in der UDM, kein Traefik-Router).
-* Firewall: aus WLAN/VPN zu docker01 **TCP/UDP 5060** und **TCP 5070** erlauben, **TCP 8091**
-  (Verwaltung) nur aus dem Admin-Netz. Port 8090 bleibt lokal (127.0.0.1).
-* Test: `curl http://127.0.0.1:8090/health` auf docker01.
+* Firewall: aus WLAN/VPN zu docker01 **TCP/UDP 5062** und **TCP 5072** erlauben, **TCP 8091**
+  (Verwaltung) nur aus dem Admin-Netz. Port 8092 bleibt lokal (127.0.0.1).
+* Test: `curl http://127.0.0.1:8092/health` auf docker01.
 
 ### 5. CME konfigurieren
 
@@ -156,8 +161,8 @@ anderen Geräten. Optional kannst du die Pools auch in **cme-web** anlegen.
 Einstellungen in der App:
 
 * Nebenstelle `21`, CME-Adresse `192.168.11.4`
-* Push-Gateway an, Host `sip-gw.wiederhol.de`, Port 5060, TCP
-* Local Push an, SSIDs deines WLANs, Relay `sip-gw.wiederhol.de:5070`, Secret wie im Stack
+* Push-Gateway an, Host `sip-gw.wiederhol.de`, Port 5062, TCP
+* Local Push an, SSIDs deines WLANs, Relay `sip-gw.wiederhol.de:5072`, Secret wie im Stack
 * **Übernehmen und neu anmelden**, danach muss der Status „Angemeldet“ zeigen.
 
 ---
@@ -240,7 +245,7 @@ CME liefert je nach Konfiguration nur eines davon.
 | 1 | App offen, Status | „Angemeldet“; `show voice register pool 21` zeigt Registrierung | Flexisip-Log: kommt das REGISTER an? `id network` = Flexisip-IP? |
 | 2 | 21 → 10 (Tischtelefon) | Verbindung, Codec G.722 | Protokoll-Tab ansehen, `debug ccsip messages` |
 | 3 | 10 → 21, App im Vordergrund | Klingelt per CallKit | CME muss die `CtRt…;doroute`-Parameter im Contact behalten, prüfen mit `debug ccsip messages` |
-| 4 | 10 → 21, App beendet, im WLAN | Klingelt über Local Push | `curl :8090/devices` zeigt Gerät? Relay-Log |
+| 4 | 10 → 21, App beendet, im WLAN | Klingelt über Local Push | `curl :8092/devices` zeigt Gerät? Relay-Log |
 | 5 | wie 4, mobil + VPN | Klingelt über APNs | Verwaltung `:8091`: „Letzter APNs-Versand“; Umgebung ggf. auf Sandbox stellen |
 | 6 | Video 21 → 8865 | H.264-Video | `voice-class codec 21` mit `video codec h264` am Pool |
 | 7 | iPhone ↔ iPad | Opus + H.265, falls CME durchreicht | Experiment §5 in `softphone.cfg` |
