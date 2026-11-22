@@ -38,8 +38,18 @@ DD="$PWD/build/DerivedData"
 # Standard: ohne Signierung kompilieren (prüft den Code, braucht keinen Apple-Account in Xcode).
 # Signiert bauen (Profile automatisch anlegen):  SIGN=1 zsh build.command
 if [ "${SIGN:-0}" = "1" ]; then
-  SIGNARGS=(-allowProvisioningUpdates)
+  # -allowProvisioningDeviceRegistration: trägt diesen Mac selbst im Developer-Account ein
+  SIGNARGS=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
   say "Signierung: an (Team 83BLV56527)"
+  # Local Push (NetworkExtension app-push-provider) vergibt Apple nur auf Antrag.
+  # Bis dahin ohne dieses Entitlement signieren – im WLAN klingelt das iPhone dann über APNs.
+  # Nach der Freigabe:  SIGN=1 LOCALPUSH=1 zsh build.command
+  if [ "${LOCALPUSH:-0}" != "1" ]; then
+    for f in CMEPhone/Resources/CMEPhone.entitlements LocalPushProvider/LocalPushProvider.entitlements; do
+      /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$f" >/dev/null 2>&1
+    done
+    say "Local Push: aus (Entitlement noch nicht von Apple freigegeben; LOCALPUSH=1 schaltet es ein)"
+  fi
 else
   SIGNARGS=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
   say "Signierung: aus (nur Kompilieren)"
