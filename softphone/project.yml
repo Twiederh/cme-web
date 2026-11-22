@@ -11,6 +11,7 @@ settings:
     SWIFT_VERSION: "5.10"
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"  # iPhone + iPad
+    CURRENT_PROJECT_VERSION: "1"
     # Apple Vision Pro: die iPad-App läuft dort als "Designed for iPad" (kein eigenes visionOS-SDK von Linphone)
     SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: YES
 
@@ -39,8 +40,11 @@ targets:
       properties:
         CFBundleDisplayName: CME Phone
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        # Build-Nummer: für jeden TestFlight-Upload erhöhen (CURRENT_PROJECT_VERSION, z.B. per build.command)
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        # Nur Standard-Verschlüsselung (TLS/SRTP) -> keine Exportdokumente für TestFlight/App Store nötig
+        ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes: [voip, audio, remote-notification]
         NSMicrophoneUsageDescription: Für Telefonate über die Cisco-Telefonanlage.
         NSCameraUsageDescription: Für Videoanrufe.
