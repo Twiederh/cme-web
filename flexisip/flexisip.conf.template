@@ -22,7 +22,8 @@
 ##
 
 [global]
-log-level=message
+# FLEXISIP_LOG_LEVEL im Stack: debug, message, warning, error
+log-level=${LOG_LEVEL}
 # Namen/IPs, unter denen Flexisip SICH SELBST erkennt. NICHT die CME-IP eintragen!
 aliases=${SIP_GW_NAME} ${HOST_IP}
 # Eine Adresse für Clients und CME (alles im LAN/VPN).

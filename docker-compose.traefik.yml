@@ -173,6 +173,7 @@ services:
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_PORT: ${SIP_GW_PORT:-5062}
       RELAY_PORT: ${RELAY_HTTP_PORT:-8092}
+      LOG_LEVEL: ${FLEXISIP_LOG_LEVEL:-message}
       TZ: Europe/Berlin
     volumes:
       - flexisip-conf:/etc/flexisip
