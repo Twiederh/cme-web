@@ -3,15 +3,42 @@ import AppKit
 import linphonesw
 
 struct MacSettingsView: View {
-    var body: some View {
-        TabView {
-            AccountTab().tabItem { Label("Konto", systemImage: "person.crop.circle") }
-            GeneralTab().tabItem { Label("Anrufe", systemImage: "phone.bubble") }
-            MediaTab().tabItem { Label("Audio", systemImage: "waveform") }
-            DeskPhoneTab().tabItem { Label("Tischtelefon", systemImage: "phone") }
-            LogTab().tabItem { Label("Protokoll", systemImage: "text.alignleft") }
+    /// Seiten als Seitenleiste im Fenster (TabView landete in der Titelleiste hinter »)
+    private enum Page: String, CaseIterable, Identifiable {
+        case account = "Konto", calls = "Anrufe", audio = "Audio", desk = "Tischtelefon", log = "Protokoll"
+        var id: String { rawValue }
+        var symbol: String {
+            switch self {
+            case .account: return "person.crop.circle"
+            case .calls: return "phone.bubble"
+            case .audio: return "waveform"
+            case .desk: return "phone"
+            case .log: return "text.alignleft"
+            }
         }
-        .frame(width: 580, height: 560)
+    }
+    @State private var page: Page = .account
+
+    var body: some View {
+        HStack(spacing: 0) {
+            List(Page.allCases, selection: $page) { p in
+                Label(p.rawValue, systemImage: p.symbol).tag(p)
+            }
+            .listStyle(.sidebar)
+            .frame(width: 170)
+            Divider()
+            Group {
+                switch page {
+                case .account: AccountTab()
+                case .calls: GeneralTab()
+                case .audio: MediaTab()
+                case .desk: DeskPhoneTab()
+                case .log: LogTab()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: 740, height: 580)
         // Menüleisten-App: Fenster nach vorne holen
         .onAppear { NSApp.activate(ignoringOtherApps: true) }
     }
