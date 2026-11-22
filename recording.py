@@ -812,7 +812,9 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             return False
         return matches(m, nums)
 
-    app.config["RECORDING"] = {"enabled": lambda: bool(ctx["enabled"]), "list": user_recordings, "may": user_may}
+    app.config["RECORDING"] = {"enabled": lambda: bool(ctx["enabled"]), "list": user_recordings, "may": user_may,
+                               # fuer die Apps (phoneapp.py): laufende Gespraeche, Aufnahme ein/aus, Einstellungen
+                               "active": active_calls, "set": set_control, "settings": settings}
 
     # Asterisk-Datei beim Start neu schreiben (z. B. nach einem Update)
     if ctx["enabled"]:

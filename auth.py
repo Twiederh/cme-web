@@ -37,7 +37,8 @@ from urllib.parse import quote
 from flask import Flask, jsonify, redirect, request, send_from_directory, session
 
 # /ipphone/: XML-Dienste fuer die Telefone; nur ueber den eigenen Telefon-Port erreichbar (vvm.py prueft das)
-OPEN_PATHS = ("/login", "/healthz", "/api/auth/info", "/auth/", "/ipphone/")
+# /client/: Schnittstelle fuer CME Phone (eigene Anmeldung mit App-Schluessel, phoneapp.py)
+OPEN_PATHS = ("/login", "/healthz", "/api/auth/info", "/auth/", "/ipphone/", "/client/")
 
 
 def _split(value: str) -> list[str]:

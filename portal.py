@@ -159,7 +159,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     @app.before_request
     def guard():
         path = request.path
-        if path.startswith(("/ipphone/", "/static/", "/healthz", "/login", "/auth/")):
+        if path.startswith(("/ipphone/", "/static/", "/healthz", "/login", "/auth/", "/client/")):
             return None
         u = me()
         if u is None:

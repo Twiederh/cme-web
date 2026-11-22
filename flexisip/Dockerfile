@@ -60,5 +60,9 @@ ENV PATH=/opt/belledonne-communications/bin:$PATH
 RUN mkdir -p /etc/flexisip /var/opt/belledonne-communications/log/flexisip \
  && flexisip --version
 
+COPY flexisip.conf.template /usr/local/share/flexisip/flexisip.conf.template
+COPY entrypoint.sh /usr/local/bin/flexisip-entrypoint
+RUN chmod 755 /usr/local/bin/flexisip-entrypoint
+# /etc/flexisip: optional eigene flexisip.local.conf (ersetzt die Vorlage)
 VOLUME ["/etc/flexisip", "/var/opt/belledonne-communications/log/flexisip"]
-CMD ["flexisip", "--server", "proxy", "-c", "/etc/flexisip/flexisip.conf"]
+ENTRYPOINT ["/usr/local/bin/flexisip-entrypoint"]

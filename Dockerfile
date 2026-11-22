@@ -12,7 +12,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install -r requirements.txt \
- && useradd --system --uid 10001 --create-home cme
+ && useradd --system --uid 10001 --create-home cme \
+ && mkdir -p /data/push && chown cme /data/push
 
 COPY *.py ./
 COPY static ./static

@@ -648,3 +648,7 @@ def register(app, router, apply, demo: bool) -> None:
     # Benutzerseite und Rechte (Administration / Benutzer)
     import portal
     portal.register(app, router, demo, cfgdir)
+
+    # CME Phone (Softphone): APNs-Schluessel, Local-Push-Secret, Schnittstelle fuer die Apps
+    import phoneapp
+    phoneapp.register(app, router, demo, cfgdir)

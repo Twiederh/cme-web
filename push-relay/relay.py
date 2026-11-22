@@ -14,17 +14,18 @@ Endpunkte
   HTTP  :8092  GET/POST /push   (von Flexisip, nur an 127.0.0.1 binden)
                GET      /health
                GET      /devices (Diagnose: verbundene Local-Push-Geräte)
-  TCP   :5072  Local-Push-Kanal (zeilenbasiertes JSON, siehe Shared/SharedConfig.swift)
-  HTTP  :8091  Verwaltung (Basic-Auth, nur wenn RELAY_ADMIN_PASSWORD gesetzt):
-               APNs-Schlüssel (.p8) hochladen, Key-ID/Team-ID/Umgebung setzen, Status
+  TCP   :5072  Local-Push-Kanal (zeilenbasiertes JSON, siehe softphone/Shared/SharedConfig.swift)
+
+Verwaltet wird der Relay in cme-web (Tab "Softphone"). Beide teilen sich das Volume RELAY_DATA_DIR:
+  apns/AuthKey.p8, apns/apns.json   APNs-Schlüssel (schreibt cme-web, liest der Relay bei jeder Änderung neu)
+  localpush-secret                  Secret für den Local-Push-Kanal (schreibt cme-web; sonst RELAY_LOCALPUSH_SECRET)
+  status.json                       Lebenszeichen, verbundene Geräte, letzter APNs-Versand (schreibt der Relay)
 
 Konfiguration über Umgebungsvariablen (siehe docker-compose.yml).
 """
 from __future__ import annotations
 
 import asyncio
-import base64
-import html
 import json
 import logging
 import os
@@ -63,13 +64,18 @@ class Config:
     apns_env: str = os.getenv("APNS_ENV", "auto")
     # Wie lange auf ein ACK der Extension gewartet wird, bevor zusätzlich APNs probiert wird
     lp_ack_timeout: float = float(os.getenv("RELAY_LOCALPUSH_ACK_TIMEOUT", "2.0"))
-    # Verwaltungsoberfläche (Schlüssel-Upload). Leeres Passwort = abgeschaltet.
-    admin_host: str = os.getenv("RELAY_ADMIN_HOST", "0.0.0.0")
-    admin_port: int = int(os.getenv("RELAY_ADMIN_PORT", "8091"))
-    admin_user: str = os.getenv("RELAY_ADMIN_USER", "admin")
-    admin_password: str = os.getenv("RELAY_ADMIN_PASSWORD", "")
-    # Persistenter Speicher für hochgeladene Schlüssel (Docker-Volume)
+    # Gemeinsames Volume mit cme-web (Schlüssel, Secret, Status)
     data_dir: str = os.getenv("RELAY_DATA_DIR", "/data")
+
+    def secret(self) -> str:
+        """Local-Push-Secret: aus cme-web (Datei im Volume), sonst aus der Umgebung."""
+        try:
+            v = (Path(self.data_dir) / "localpush-secret").read_text().strip()
+            if v:
+                return v
+        except OSError:
+            pass
+        return self.lp_secret
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +111,17 @@ class KeyStore:
         self.dir = Path(cfg.data_dir) / "apns"
         self.meta_path = self.dir / "apns.json"
         self.key_path = self.dir / "AuthKey.p8"
-        self.version = 0          # erhöht sich bei jeder Änderung (APNs-Client verwirft dann sein JWT)
+        self._bump = 0
+
+    @property
+    def version(self) -> tuple:
+        """Ändert sich mit jeder Änderung der Dateien (auch durch cme-web) -> APNs-Client erneuert sein JWT."""
+        def mt(p: Path) -> float:
+            try:
+                return p.stat().st_mtime_ns
+            except OSError:
+                return 0
+        return (mt(self.key_path), mt(self.meta_path), self._bump)
 
     def _meta(self) -> dict:
         try:
@@ -156,7 +172,7 @@ class KeyStore:
         tmp = self.meta_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(meta))
         tmp.replace(self.meta_path)
-        self.version += 1
+        self._bump += 1
         log.info("APNs-Schlüssel %s (Team %s, %s) gespeichert", key_id, team_id, env)
 
     def delete(self) -> None:
@@ -165,7 +181,7 @@ class KeyStore:
                 p.unlink()
             except FileNotFoundError:
                 pass
-        self.version += 1
+        self._bump += 1
         log.info("Hochgeladener APNs-Schlüssel gelöscht")
 
 
@@ -214,6 +230,7 @@ class LocalPushHub:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.devices: dict[str, LocalDevice] = {}
+        self.last_push: dict = {}
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = "%s:%s" % (writer.get_extra_info("peername") or ("?", 0))[:2]
@@ -232,9 +249,8 @@ class LocalPushHub:
                     continue
                 t = msg.get("type")
                 if t == "hello":
-                    if self.cfg.lp_secret and not secrets.compare_digest(
-                        str(msg.get("secret", "")), self.cfg.lp_secret
-                    ):
+                    secret = self.cfg.secret()
+                    if secret and not secrets.compare_digest(str(msg.get("secret", "")), secret):
                         await self._send(writer, {"type": "error", "reason": "bad secret"})
                         log.warning("local-push: falsches Secret von %s", peer)
                         break
@@ -296,7 +312,7 @@ class APNs:
     def __init__(self, cfg: Config, keys: "KeyStore | None" = None):
         self.cfg = cfg
         self.keys = keys or KeyStore(cfg)
-        self._jwt: tuple[float, int, str] | None = None   # (Zeit, KeyStore-Version, Token)
+        self._jwt: tuple[float, tuple, str] | None = None   # (Zeit, KeyStore-Version, Token)
         self.last_result: str = ""
         self.client = httpx.AsyncClient(http2=True, timeout=10)
 
@@ -385,8 +401,11 @@ def build_app(cfg: Config, hub: LocalPushHub, apns: APNs) -> web.Application:
             "video": False,
         }
 
+        hub.last_push = {"time": int(time.time()), "from": call["display-name"] or call["from-uri"], "via": ""}
+
         # 1) Local Push
         if await hub.notify(token, call):
+            hub.last_push["via"] = "local-push"
             log.info("Anruf %s per Local Push zugestellt", call["call-id"][:12])
             return web.json_response({"delivered": "local-push"})
 
@@ -409,6 +428,7 @@ def build_app(cfg: Config, hub: LocalPushHub, apns: APNs) -> web.Application:
             status, text = await apns.send_voip(token, call, sandbox)
             log.info("APNs-Retry (%s) -> %s %s", "sandbox" if sandbox else "prod", status, text[:200])
         apns.last_result = f"{time.strftime('%H:%M:%S')} {'sandbox' if sandbox else 'production'}: {status} {text[:120]}"
+        hub.last_push["via"] = f"apns {status}"
         if status == 200:
             return web.json_response({"delivered": "apns"})
         return web.json_response({"error": "apns", "status": status, "body": text}, status=502)
@@ -432,139 +452,40 @@ def build_app(cfg: Config, hub: LocalPushHub, apns: APNs) -> web.Application:
 
 
 # ---------------------------------------------------------------------------
-# Verwaltung (Schlüssel-Upload)
+# Status für cme-web (Datei im gemeinsamen Volume)
 # ---------------------------------------------------------------------------
 
-ADMIN_CSS = """
-body{font:15px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:720px;margin:32px auto;padding:0 16px;color:#1d1d1f}
-h1{font-size:22px}h2{font-size:17px;margin-top:28px}
-table{border-collapse:collapse;width:100%}td{padding:6px 8px;border-bottom:1px solid #e5e5e5;vertical-align:top}
-td:first-child{color:#6e6e73;width:38%}
-label{display:block;margin:12px 0 4px;font-weight:600}
-input[type=text],select{width:100%;padding:8px;border:1px solid #c7c7cc;border-radius:8px;font:inherit;box-sizing:border-box}
-button{margin-top:16px;padding:9px 16px;border:0;border-radius:8px;background:#0071e3;color:#fff;font:inherit;cursor:pointer}
-button.danger{background:#d70015}.ok{color:#1a7f37}.bad{color:#d70015}.msg{padding:10px;border-radius:8px;background:#f2f2f7}
-small{color:#6e6e73}
-"""
+
+def status_dict(cfg: Config, hub: LocalPushHub, apns: APNs) -> dict:
+    cur = None
+    try:
+        cur = apns.keys.current()
+    except OSError:
+        pass
+    return {
+        "time": time.time(),
+        "apns": {"configured": cur is not None, "source": apns.keys.source,
+                 "key_id": cur["key_id"] if cur else "", "team_id": cur["team_id"] if cur else "",
+                 "env": cur["env"] if cur else cfg.apns_env, "bundle_id": cfg.apns_bundle_id,
+                 "last_result": apns.last_result},
+        "localpush": {"port": cfg.lp_port, "secret_set": bool(cfg.secret()),
+                      "devices": [{"token": d.token[:10] + "…", "peer": d.peer, "since": int(d.since),
+                                   "last_seen": int(d.last_seen)} for d in hub.devices.values()]},
+        "last_push": hub.last_push,
+    }
 
 
-def build_admin_app(cfg: Config, hub: LocalPushHub, apns: APNs) -> web.Application:
-    csrf = secrets.token_urlsafe(24)
-
-    @web.middleware
-    async def auth(request: web.Request, handler):
-        hdr = request.headers.get("Authorization", "")
-        ok = False
-        if hdr.startswith("Basic "):
-            try:
-                user, _, pw = base64.b64decode(hdr[6:]).decode().partition(":")
-                ok = secrets.compare_digest(user, cfg.admin_user) and secrets.compare_digest(pw, cfg.admin_password)
-            except Exception:  # noqa: BLE001
-                ok = False
-        if not ok:
-            return web.Response(status=401, headers={"WWW-Authenticate": 'Basic realm="cme-push-relay"'},
-                                text="Anmeldung erforderlich")
-        return await handler(request)
-
-    app = web.Application(middlewares=[auth], client_max_size=64 * 1024)
-
-    def status() -> dict:
-        cur = None
+async def write_status(cfg: Config, hub: LocalPushHub, apns: APNs, every: float = 5.0) -> None:
+    path = Path(cfg.data_dir) / "status.json"
+    while True:
         try:
-            cur = apns.keys.current()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(status_dict(cfg, hub, apns)))
+            tmp.replace(path)
         except OSError as e:
-            log.warning("APNs-Schlüssel nicht lesbar: %s", e)
-        return {
-            "apns": cur is not None,
-            "source": apns.keys.source,
-            "key_id": cur["key_id"] if cur else None,
-            "team_id": cur["team_id"] if cur else None,
-            "env": cur["env"] if cur else None,
-            "uploaded": cur["uploaded"] if cur else None,
-            "last_apns_result": apns.last_result,
-            "local_devices": [
-                {"token": d.token[:10] + "…", "peer": d.peer, "since": int(d.since)} for d in hub.devices.values()
-            ],
-        }
-
-    def page(message: str = "", ok: bool = True) -> web.Response:
-        st = status()
-        e = html.escape
-        src = {"upload": "hochgeladen", "env": "Umgebungsvariablen / Datei", "none": "–"}[st["source"]]
-        state = '<span class="ok">aktiv</span>' if st["apns"] else '<span class="bad">nicht eingerichtet</span>'
-        devs = "".join(f"<tr><td>{e(d['token'])}</td><td>{e(d['peer'])}</td></tr>" for d in st["local_devices"]) \
-            or "<tr><td colspan=2><small>keine</small></td></tr>"
-        env_opts = "".join(
-            f'<option value="{v}"{" selected" if (st["env"] or "auto") == v else ""}>{t}</option>'
-            for v, t in (("auto", "auto (Sandbox und Production)"), ("sandbox", "nur Sandbox (Debug-Builds)"),
-                         ("production", "nur Production (TestFlight/Ad-hoc)")))
-        msg = f'<p class="msg {"ok" if ok else "bad"}">{e(message)}</p>' if message else ""
-        delete = f"""<form method="post" action="delete" onsubmit="return confirm('Hochgeladenen Schlüssel löschen?')">
-<input type="hidden" name="csrf" value="{csrf}"><button class="danger">Hochgeladenen Schlüssel löschen</button></form>""" \
-            if st["source"] == "upload" else ""
-        body = f"""<!doctype html><html lang="de"><head><meta charset="utf-8"><title>CME Phone – Push-Relay</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"><style>{ADMIN_CSS}</style></head><body>
-<h1>CME Phone – Push-Relay</h1>{msg}
-<h2>APNs</h2><table>
-<tr><td>Status</td><td>{state}</td></tr>
-<tr><td>Quelle</td><td>{src}</td></tr>
-<tr><td>Key-ID</td><td>{e(st["key_id"] or "–")}</td></tr>
-<tr><td>Team-ID</td><td>{e(st["team_id"] or "–")}</td></tr>
-<tr><td>Umgebung</td><td>{e(st["env"] or "–")}</td></tr>
-<tr><td>Hochgeladen</td><td>{e(st["uploaded"] or "–")}</td></tr>
-<tr><td>Letzter APNs-Versand</td><td>{e(st["last_apns_result"] or "–")}</td></tr>
-</table>
-<h2>Schlüssel hochladen</h2>
-<form method="post" action="apns" enctype="multipart/form-data">
-<input type="hidden" name="csrf" value="{csrf}">
-<label for="f">.p8-Datei (AuthKey_XXXXXXXXXX.p8)</label>
-<input id="f" type="file" name="keyfile" accept=".p8" onchange="var m=this.files[0]&&this.files[0].name.match(/AuthKey_([A-Z0-9]{{10}})\\.p8/i);if(m)document.getElementById('k').value=m[1].toUpperCase()">
-<small>Leer lassen, um nur Key-ID/Team-ID/Umgebung zu ändern.</small>
-<label for="k">Key-ID</label><input id="k" type="text" name="key_id" maxlength="10" value="{e(st["key_id"] or "")}" required>
-<label for="t">Team-ID</label><input id="t" type="text" name="team_id" maxlength="10" value="{e(st["team_id"] or "83BLV56527")}" required>
-<label for="e">Umgebung</label><select id="e" name="env">{env_opts}</select>
-<button>Speichern</button></form>
-{delete}
-<h2>Verbundene Geräte (Local Push)</h2><table>{devs}</table>
-</body></html>"""
-        return web.Response(text=body, content_type="text/html",
-                            headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
-
-    async def index(_: web.Request) -> web.Response:
-        return page()
-
-    async def upload(request: web.Request) -> web.Response:
-        form = await request.post()
-        if not secrets.compare_digest(str(form.get("csrf", "")), csrf):
-            return page("Formular abgelaufen – bitte neu laden.", ok=False)
-        f = form.get("keyfile")
-        pem = f.file.read(16 * 1024) if getattr(f, "file", None) is not None and getattr(f, "filename", "") else None
-        try:
-            apns.keys.save(pem, str(form.get("key_id", "")), str(form.get("team_id", "")), str(form.get("env", "auto")))
-            # Testweise ein JWT erzeugen, damit Fehler sofort auffallen
-            apns._token()
-        except KeyError_ as e:
-            return page(str(e), ok=False)
-        except Exception as e:  # noqa: BLE001
-            log.exception("Upload fehlgeschlagen")
-            return page(f"Fehler: {e}", ok=False)
-        return page("Gespeichert. Der Schlüssel ist sofort aktiv.")
-
-    async def delete(request: web.Request) -> web.Response:
-        form = await request.post()
-        if not secrets.compare_digest(str(form.get("csrf", "")), csrf):
-            return page("Formular abgelaufen – bitte neu laden.", ok=False)
-        apns.keys.delete()
-        return page("Hochgeladener Schlüssel gelöscht.")
-
-    async def api_status(_: web.Request) -> web.Response:
-        return web.json_response(status())
-
-    app.router.add_get("/", index)
-    app.router.add_post("/apns", upload)
-    app.router.add_post("/delete", delete)
-    app.router.add_get("/api/status", api_status)
-    return app
+            log.warning("status.json nicht schreibbar: %s", e)
+        await asyncio.sleep(every)
 
 
 async def main():
@@ -575,24 +496,17 @@ async def main():
     hub = LocalPushHub(cfg)
     apns = APNs(cfg)
 
-    if not cfg.lp_secret:
-        log.warning("RELAY_LOCALPUSH_SECRET ist leer – jeder im Netz kann sich als Gerät anmelden!")
+    if not cfg.secret():
+        log.warning("Kein Local-Push-Secret – jeder im Netz kann sich als Gerät anmelden! (cme-web, Tab Softphone)")
     if not apns.configured:
-        log.warning("APNs nicht konfiguriert – Schlüssel über die Verwaltung (Port %s) hochladen "
-                    "oder APNS_KEY_ID/APNS_TEAM_ID/%s setzen. Bis dahin nur Local Push.", cfg.admin_port, cfg.apns_key_path)
+        log.warning("APNs nicht konfiguriert – Schlüssel in cme-web (Tab Softphone) hochladen. Bis dahin nur Local Push.")
 
     lp_server = await asyncio.start_server(hub.handle, cfg.lp_host, cfg.lp_port)
     runner = web.AppRunner(build_app(cfg, hub, apns))
     await runner.setup()
     await web.TCPSite(runner, cfg.http_host, cfg.http_port).start()
     log.info("HTTP %s:%s, Local Push %s:%s", cfg.http_host, cfg.http_port, cfg.lp_host, cfg.lp_port)
-    if cfg.admin_password:
-        admin = web.AppRunner(build_admin_app(cfg, hub, apns))
-        await admin.setup()
-        await web.TCPSite(admin, cfg.admin_host, cfg.admin_port).start()
-        log.info("Verwaltung auf http://%s:%s/ (Benutzer %s)", cfg.admin_host, cfg.admin_port, cfg.admin_user)
-    else:
-        log.info("Verwaltung aus (RELAY_ADMIN_PASSWORD nicht gesetzt)")
+    asyncio.create_task(write_status(cfg, hub, apns))
     async with lp_server:
         await lp_server.serve_forever()
 

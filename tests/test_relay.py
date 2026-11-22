@@ -1,7 +1,7 @@
 import asyncio, json, os, sys
 import tempfile
 os.environ.update(RELAY_HTTP_PORT="18090", RELAY_LOCALPUSH_PORT="15070", RELAY_LOCALPUSH_SECRET="s3cret", APNS_KEY_PATH="/nonexistent", RELAY_DATA_DIR=tempfile.mkdtemp())
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server", "push-relay"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "push-relay"))
 import relay, httpx
 from aiohttp import web
 

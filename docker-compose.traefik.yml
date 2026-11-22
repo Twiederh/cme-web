@@ -44,10 +44,18 @@ services:
       VM_REC_DIR: /data/recordings
       # Visual Voicemail: Port, unter dem die Telefone cme-web erreichen (siehe ports)
       CME_PHONE_URL_PORT: ${CME_PHONE_PORT:-8081}
+      # CME Phone (Tab Softphone, siehe softphone/README.md)
+      PHONEAPP_DATA_DIR: /data/push
+      SIP_GW_NAME: ${SIP_GW_NAME:-}
+      SIP_GW_PORT: ${SIP_GW_PORT:-5062}
+      RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5072}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-de.wiederhol.cmephone}
     volumes:
       - vm-config:/data/asterisk
       - vm-spool:/data/voicemail
       - recordings:/data/recordings
+      - softphone-data:/data/push
     depends_on:
       - asterisk
     networks:
@@ -143,6 +151,53 @@ services:
     volumes:
       - whisper-cache:/root/.cache
 
+
+  # ---------------- CME Phone (Softphone, Ordner softphone/) ----------------
+  # Push-Gateway vor CME: Die Apps melden sich hierueber an, CME schickt eingehende Anrufe hierher.
+  # Host-Netz (SIP braucht die echten Absender-IPs), nicht hinter Traefik. Braucht TCP/UDP SIP_GW_PORT (5062).
+  # Das Image baut beim ersten Mal 20-40 Minuten (Flexisip aus den Quellen); vorher von Hand bauen geht schneller:
+  #   docker build -t flexisip:local ./flexisip
+  flexisip:
+    build:
+      context: ./flexisip
+      args:
+        FLEXISIP_VERSION: "2.6.2"
+        LINPHONESDK_VERSION: "5.5.16"
+        NJOBS: "4"
+    image: flexisip:local
+    container_name: cme-flexisip
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      HOST_IP: ${VM_HOST_IP:?VM_HOST_IP = LAN-IP des Docker-Hosts setzen}
+      SIP_GW_NAME: ${SIP_GW_NAME:-}
+      SIP_PORT: ${SIP_GW_PORT:-5062}
+      RELAY_PORT: ${RELAY_HTTP_PORT:-8092}
+      TZ: Europe/Berlin
+    volumes:
+      - flexisip-conf:/etc/flexisip
+      - flexisip-log:/var/opt/belledonne-communications/log/flexisip
+
+  # Weckt schlafende Apps: im Heim-WLAN per Local Push (TCP RELAY_LOCALPUSH_PORT, 5072), sonst per APNs.
+  # Eingerichtet wird er in cme-web (Tab Softphone): APNs-Schluessel und Secret liegen im Volume softphone-data.
+  push-relay:
+    build: ./push-relay
+    image: cme-push-relay:latest
+    container_name: cme-push-relay
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      RELAY_HTTP_HOST: 127.0.0.1
+      RELAY_HTTP_PORT: ${RELAY_HTTP_PORT:-8092}
+      RELAY_LOCALPUSH_HOST: 0.0.0.0
+      RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5072}
+      RELAY_DATA_DIR: /data
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-de.wiederhol.cmephone}
+      LOG_LEVEL: INFO
+      TZ: Europe/Berlin
+    volumes:
+      - softphone-data:/data
+
 networks:
   traefik:
     external: true
@@ -153,3 +208,6 @@ volumes:
   vm-spool:
   whisper-cache:
   recordings:
+  softphone-data:
+  flexisip-conf:
+  flexisip-log:

@@ -40,10 +40,12 @@
     document.body.appendChild(s);
   }
   // Karten fuer Telefon-Firmware und -Konfiguration (Tab Telefone) und die Warteschlangen (Tab Voicemail);
-  // static/firmware.js, static/phonecfg.js, static/queues.js, static/vvm.js und static/phonebook.js fuellen sie
+  // static/firmware.js, static/phonecfg.js, static/queues.js, static/vvm.js, static/phonebook.js und
+  // static/phoneapp.js (Tab Softphone) fuellen sie
   for (const [id, src] of [["firmware-card", "/static/firmware.js"], ["phonecfg-card", "/static/phonecfg.js"],
                            ["queue-card", "/static/queues.js"], ["vvm-card", "/static/vvm.js"],
-                           ["phonebook-card", "/static/phonebook.js"], ["users-card", "/static/users.js"]]) {
+                           ["phonebook-card", "/static/phonebook.js"], ["users-card", "/static/users.js"],
+                           ["phoneapp-card", "/static/phoneapp.js"]]) {
     if (document.getElementById(id)) continue;
     const c = document.createElement("section");
     c.className = "card";
@@ -88,6 +90,7 @@
     { id: "voicemail", label: "Voicemail, IVR & Konferenzen", parts: [top("#voicemail-card"), top("#vvm-card"), top("#queue-card"), top("#conf-card")] },
     { id: "phonebook", label: "Telefonbuch", parts: [top("#phonebook-card")] },
     { id: "recording", label: "Aufzeichnung", parts: [top("#recording-card")] },
+    { id: "softphone", label: "Softphone", parts: [top("#phoneapp-card")] },
     { id: "user", label: "Hintergründe & Klingeltöne", parts: [top("#walls")] },
     { id: "users", label: "Benutzer", parts: [top("#users-card")] },
     { id: "backup", label: "Sicherung", parts: [top("#backup-card")] },

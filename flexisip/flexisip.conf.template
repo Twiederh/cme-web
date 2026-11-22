@@ -2,27 +2,32 @@
 ## Flexisip als Push-Gateway vor Cisco CME
 ## =========================================
 ##
-##  iPhone/iPad (liblinphone)  --REGISTER/INVITE-->  Flexisip (docker01)  --REGISTER/INVITE-->  CME 192.168.11.4
+##  iPhone/iPad/Mac (liblinphone)  --REGISTER/INVITE-->  Flexisip (Docker-Host)  --REGISTER/INVITE-->  CME
 ##                                                      |
 ##                                                      +-- schläft das Gerät: HTTP -> cme-push-relay
 ##                                                          -> Local Push (Heim-WLAN) oder APNs VoIP-Push
 ##
-## Die App registriert sich mit Identität sip:<nst>@192.168.11.4 und nutzt Flexisip als Outbound-Proxy.
+## Die App registriert sich mit Identität sip:<nst>@<CME> und nutzt Flexisip als Outbound-Proxy.
 ## Flexisip leitet das REGISTER an CME weiter (Request-URI = CME), ersetzt dabei den Contact durch
 ## seine eigene Adresse (ContactRouteInserter) und registriert das Gerät erst lokal,
 ## wenn CME mit 200 OK antwortet (reg-on-response).
 ##
-## Platzhalter:  DOCKER01_IP  = LAN-IP von docker01 (z.B. 192.168.11.20)
-##               SIP_GW_NAME  = DNS-Name, den die App als Gateway nutzt (z.B. sip-gw.wiederhol.de)
+## Vorlage: entrypoint.sh setzt beim Start die Werte aus dem Stack ein und schreibt /etc/flexisip/flexisip.conf
+##   ${HOST_IP}      LAN-IP des Docker-Hosts (VM_HOST_IP)
+##   ${SIP_GW_NAME}  DNS-Name, den die App als Gateway nutzt (leer = nur IP)
+##   ${SIP_PORT}     SIP-Port von Flexisip (SIP_GW_PORT, Standard 5062)
+##   ${RELAY_PORT}   HTTP-Port des push-relay auf 127.0.0.1 (RELAY_HTTP_PORT, Standard 8092)
+## Eigene Anpassungen: Datei /etc/flexisip/flexisip.local.conf im Volume "flexisip-conf" anlegen –
+## sie ersetzt dann die Vorlage komplett (Platzhalter werden auch dort ersetzt).
 ##
 
 [global]
 log-level=message
 # Namen/IPs, unter denen Flexisip SICH SELBST erkennt. NICHT die CME-IP eintragen!
-aliases=SIP_GW_NAME DOCKER01_IP
+aliases=${SIP_GW_NAME} ${HOST_IP}
 # Eine Adresse für Clients und CME (alles im LAN/VPN).
-# TLS: zusätzlich  sips:DOCKER01_IP:5061  und tls-certificates-dir (s.u.) setzen.
-transports=sip:DOCKER01_IP:5062;transport=tcp sip:DOCKER01_IP:5062;transport=udp
+# TLS: zusätzlich  sips:${HOST_IP}:5061  und tls-certificates-dir (s.u.) setzen.
+transports=sip:${HOST_IP}:${SIP_PORT};transport=tcp sip:${HOST_IP}:${SIP_PORT};transport=udp
 # tls-certificates-dir=/etc/flexisip/tls      # agent.pem (Zertifikat + Key), z.B. vom acme-Container
 # Keepalive für TCP-Verbindungen der Telefone
 keepalive-interval=30
@@ -79,7 +84,7 @@ apple=false
 firebase=false
 # Flexisip spricht NICHT selbst mit Apple, sondern übergibt an cme-push-relay.
 # Der Relay entscheidet: Local Push (Heim-WLAN) oder APNs.
-external-push-uri=http://127.0.0.1:8092/push?type=$type&token=$token&app-id=$app-id&from-name=$from-name&from-uri=$from-uri&to-uri=$to-uri&call-id=$call-id&event=$event&uid=$uid
+external-push-uri=http://127.0.0.1:${RELAY_PORT}/push?type=$type&token=$token&app-id=$app-id&from-name=$from-name&from-uri=$from-uri&to-uri=$to-uri&call-id=$call-id&event=$event&uid=$uid
 external-push-method=GET
 # Standard wäre HTTP/2 – der Relay (aiohttp) spricht HTTP/1.1
 external-push-protocol=http

@@ -5,3 +5,7 @@ __pycache__
 .venv
 README.md
 .env.example
+softphone
+flexisip
+push-relay
+tests
