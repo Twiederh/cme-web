@@ -1,4 +1,6 @@
 import Foundation
+
+#if LOCALPUSH
 @preconcurrency import NetworkExtension
 
 /// Konfiguriert die Local-Push-Extension (NEAppPushManager) für die Heim-WLANs.
@@ -100,3 +102,16 @@ extension LocalPushController: NEAppPushDelegate {
         return s.isEmpty ? "Unbekannt" : s
     }
 }
+#else
+/// Ohne Local-Push-Entitlement (Standard, bis Apple es freigibt): gleiche Schnittstelle, tut nichts.
+/// Eingehende Anrufe kommen dann immer über APNs (PushKit).
+@MainActor
+final class LocalPushController: NSObject, ObservableObject {
+    static let shared = LocalPushController()
+    @Published private(set) var isActive = false
+    @Published private(set) var status = "Nicht enthalten (ohne Local-Push-Freigabe gebaut)"
+    func load() {}
+    func update(deviceToken: String) {}
+    func apply() {}
+}
+#endif

@@ -30,11 +30,13 @@ targets:
     dependencies:
       - package: linphonesw
         product: linphonesw
-      - target: LocalPushProvider
-        embed: true
       - sdk: CallKit.framework
       - sdk: PushKit.framework
+      # >>> LOCALPUSH  (nur mit LOCALPUSH=1 zsh build.command – Apple vergibt das Entitlement auf Antrag)
+      - target: LocalPushProvider
+        embed: true
       - sdk: NetworkExtension.framework
+      # <<< LOCALPUSH
     info:
       path: CMEPhone/Resources/Info.plist
       properties:
@@ -70,7 +72,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.wiederhol.cmephone
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # >>> LOCALPUSH
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) LOCALPUSH
+        # <<< LOCALPUSH
 
+  # >>> LOCALPUSH
   LocalPushProvider:
     type: app-extension
     platform: iOS
@@ -96,3 +102,4 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.wiederhol.cmephone.localpush
+  # <<< LOCALPUSH

@@ -30,13 +30,21 @@ say "$(xcodebuild -version | head -1)"
 
 
 say "--- Projekte erzeugen"
-xcodegen generate --spec project.yml     > build-logs/xcodegen-ios.log 2>&1 && say "iOS-Projekt OK"  || say "iOS-Projekt FEHLER (siehe xcodegen-ios.log)"
+# iOS-Spec ohne bzw. mit Local Push (Blöcke "# >>> LOCALPUSH" … "# <<< LOCALPUSH" in project.yml):
+# ohne Freigabe von Apple muss die Local-Push-Extension ganz raus, sonst lehnt TestFlight den Upload ab.
+if [ "${LOCALPUSH:-0}" = "1" ]; then
+  grep -v -E '^[[:space:]]*# (>>>|<<<) LOCALPUSH' project.yml > project.gen.yml
+else
+  awk '/# >>> LOCALPUSH/{skip=1;next} /# <<< LOCALPUSH/{skip=0;next} !skip' project.yml > project.gen.yml
+fi
+xcodegen generate --spec project.gen.yml > build-logs/xcodegen-ios.log 2>&1 && say "iOS-Projekt OK"  || say "iOS-Projekt FEHLER (siehe xcodegen-ios.log)"
 xcodegen generate --spec project-mac.yml > build-logs/xcodegen-mac.log 2>&1 && say "Mac-Projekt OK"  || say "Mac-Projekt FEHLER (siehe xcodegen-mac.log)"
 
 # Local Push (NetworkExtension app-push-provider) vergibt Apple nur auf Antrag. Erst nach der Freigabe:
 #   LOCALPUSH=1 zsh build.command   (trägt das Entitlement in die erzeugten Entitlements ein)
 if [ "${LOCALPUSH:-0}" = "1" ]; then
   for f in CMEPhone/Resources/CMEPhone.entitlements LocalPushProvider/LocalPushProvider.entitlements; do
+    [ -f "$f" ] || continue
     /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$f" >/dev/null 2>&1
     /usr/libexec/PlistBuddy -c "Add :com.apple.developer.networking.networkextension array" \
       -c "Add :com.apple.developer.networking.networkextension:0 string app-push-provider" "$f"
