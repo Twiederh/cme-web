@@ -136,8 +136,6 @@ final class PhoneSettings: ObservableObject {
     @Published var statusEvent: StatusEventPackage { didSet { save() } }
     /// Call-Toast bei eingehendem Anruf am Tischtelefon.
     @Published var deskPhoneNotify: Bool { didSet { save() } }
-    /// Wählregel für Rückruf: Nummern mit mehr als 4 Stellen bekommen eine 0 (Amtsholung) vorangestellt.
-    @Published var callbackPrefixZero: Bool { didSet { save() } }
     /// Interne Gespräche im Softphone-Modus lokal aufnehmen (externe nimmt cme-recorder auf).
     @Published var localRecording: Bool { didSet { save() } }
     /// Darstellung der Wähltastatur (Mac)
@@ -196,7 +194,6 @@ final class PhoneSettings: ObservableObject {
         keyVoicemail = d.string(forKey: "keyVoicemail") ?? "Key:Soft2"
         statusEvent = StatusEventPackage(rawValue: d.string(forKey: "statusEvent") ?? "") ?? .dialog
         deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
-        callbackPrefixZero = d.object(forKey: "callbackPrefixZero") as? Bool ?? true
         localRecording = d.object(forKey: "localRecording") as? Bool ?? true
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
         audioInputId = d.string(forKey: "audioInputId") ?? ""
@@ -347,7 +344,6 @@ final class PhoneSettings: ObservableObject {
         d.set(keyVoicemail, forKey: "keyVoicemail")
         d.set(statusEvent.rawValue, forKey: "statusEvent")
         d.set(deskPhoneNotify, forKey: "deskPhoneNotify")
-        d.set(callbackPrefixZero, forKey: "callbackPrefixZero")
         d.set(localRecording, forKey: "localRecording")
         d.set(dialpadOutlined, forKey: "dialpadOutlined")
         d.set(audioInputId, forKey: "audioInputId")

@@ -48,13 +48,4 @@ let pidfBusy = """
 check(DialogInfoParser.parse(pidfBusy).state == .busy, "PIDF on-the-phone -> Gespräch")
 check(DialogInfoParser.parse(#"<presence xmlns="urn:ietf:params:xml:ns:pidf"><tuple id="t"><status><basic>open</basic></status></tuple></presence>"#).state == .idle, "PIDF open -> frei")
 check(DialogInfoParser.parse("kaputt<").state == .unknown, "Müll -> unbekannt")
-// Wählregel für Rückrufe
-check(DialRule.callback("07111234567", prefixZero: true) == "007111234567", "Rückruf: 0 vor Ortsnetz-Nummer")
-check(DialRule.callback("1234567", prefixZero: true) == "01234567", "Rückruf: 0 vor Nummer ohne Vorwahl (1-9, >4 Stellen)")
-check(DialRule.callback("21", prefixZero: true) == "21", "Rückruf: interne Nebenstelle bleibt")
-check(DialRule.callback("12345", prefixZero: true) == "012345", "Rückruf: 5 Stellen -> 0 davor")
-check(DialRule.callback("1234", prefixZero: true) == "1234", "Rückruf: 4 Stellen bleibt")
-check(DialRule.callback("+49 711 123456", prefixZero: true) == "+49711123456", "Rückruf: E.164 bleibt (CME wählt um)")
-check(DialRule.callback("07111234567", prefixZero: false) == "07111234567", "Rückruf ohne Wählregel")
-check(DialRule.callback("*21#", prefixZero: true) == "*21#", "Sonderzeichen bleiben")
 print(fails == 0 ? "ALLE TESTS OK" : "\(fails) FEHLER"); exit(fails == 0 ? 0 : 1)

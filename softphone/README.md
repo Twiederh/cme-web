@@ -109,8 +109,7 @@ Die Ziffern-Tastatur der Telefon-App wählt immer über das Mobilnetz – das l�
 Menüleiste (Hörer-Symbol):
 
 * **Softphone / Telefonsteuerung** – Umschalten (Häkchen = aktiv)
-* **Anrufliste** – Wahlwiederholung (⌘R) und Rückruf; Wählregel „Rückruf mit 0 für externe Nummern“:
-  Nummern mit mehr als 4 Stellen bekommen eine 0 (Amtsholung) vorangestellt, `+49…` bleibt (CME wählt um)
+* **Anrufliste** – Wahlwiederholung (⌘R) und Rückruf (die Nummer wird unverändert gewählt)
 * **Wähltastatur** (⌘D) – Tastenfeld; Leer + Anrufen holt die letzte Nummer
 * **Einstellungen** (⌘,) – cme-web-Adresse, App-Schlüssel, Nebenstelle des Macs, Tischtelefon
 
@@ -156,7 +155,7 @@ testen. CSTA gibt es auf CME ab 12.6 nicht mehr und galt nur für SCCP-Telefone;
 project.yml / project-mac.yml   XcodeGen (iOS mit Local-Push-Extension / macOS)
 build.command                   erzeugen + bauen (Logs in build-logs/)
 CMEPhone/Core/                  gemeinsam: SIPManager (liblinphone), PhoneSettings, ClientAPI (cme-web),
-                                RecordingController, DialRule; nur iOS: CallKitProvider, LocalPushController
+                                RecordingController; nur iOS: CallKitProvider, LocalPushController
 CMEPhone/Settings.bundle        Einstellungen-App (iOS)
 CMEPhone/UI/ContentView.swift   iOS: nur Status + Aufnahme-Knopf
 CMEPhoneMac/App/                Menüleisten-App, CallCenter, Anrufliste, Kontakte

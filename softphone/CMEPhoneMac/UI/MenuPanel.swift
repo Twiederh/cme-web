@@ -117,9 +117,6 @@ struct MenuPanel: View {
             HStack {
                 Text("Anrufliste").font(.headline)
                 Spacer()
-                Toggle("0 vorwählen", isOn: $settings.callbackPrefixZero)
-                    .toggleStyle(.checkbox).font(.caption)
-                    .help("Rückruf: Nummern mit mehr als 4 Stellen bekommen eine 0 vorangestellt, +49… bleibt")
             }
             .padding(.horizontal, 14)
 
@@ -146,9 +143,8 @@ struct MenuPanel: View {
     }
 
     private func callBack(_ e: CallHistory.Entry) {
-        let number = e.direction == .outgoing ? e.number : DialRule.callback(e.number, prefixZero: settings.callbackPrefixZero)
         StatusBarController.shared.close()
-        URLRouter.dial(number)
+        URLRouter.dial(e.number)
     }
 
     private var statusColor: Color {

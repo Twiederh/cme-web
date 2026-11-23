@@ -114,16 +114,6 @@ private struct GeneralTab: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Rückruf: 0 vor externe Nummern (mehr als 4 Stellen)", isOn: $settings.callbackPrefixZero)
-                LabeledContent("Beispiel") {
-                    Text("07111234567 → \(DialRule.callback("07111234567", prefixZero: settings.callbackPrefixZero)) · "
-                         + "+49711… bleibt · 21 bleibt")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            } header: { Text("Wählregel") } footer: {
-                Text("Gilt für Rückrufe aus der Anrufliste. Nummern mit + wählt CME selbst um (E.164).")
-            }
-            Section {
                 Toggle("Interne Gespräche lokal aufnehmen (nur Softphone)", isOn: $settings.localRecording)
                 HStack {
                     Text("Ordner: Musik/CME Phone").foregroundStyle(.secondary)
