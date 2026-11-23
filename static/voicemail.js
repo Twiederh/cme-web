@@ -78,7 +78,8 @@
           const fwd = !b.enabled ? '<span class="muted">–</span>'
             : (c.mwi && c.noan === s.pilot) ? `nach ${esc(c.timeout || b.timeout)} s${c.busy === s.pilot ? ", bei besetzt sofort" : ""}`
             : badge("warn", "am Router nicht gesetzt");
-          return `<tr data-row="${esc(b.tag)}"><td><span class="mono">${esc(b.number)}</span> <span class="muted">${esc(b.name)}</span></td>
+          return `<tr data-row="${esc(b.tag)}"><td><span class="mono">${esc(b.number)}</span> <span class="muted">${esc(b.name)}</span>${
+              b.hunt ? `<br><span class="muted">Sammelanschluss – Mitglieder ohne eigenes Postfach: <span class="mono">${(b.members || []).map(esc).join(", ") || "–"}</span></span>` : ""}</td>
             <td>${b.enabled ? `${badge("ok", "aktiv")} <span class="muted mono">PIN ${esc(b.pin)}</span>` +
               (b.email ? `<br><span class="muted">✉ ${esc(b.email)}</span>` : "") +
               ((b.remote || []).length ? `<br><span class="muted">Fernabfrage: <span class="mono">${b.remote.map(esc).join(", ")}</span>${b.remote_pin === false ? " (ohne PIN)" : ""}</span>` : "")

@@ -253,6 +253,10 @@ def register(app, router, apply, demo: bool) -> None:
         """Schreibt die Asterisk-Dateien; True, wenn sich die MWI-Ziele geaendert haben."""
         cfgdir.mkdir(parents=True, exist_ok=True)
         boxes = s["mailboxes"]
+        try:
+            alias = aliases(s, numbers())
+        except Exception:  # noqa: BLE001
+            alias = {}
         mb_lines, mwi = [], []
         for number, b in sorted(boxes.items()):
             name = re.sub(r"[,|]", " ", names.get(number, "") or number)
@@ -262,13 +266,20 @@ def register(app, router, apply, demo: bool) -> None:
             mwi += [f"[{ep}]", "type=aor", f"contact=sip:{number}@{cme_ip}:5060", "",
                     f"[{ep}]", "type=endpoint", "transport=transport-udp", f"aors={ep}",
                     f"mailboxes={mbid(number)}@default", "context=from-cme", "disallow=all", "allow=g722,alaw,ulaw", ""]
+        # Mitglieder eines Sammelanschlusses: Lampe am eigenen Telefon fuer das Postfach der Gruppe
+        for member, number in sorted(alias.items()):
+            ep = f"vm-{mbid(member)}"
+            mwi += [f"[{ep}]", "type=aor", f"contact=sip:{member}@{cme_ip}:5060", "",
+                    f"[{ep}]", "type=endpoint", "transport=transport-udp", f"aors={ep}",
+                    f"mailboxes={mbid(number)}@default", "context=from-cme", "disallow=all", "allow=g722,alaw,ulaw", ""]
         files = {
             "mailboxes.conf": "\n".join(mb_lines) + "\n",
             "pjsip_mwi.conf": "\n".join(mwi) + "\n",
             "vm_general.conf": f"maxmsg={int(s['maxmsg'])}\nmaxsecs={int(s['maxsecs'])}\nminsecs=2\ntz=european\n",
             "globals.conf": f"VM_PILOT={s['pilot']}\nVM_MAIN_OPTS={'s' if s['skip_pin'] else ''}\n" + "".join(
                 f"VMR_{vm_key(r)}={mbid(number)}\nVMRP_{vm_key(r)}={0 if b.get('remote_pin') is False else 1}\n"
-                for number, b in sorted(boxes.items()) for r in b.get("remote", [])),
+                for number, b in sorted(boxes.items()) for r in b.get("remote", [])) + "".join(
+                f"VMA_{mbid(member)}={mbid(number)}\n" for member, number in sorted(alias.items())),
             "cme-voicemail.json": json.dumps(s, indent=2),
         }
         try:
@@ -360,7 +371,59 @@ def register(app, router, apply, demo: bool) -> None:
                     cur["number"] = t.split()[1]
                 elif t.startswith("name "):
                     cur["name"] = t[5:].strip()
-        return [n for n in res if n["number"]]
+        res = [n for n in res if n["number"]]
+        # Sammelanschluesse (voice hunt-group): eigenes Postfach unter der Pilotnummer; die Mitglieder
+        # (eigene interne Nummern) leiten auf dieses Postfach um, sofern sie kein eigenes haben
+        dn_nums = {n["number"] for n in res}
+        for g in hunt_groups().values():
+            if g["pilot"] and g["pilot"] not in dn_nums:
+                res.append({"tag": f"hg{g['tag']}", "number": g["pilot"], "hunt": g["tag"], "type": g["type"],
+                            "name": g["name"] or f"Sammelanschluss {g['tag']}",
+                            "members": [m for m in g["list"] if m in dn_nums]})
+        return res
+
+    def hunt_groups() -> dict[str, dict]:
+        from cme_web import parse_hunt_groups
+        try:
+            return parse_hunt_groups(router.show("show running-config | section voice hunt-group"))
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def aliases(s: dict, nums: list[dict]) -> dict[str, str]:
+        """Mitgliedsnummer -> Pilotnummer, fuer Sammelanschluesse mit Postfach (Mitglied ohne eigenes)."""
+        out = {}
+        for n in nums:
+            if n.get("hunt") and n["number"] in s["mailboxes"]:
+                for m in n["members"]:
+                    if m not in s["mailboxes"]:
+                        out.setdefault(m, n["number"])
+        return out
+
+    def hunt_lines(n: dict, b: dict | None, pilot: str, st: dict) -> list[str]:
+        """Router-Zeilen fuer das Postfach eines Sammelanschlusses: Umleitung der Mitglieder und
+        final (nach Ablauf der Gruppe) auf die Voicemail."""
+        s = settings()
+        dn_tags = {x["number"]: x["tag"] for x in numbers() if not x.get("hunt")}
+        out = []
+        for m in n["members"]:
+            if m in s["mailboxes"] or m not in dn_tags:
+                continue
+            out += dn_lines(dn_tags[m], b, pilot, st["dns"].get(dn_tags[m], {}))
+        out += [f"voice hunt-group {n['hunt']} {n['type']}"]
+        if b:
+            out += [f" final {pilot}", f" timeout {int(b['timeout'])}"]
+        return out
+
+    def hunt_state(n: dict, st: dict, pilot: str) -> dict:
+        """Umleitungsstatus eines Sammelanschlusses = aller Mitglieder (fuer die Anzeige)."""
+        dn_tags = {x["number"]: x["tag"] for x in numbers() if not x.get("hunt")}
+        own = settings()["mailboxes"]
+        ds = [st["dns"].get(dn_tags[m], {}) for m in n["members"] if m in dn_tags and m not in own]
+        if not ds:
+            return {}
+        ok = lambda k: all(d.get(k) == pilot for d in ds)  # noqa: E731
+        return {"mwi": all(d.get("mwi") for d in ds), "noan": pilot if ok("noan") else "",
+                "busy": pilot if ok("busy") else "", "timeout": ds[0].get("timeout", "")}
 
     # ---------------- API ----------------
 
@@ -395,9 +458,11 @@ def register(app, router, apply, demo: bool) -> None:
         boxes = []
         for n in nums:
             b = s["mailboxes"].get(n["number"])
-            dn = cme.get("dns", {}).get(n["tag"], {})
+            dn = hunt_state(n, cme, s["pilot"]) if n.get("hunt") and "dns" in cme and not cme.get("error") \
+                else cme.get("dns", {}).get(n["tag"], {})
             msgs = named(list_messages(spool, mbid(n["number"]))) if b else []
             boxes.append({"tag": n["tag"], "number": n["number"], "name": n["name"], "enabled": bool(b),
+                          "hunt": n.get("hunt", ""), "members": n.get("members", []),
                           "pin": (b or {}).get("pin", ""), "timeout": (b or {}).get("timeout", 20),
                           "busy": (b or {}).get("busy", True), "email": (b or {}).get("email", ""),
                           "remote": (b or {}).get("remote", []), "remote_pin": (b or {}).get("remote_pin", True),
@@ -468,7 +533,7 @@ def register(app, router, apply, demo: bool) -> None:
         for n in numbers():
             b = s["mailboxes"].get(n["number"])
             if b:
-                lines += dn_lines(n["tag"], b, s["pilot"], None)
+                lines += hunt_lines(n, b, s["pilot"], st) if n.get("hunt") else dn_lines(n["tag"], b, s["pilot"], None)
         lines += ["voice register global", " create profile"]
         for p in restart:   # Telefone laden die neue Einstellung erst nach einem Neustart
             lines += [f"voice register pool {p}", " restart"]
@@ -526,7 +591,7 @@ def register(app, router, apply, demo: bool) -> None:
     @app.put("/api/voicemail/mailboxes/<tag>")
     def put_mailbox(tag):
         need_enabled()
-        if not tag.isdigit():
+        if not re.fullmatch(r"(hg)?\d+", tag):
             raise VMError("Ungueltige DN")
         d = request.get_json(force=True) or {}
         nums = numbers()
@@ -575,8 +640,9 @@ def register(app, router, apply, demo: bool) -> None:
             s["mailboxes"].pop(n["number"], None)
         restart = write_config(s, {x["number"]: x["name"] for x in nums})
         reload_asterisk(restart)
-        cur = cme_state(s)["dns"].get(tag, {})
-        res = apply(dn_lines(tag, b, s["pilot"], cur) + ["voice register global", " create profile"])
+        st = cme_state(s)
+        lines = hunt_lines(n, b, s["pilot"], st) if n.get("hunt") else dn_lines(tag, b, s["pilot"], st["dns"].get(tag, {}))
+        res = apply(lines + ["voice register global", " create profile"])
         if b and not restart:
             try:
                 ami.run({"Action": "VoicemailRefresh", "Context": "default", "Mailbox": mbid(n["number"])})
