@@ -131,6 +131,9 @@ final class PhoneSettings: ObservableObject {
     @Published var deskPhoneNotify: Bool { didSet { save() } }
     /// Interne Gespräche im Softphone-Modus lokal aufnehmen (externe nimmt cme-recorder auf).
     @Published var localRecording: Bool { didSet { save() } }
+    /// Experimentell: wie ein Cisco-Telefon bei CME anmelden (Supported: X-cisco-sis …, Abo "dialog" auf die
+    /// eigene Leitung), damit CME die App auf Shared Lines mit anklingelt.
+    @Published var ciscoLineMode: Bool { didSet { save() } }
     /// Darstellung der Wähltastatur (Mac)
     @Published var dialpadOutlined: Bool { didSet { save() } }
     /// Gewählte Audiogeräte (Mac), leer = Systemstandard
@@ -187,6 +190,7 @@ final class PhoneSettings: ObservableObject {
         keyVoicemail = d.string(forKey: "keyVoicemail") ?? "Key:Soft2"
         deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
         localRecording = d.object(forKey: "localRecording") as? Bool ?? true
+        ciscoLineMode = d.object(forKey: "ciscoLineMode") as? Bool ?? false
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
         audioInputId = d.string(forKey: "audioInputId") ?? ""
         audioOutputId = d.string(forKey: "audioOutputId") ?? ""
@@ -252,7 +256,8 @@ final class PhoneSettings: ObservableObject {
     /// Alles, was eine Neuanmeldung erfordert.
     var accountFingerprint: String {
         [extensionNumber, displayName, cmeHost, password, authUser, "\(useGateway)", gatewayHost, "\(gatewayPort)",
-         transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)"].joined(separator: "|")
+         transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)",
+         "\(ciscoLineMode)"].joined(separator: "|")
     }
 
     /// Werte aus cme-web übernehmen (GET /client/v1/info).
@@ -336,6 +341,7 @@ final class PhoneSettings: ObservableObject {
         d.set(keyVoicemail, forKey: "keyVoicemail")
         d.set(deskPhoneNotify, forKey: "deskPhoneNotify")
         d.set(localRecording, forKey: "localRecording")
+        d.set(ciscoLineMode, forKey: "ciscoLineMode")
         d.set(dialpadOutlined, forKey: "dialpadOutlined")
         d.set(audioInputId, forKey: "audioInputId")
         d.set(audioOutputId, forKey: "audioOutputId")

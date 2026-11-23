@@ -114,6 +114,13 @@ private struct GeneralTab: View {
     var body: some View {
         Form {
             Section {
+                Toggle("Wie ein Cisco-Telefon anmelden", isOn: $settings.ciscoLineMode)
+                    .onChange(of: settings.ciscoLineMode) { SIPManager.shared.applyAccount() }
+            } header: { Text("Shared Line (experimentell)") } footer: {
+                Text("Meldet die App mit den Cisco-Merkmalen eines Tischtelefons an und abonniert die eigene Leitung, "
+                     + "damit CME sie auf einer Shared Line mit anklingelt. Bei Problemen wieder ausschalten.")
+            }
+            Section {
                 Toggle("Interne Gespräche lokal aufnehmen (nur Softphone)", isOn: $settings.localRecording)
                 HStack {
                     Text("Ordner: Musik/CME Phone").foregroundStyle(.secondary)

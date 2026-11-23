@@ -75,7 +75,9 @@ final class ToastController: ObservableObject {
                 t = Toast(source: .deskPhone, phase: .incoming, number: status.remoteNumber ?? "", name: status.remoteName ?? "")
             case .dialing:
                 t = Toast(source: .deskPhone, phase: .outgoing, number: status.remoteNumber ?? "", name: status.remoteName ?? "")
-            case .busy:
+            case .busy where deskCaller != nil || dialed != nil || toast?.source == .deskPhone:
+                // presence meldet "belegt" auch, wenn das Telefon neu startet (abgemeldet) – Toast nur für
+                // Gespräche, die der Mac kennt (angekündigt oder vom Mac gewählt)
                 let keep = toast?.source == .deskPhone && toast?.phase == .active ? toast?.since : Date()
                 t = Toast(source: .deskPhone, phase: .active,
                           number: status.remoteNumber ?? deskCaller?.number ?? dialed ?? toast?.number ?? "",

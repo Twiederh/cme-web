@@ -147,6 +147,8 @@ final class SIPManager: ObservableObject {
         // CME kennt pro Pool nur EINE Anmeldung: Läuft die Abmeldung des alten Kontos (z.B. andere Domain)
         // nach der neuen Anmeldung durch, ist der Mac beim CME abgemeldet. Deshalb erst abmelden lassen,
         // dann neu anmelden.
+        lineEvent?.terminate()
+        lineEvent = nil
         let old = core.accountList
         let wasRegistered = old.contains { $0.state == .Ok || $0.state == .Progress }
         for acc in old { core.removeAccount(account: acc) }
@@ -194,6 +196,7 @@ final class SIPManager: ObservableObject {
             // cme-web legt die App als Pool "id device-id-name CMEP<Nebenstelle>" an; den Namen schickt die App
             // wie Jabber im Contact mit.
             params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
+                + (settings.ciscoLineMode ? ";+u.sip!model.ccm.cisco.com=\"503\"" : "")
 
             #if os(iOS)
             // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.
@@ -221,6 +224,11 @@ final class SIPManager: ObservableObject {
             }
 
             let account = try core.createAccount(params: params)
+            if settings.ciscoLineMode {
+                // Wie ein Cisco-Telefon (8845: "Supported: …,X-cisco-sis-7.0.0,…"). CME antwortet dann mit
+                // X-cisco-cme-sis und behandelt das Gerät als Cisco-Endgerät (Shared Line, dialog-Abo).
+                account.addCustomHeader(headerName: "Supported", headerValue: Self.ciscoSupported)
+            }
             try core.addAccount(account: account)
             core.defaultAccount = account
             log("Konto \(identity.asStringUriOnly()) über \(server.asStringUriOnly())")
@@ -231,6 +239,27 @@ final class SIPManager: ObservableObject {
     }
 
     func refreshRegistration() { core?.refreshRegisters() }
+
+    // MARK: - Cisco-Leitungsmodus (experimentell)
+
+    static let ciscoSupported = "X-cisco-callinfo,X-cisco-serviceuri,X-cisco-escapecodes,X-cisco-service-control,"
+        + "X-cisco-srtp-fallback,X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1"
+    private var lineEvent: Event?
+
+    /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren.
+    private func subscribeOwnLine() {
+        guard settings.ciscoLineMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
+        do {
+            let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.cmeHost)")
+            let ev = try core.createSubscribe(resource: me, event: "dialog", expires: 7200)
+            ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
+            try ev.sendSubscribe(body: nil)
+            lineEvent = ev
+            log("Cisco-Leitungsmodus: Abo dialog auf \(settings.extensionNumber)")
+        } catch {
+            log("Cisco-Leitungsmodus: Abo fehlgeschlagen: \(error)")
+        }
+    }
 
     // MARK: - Medien / Codecs
 
@@ -500,6 +529,7 @@ final class SIPManager: ObservableObject {
         case .Progress: registration = .progress
         case .Ok:
             registration = .ok
+            subscribeOwnLine()
             if let tok = account.params?.pushNotificationConfig?.voipToken, !tok.isEmpty {
                 if voipToken != tok {
                     voipToken = tok
