@@ -335,8 +335,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         pw = new_pw()
         out = router.configure([f"voice register pool {tag}", f" username {username} password {pw}",
                                 "voice register global", " create profile"])
-        bad = [l for l in str(out).splitlines() if l.strip().startswith("%") or "is in use" in l
-               or "Invalid" in l or "Error" in l and "jabber-config" not in l]
+        # "create profile" meldet "%Error deleting flash:/its/jabber-config.xml", wenn es die Datei noch
+        # nicht gibt - harmlos
+        bad = [l for l in str(out).splitlines() if "jabber-config" not in l
+               and (l.strip().startswith("%") or "is in use" in l or "Invalid" in l or "Error" in l)]
         if bad:
             raise AppError("Der Router hat das Passwort nicht übernommen:\n" + "\n".join(bad[:5]))
         try:
