@@ -67,6 +67,9 @@ enabled=true
 reg-domains=*
 # Gerät erst lokal registrieren, wenn CME 200 OK antwortet
 reg-on-response=true
+# Keine GRUU: sonst schickt Flexisip CME die GRUU (…@${SIP_DOMAIN};gr=…) als Contact und die App nutzt sie in
+# SUBSCRIBE/INVITE – Folge-Requests von CME (NOTIFY, BYE) gingen dann per Domain-Route zurück an CME (481).
+enable-gruu=false
 max-expires=600
 min-expires=60
 # Bindings im Speicher genügen (bei Neustart registriert die App sich neu). Alternativ Redis:
