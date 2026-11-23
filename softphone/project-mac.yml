@@ -45,6 +45,7 @@ targets:
         LSApplicationCategoryType: public.app-category.business
         # Nur Menüleiste, kein Dock-Symbol
         LSUIElement: true
+        NSAppSleepDisabled: true          # kein App Nap (SIP-Anmeldung muss laufen)
         NSContactsUsageDescription: Zeigt Name und Bild des Anrufers aus deinen Kontakten.
         NSMicrophoneUsageDescription: Für Telefonate über die Cisco-Telefonanlage.
         NSCameraUsageDescription: Für Videoanrufe.

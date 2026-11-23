@@ -53,8 +53,14 @@ enum URLRouter {
 
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
+    /// Verhindert App Nap: Ohne sichtbares Fenster drosselt macOS die App nach kurzer Zeit, dann laufen
+    /// SIP-Timer und Keepalives nicht mehr und die Anmeldung geht verloren.
+    private var activity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+            reason: "CME Phone hält die Anmeldung an der Telefonanlage")
         MainActor.assumeIsolated {
             let settings = PhoneSettings.shared
             SIPManager.shared.addCallStateHandler { call, state in
