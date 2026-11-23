@@ -137,13 +137,36 @@ final class SIPManager: ObservableObject {
 
     // MARK: - Konto
 
+    private var applyGeneration = 0
+
     func applyAccount() {
         guard let core else { return }
-        // Bestehende Konten entfernen (wir haben genau eines).
-        for acc in core.accountList { core.removeAccount(account: acc) }
-        core.clearAllAuthInfo()
+        applyGeneration += 1
+        let generation = applyGeneration
+        // Bestehende Konten entfernen (wir haben genau eines). Ein angemeldetes Konto meldet sich dabei ab.
+        // CME kennt pro Pool nur EINE Anmeldung: Läuft die Abmeldung des alten Kontos (z.B. andere Domain)
+        // nach der neuen Anmeldung durch, ist der Mac beim CME abgemeldet. Deshalb erst abmelden lassen,
+        // dann neu anmelden.
+        let old = core.accountList
+        let wasRegistered = old.contains { $0.state == .Ok || $0.state == .Progress }
+        for acc in old { core.removeAccount(account: acc) }
         registration = .none
+        if wasRegistered {
+            log("Konto wird neu angemeldet – alte Anmeldung wird zuerst beendet")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.applyGeneration == generation else { return }
+                    self.addConfiguredAccount()
+                }
+            }
+        } else {
+            addConfiguredAccount()
+        }
+    }
 
+    private func addConfiguredAccount() {
+        guard let core else { return }
+        core.clearAllAuthInfo()
         guard settings.isConfigured else { log("Kein Konto konfiguriert"); return }
 
         do {
@@ -455,6 +478,11 @@ final class SIPManager: ObservableObject {
     // MARK: - Delegates
 
     private func onRegistration(account: Account, state: RegistrationState, message: String) {
+        // Abmeldung eines entfernten Kontos nicht als Zustand des aktuellen Kontos anzeigen
+        if let core, !core.accountList.contains(where: { $0.getCobject == account.getCobject }) {
+            log("Alte Anmeldung: \(state) \(message)")
+            return
+        }
         switch state {
         case .Progress: registration = .progress
         case .Ok:
