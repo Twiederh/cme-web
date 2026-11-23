@@ -44,15 +44,15 @@ final class ToastController: ObservableObject {
     private var settings: PhoneSettings { .shared }
 
     func setup() {
-        Publishers.CombineLatest3(sip.$calls, desk.$status, settings.$macMode)
+        Publishers.CombineLatest4(sip.$calls, desk.$status, settings.$macMode, desk.$pendingDial)
             .receive(on: RunLoop.main)
-            .sink { [weak self] calls, status, mode in
-                MainActor.assumeIsolated { self?.update(calls: calls, desk: status, mode: mode) }
+            .sink { [weak self] calls, status, mode, dialed in
+                MainActor.assumeIsolated { self?.update(calls: calls, desk: status, mode: mode, dialed: dialed) }
             }
             .store(in: &cancellables)
     }
 
-    private func update(calls: [SIPManager.CallInfo], desk status: LineStatus, mode: MacMode) {
+    private func update(calls: [SIPManager.CallInfo], desk status: LineStatus, mode: MacMode, dialed: String?) {
         var t: Toast?
         // Softphone: eingehend vor laufend vor ausgehend (beendete Anrufe nicht mehr zeigen)
         let live = calls.filter { ![.End, .Error, .Released].contains($0.state) }
@@ -69,7 +69,7 @@ final class ToastController: ObservableObject {
             t = Toast(source: .softphone(c.id), phase: phase, number: c.remote, name: c.displayName,
                       since: toast?.key == c.id && toast?.phase == phase ? toast?.since : since,
                       video: phase == .active && c.hasVideo)
-        } else if mode == .deskPhone, settings.deskPhoneNotify {
+        } else if mode == .deskPhone, settings.deskPhoneNotify || dialed != nil {
             switch status.state {
             case .ringing:
                 t = Toast(source: .deskPhone, phase: .incoming, number: status.remoteNumber ?? "", name: status.remoteName ?? "")
@@ -77,9 +77,14 @@ final class ToastController: ObservableObject {
                 t = Toast(source: .deskPhone, phase: .outgoing, number: status.remoteNumber ?? "", name: status.remoteName ?? "")
             case .busy:
                 let keep = toast?.source == .deskPhone && toast?.phase == .active ? toast?.since : Date()
-                t = Toast(source: .deskPhone, phase: .active, number: status.remoteNumber ?? deskCaller?.number ?? toast?.number ?? "",
+                t = Toast(source: .deskPhone, phase: .active,
+                          number: status.remoteNumber ?? deskCaller?.number ?? dialed ?? toast?.number ?? "",
                           name: status.remoteName ?? deskCaller?.name ?? toast?.name ?? "", since: keep)
-            default: break
+            default:
+                // Vom Mac gewählt, Tischtelefon meldet (noch) kein Gespräch: ausgehend mit Auflegen
+                if let dialed {
+                    t = Toast(source: .deskPhone, phase: .outgoing, number: dialed, name: "")
+                }
             }
         }
         guard let t else {

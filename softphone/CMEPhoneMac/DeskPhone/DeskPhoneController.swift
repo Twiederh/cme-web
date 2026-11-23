@@ -73,6 +73,11 @@ final class DeskPhoneController: ObservableObject {
     @Published private(set) var subscriptionState = "–"
     @Published private(set) var lastResult = ""
     @Published private(set) var busy = false
+    /// Vom Mac aus am Tischtelefon gewählte Nummer – zeigt den Toast sofort (presence meldet erst
+    /// "belegt" und nie die Nummer). Endet mit Auflegen, wenn die Leitung wieder frei ist, oder nach 60 s
+    /// ohne Gespräch.
+    @Published private(set) var pendingDial: String?
+    private var pendingTimer: Timer?
 
     var backend: DeskPhoneBackend
     private let settings = PhoneSettings.shared
@@ -87,20 +92,41 @@ final class DeskPhoneController: ObservableObject {
 
     // MARK: Befehle
 
-    func dial(_ number: String) { run("Wählen \(number)") { await $0.dial(number) } }
+    func dial(_ number: String) {
+        setPendingDial(number)
+        run("Wählen \(number)", onFail: { [weak self] in self?.setPendingDial(nil) }) { await $0.dial(number) }
+    }
+
+    func setPendingDial(_ number: String?) {
+        pendingTimer?.invalidate()
+        pendingDial = number
+        guard number != nil else { return }
+        pendingTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // Kein Gespräch zustande gekommen (oder kein Statusabo): Toast nicht ewig stehen lassen
+                guard let self, self.status.state != .busy else { return }
+                self.setPendingDial(nil)
+            }
+        }
+    }
     func answer() { run("Annehmen") { await $0.answer() } }
-    func hangup() { run("Auflegen") { await $0.hangup() } }
+    func hangup() {
+        setPendingDial(nil)
+        run("Auflegen") { await $0.hangup() }
+    }
     func decline() { run("Ablehnen") { await $0.decline() } }
     func hold() { run("Halten") { await $0.hold() } }
     func sendDigits(_ d: String) { run("Ziffern \(d)") { await $0.sendDigits(d) } }
     func execute(_ uri: String) { run(uri) { await $0.execute(uri) } }
 
-    private func run(_ label: String, _ op: @escaping (DeskPhoneBackend) async -> CiscoXML.Result) {
+    private func run(_ label: String, onFail: (() -> Void)? = nil,
+                     _ op: @escaping (DeskPhoneBackend) async -> CiscoXML.Result) {
         busy = true
         let backend = self.backend
         Task { @MainActor in
             let r = await op(backend)
             self.busy = false
+            if !r.isOK { onFail?() }
             self.lastResult = "\(label): \(r.message)"
             SIPManager.shared.log("Tischtelefon – \(self.lastResult)")
         }
@@ -198,6 +224,8 @@ final class DeskPhoneController: ObservableObject {
     private func handle(_ new: LineStatus) {
         let old = status
         guard new.state != old.state || new.remoteNumber != old.remoteNumber else { return }
+        // Gespräch nach Wahl vom Mac beendet
+        if old.state == .busy, new.state == .idle { setPendingDial(nil) }
         status = new          // Call-Toast (ToastController) beobachtet den Status
         SIPManager.shared.log("Tischtelefon \(settings.deskPhoneExtension): \(new.state.label) \(new.remoteNumber ?? "")")
         CallHistory.shared.deskPhone(old: old, new: new)
