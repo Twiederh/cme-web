@@ -9,6 +9,8 @@ enum ClientAPI {
         struct Recording: Decodable { var available: Bool; var mode: String }
         /// SIP-Zugangsdaten des Pools (CME verlangt sie von Soft-Clients); leer, wenn cme-web keine kennt
         struct Auth: Decodable { var username: String?; var password: String? }
+        /// Zugang für die Tischtelefon-Steuerung (CGI/Execute) – cme-web beantwortet die Authentication URL
+        struct DeskAuth: Decodable { var user: String?; var password: String? }
         var ext: String
         var deviceName: String
         var cmeHost: String
@@ -17,9 +19,10 @@ enum ClientAPI {
         var voicemail: String
         var recording: Recording
         var auth: Auth?
+        var deskphone: DeskAuth?
 
         enum CodingKeys: String, CodingKey {
-            case ext, gateway, localpush, voicemail, recording, auth
+            case ext, gateway, localpush, voicemail, recording, auth, deskphone
             case deviceName = "device_name"
             case cmeHost = "cme_host"
         }

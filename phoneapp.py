@@ -25,7 +25,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import jsonify, request, send_file
+from flask import Response, jsonify, request, send_file
 
 BASE = Path(__file__).resolve().parent
 RE_KEYID = re.compile(r"^[A-Z0-9]{10}$")
@@ -111,12 +111,27 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     def save(s: dict) -> None:
         _write(store, json.dumps(s, indent=1), 0o600)
 
+    def exec_pw() -> str:
+        """Passwort fuer die Telefon-Steuerung (CGI/Execute): nur Buchstaben/Ziffern, wie CME es verlangt."""
+        import string
+        while True:
+            pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(15))
+            if any(c.isupper() for c in pw) and any(c.islower() for c in pw) and any(c.isdigit() for c in pw):
+                return pw
+
     def ensure() -> dict:
-        """App-Schluessel und Local-Push-Secret beim ersten Mal erzeugen."""
+        """App-Schluessel, Steuerungs-Zugang und Local-Push-Secret beim ersten Mal erzeugen."""
         with lock:
             s = settings()
+            changed = False
             if not s.get("token"):
                 s["token"] = secrets.token_urlsafe(24)
+                changed = True
+            if not s.get("exec_password"):
+                s["exec_user"] = s.get("exec_user") or "cmephone"
+                s["exec_password"] = exec_pw()
+                changed = True
+            if changed:
                 save(s)
             try:
                 if not secret_path.exists():
@@ -199,6 +214,11 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     def cme_url() -> str:
         return os.environ.get("CME_PUBLIC_URL", "").strip().rstrip("/") or request.host_url.rstrip("/")
 
+    def auth_url() -> str:
+        """Authentication URL fuer die Tischtelefone (Port, unter dem die Telefone cme-web erreichen)."""
+        port = int(os.environ.get("CME_PHONE_URL_PORT") or os.environ.get("CME_PHONE_PORT") or 8081)
+        return f"http://{host_ip or '<docker-host>'}:{port}/ipphone/authenticate"
+
     def pilot() -> str:
         vm = app.config.get("VOICEMAIL") or {}
         try:
@@ -234,7 +254,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             "env": m.get("env", "auto"), "uploaded": m.get("uploaded", "")},
             token=s["token"], secret=lp_secret(), url=cme_url(), bundle_id=bundle_id,
             gateway_host=s["gateway_host"], gateway_port=s["gateway_port"], localpush_port=s["localpush_port"],
-            ssids=s.get("ssids", ""), cme_host=os.environ.get("CME_HOST", ""), prefix=DEVICE_PREFIX)
+            ssids=s.get("ssids", ""), cme_host=os.environ.get("CME_HOST", ""), prefix=DEVICE_PREFIX,
+            exec_user=s.get("exec_user", "cmephone"), exec_password=s.get("exec_password", ""), auth_url=auth_url())
 
     @app.post("/api/phoneapp/apns")
     def admin_apns():
@@ -336,9 +357,31 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                 save(s)
             elif what == "secret":
                 _write(secret_path, secrets.token_hex(24) + "\n", 0o600)
+            elif what == "exec":
+                s = settings()
+                s["exec_password"] = exec_pw()
+                save(s)
             else:
                 raise AppError("Unbekannt.")
         return jsonify(ok=True)
+
+    # ---------------- Authentication URL der Tischtelefone ----------------
+    # Ein Cisco-Telefon prueft bei jedem CGI/Execute die Basic-Auth-Daten, indem es diese URL mit
+    # UserID/Password/devicename aufruft. CMEs eigenes authenticate.asp kennt nur SCCP-Telefone
+    # (liefert fuer SIP-Telefone UN_AUTHORIZED) - deshalb beantwortet cme-web die Abfrage selbst.
+
+    @app.get("/ipphone/authenticate")
+    @app.get("/ipphone/authenticate.asp")
+    def phone_authenticate():
+        s = ensure()
+        user = request.args.get("UserID", "")
+        pw = request.args.get("Password", "")
+        want_u, want_p = s.get("exec_user", "cmephone"), s.get("exec_password", "")
+        ok = bool(want_p) and secrets.compare_digest(user.encode(), want_u.encode()) \
+            and secrets.compare_digest(pw.encode(), want_p.encode())
+        if not ok:
+            time.sleep(0.5)
+        return Response("AUTHORIZED" if ok else "UN-AUTHORIZED", mimetype="text/plain")
 
     # ---------------- Client-Schnittstelle fuer die Apps ----------------
 
@@ -394,7 +437,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     @app.get("/client/v1/info")
     def client_info():
         ext = ext_arg()
-        s = settings()
+        s = ensure()
         r = rec()
         # SIP-Domain der Apps: ein Name (Flexisip nimmt Anmeldungen mit fremder IP-Domain nicht an),
         # Flexisip leitet ihn per Route an CME_HOST weiter
@@ -405,6 +448,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                                   "ssids": [x for x in s.get("ssids", "").split(",") if x]},
                        voicemail=pilot(),
                        auth=pool_credentials(ext),
+                       deskphone={"user": s.get("exec_user", "cmephone"), "password": s.get("exec_password", "")},
                        recording={"available": bool(r), "mode": (r["settings"]().get("mode", "always") if r else "")})
 
     @app.get("/client/v1/calls")

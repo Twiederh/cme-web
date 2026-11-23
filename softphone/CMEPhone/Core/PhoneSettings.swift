@@ -289,6 +289,10 @@ final class PhoneSettings: ObservableObject {
             password = pw
             authUser = a.username ?? ""
         }
+        if let d = info.deskphone, let pw = d.password, !pw.isEmpty {
+            deskPhoneUser = d.user ?? "cmephone"
+            deskPhonePassword = pw
+        }
         loading = false
         save()
         return before != accountFingerprint

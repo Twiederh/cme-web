@@ -221,11 +221,11 @@ private struct DeskPhoneTab: View {
             Section {
                 TextField("IP / Hostname des Telefons", text: $settings.deskPhoneHost)
                 TextField("Nebenstelle des Telefons", text: $settings.deskPhoneExtension)
-                TextField("Benutzer (authentication credential)", text: $settings.deskPhoneUser)
+                TextField("Benutzer", text: $settings.deskPhoneUser)
                 SecureField("Passwort", text: $settings.deskPhonePassword)
                 Stepper("Leitung \(settings.deskPhoneLine)", value: $settings.deskPhoneLine, in: 1...16)
             } header: { Text("Cisco-Telefon") } footer: {
-                Text("Steuerung über Cisco XML (POST /CGI/Execute). CME prüft die Zugangsdaten über „url authentication“ – siehe softphone/cme/deskphone-control.cfg.")
+                Text("Steuerung über Cisco XML (POST /CGI/Execute). Das Telefon prüft Benutzer und Passwort über die Authentication URL von cme-web – beides kommt automatisch aus cme-web (Tab Softphone → Tischtelefon-Steuerung).")
             }
             Section {
                 TextField("Annehmen", text: $settings.keyAnswer)

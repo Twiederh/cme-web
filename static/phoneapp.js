@@ -61,6 +61,22 @@
         <button class="small" data-act="renew" data-what="token">Neu erzeugen</button></span></div>
       <div class="kv"><span class="muted">Nebenstelle</span><span>Rufnummer der ersten Leitung des Telefons</span></div>
 
+      <h3>Tischtelefon-Steuerung (Mac)</h3>
+      <div class="hint">Der Mac steuert ein Cisco-Tischtelefon über dessen Webserver (CGI/Execute). Das Telefon prüft die
+        Zugangsdaten über die <b>Authentication URL</b> – CMEs eigenes <span class="mono">authenticate.asp</span> kennt nur
+        SCCP-Telefone, deshalb beantwortet cme-web die Abfrage. Die Mac-App übernimmt Benutzer und Passwort automatisch.
+        Einmal am CME eintragen und die Tischtelefone neu starten:</div>
+      <pre class="mono">voice register global
+ url authentication ${esc(j.auth_url)}
+ create profile
+ apply-config
+telephony-service
+ service phone webAccess 0</pre>
+      <div class="kv"><span class="muted">Benutzer</span><span class="mono">${esc(j.exec_user)}</span></div>
+      <div class="kv"><span class="muted">Passwort</span><span><span class="mono">${secretTxt(j.exec_password)}</span>
+        <button class="small" data-act="copy" data-v="${esc(j.exec_password)}">Kopieren</button>
+        <button class="small" data-act="renew" data-what="exec">Neu erzeugen</button></span></div>
+
       <h3>Push-Gateway und Local Push</h3>
       <form id="f-pa-set">
         <div class="row">
@@ -115,8 +131,9 @@
     if (act === "reveal") { reveal = !reveal; return load(); }
     if (act === "copy") { await navigator.clipboard?.writeText(b.dataset.v); b.textContent = "Kopiert"; return; }
     if (act === "renew") {
-      const what = b.dataset.what === "token" ? "einen neuen App-Schlüssel (alle Apps müssen ihn neu eintragen)"
-                                             : "ein neues Local-Push-Secret";
+      const what = { token: "einen neuen App-Schlüssel (alle Apps müssen ihn neu eintragen)",
+                     secret: "ein neues Local-Push-Secret",
+                     exec: "ein neues Passwort für die Tischtelefon-Steuerung" }[b.dataset.what];
       if (!confirm(`Wirklich ${what} erzeugen?`)) return;
       await api("/api/phoneapp/renew", { method: "POST", body: JSON.stringify({ what: b.dataset.what }) });
       reveal = true;

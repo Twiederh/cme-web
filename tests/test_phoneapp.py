@@ -28,6 +28,12 @@ i = c.get("/client/v1/info?ext=21", headers=H).get_json()
 print(json.dumps(i, indent=1))
 check(i["ok"] and i["device_name"] == "CMEP21" and i["localpush"]["secret"], "Info für die App")
 check(c.get("/client/v1/info?ext=abc", headers=H).status_code == 400, "ungültige Nebenstelle")
+# Authentication URL der Tischtelefone
+pw = j["exec_password"]
+check(j["exec_user"] == "cmephone" and len(pw) == 15 and pw.isalnum(), "Steuerungs-Zugang erzeugt")
+check(i["deskphone"]["password"] == pw, "App bekommt den Steuerungs-Zugang")
+check(c.get(f"/ipphone/authenticate?UserID=cmephone&Password={pw}&devicename=SEP001122334455").get_data(as_text=True) == "AUTHORIZED", "richtiges Passwort -> AUTHORIZED")
+check(c.get("/ipphone/authenticate.asp?UserID=cmephone&Password=falsch").get_data(as_text=True) == "UN-AUTHORIZED", "falsches Passwort -> UN-AUTHORIZED")
 # APNs-Schluessel
 gen = subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout"], capture_output=True, check=True).stdout
 pk8 = subprocess.run(["openssl", "pkcs8", "-topk8", "-nocrypt"], input=gen, capture_output=True, check=True).stdout
