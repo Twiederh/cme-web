@@ -22,6 +22,8 @@ final class ToastController: ObservableObject {
         var number: String
         var name: String
         var since: Date?
+        /// Softphone-Gespräch mit Video: Bild als oberer Anhang des Toasts
+        var video = false
         var key: String { switch source { case .softphone(let id): return id; case .deskPhone: return "desk" } }
     }
 
@@ -55,7 +57,8 @@ final class ToastController: ObservableObject {
             let phase: Phase = Self.isRinging(c.state) ? (c.isIncoming ? .incoming : .outgoing) : .active
             let since = phase == .active ? Date().addingTimeInterval(-TimeInterval(c.duration)) : nil
             t = Toast(source: .softphone(c.id), phase: phase, number: c.remote, name: c.displayName,
-                      since: toast?.key == c.id && toast?.phase == phase ? toast?.since : since)
+                      since: toast?.key == c.id && toast?.phase == phase ? toast?.since : since,
+                      video: phase == .active && c.hasVideo)
         } else if mode == .deskPhone, settings.deskPhoneNotify {
             switch status.state {
             case .ringing:
@@ -113,6 +116,10 @@ final class ToastController: ObservableObject {
 
     // MARK: Fenster
 
+    static let width: CGFloat = 380
+    static let toastHeight: CGFloat = 84
+    static let videoHeight: CGFloat = 214      // 380 × 214 ≈ 16:9
+
     private func presentPanel() {
         if panel == nil {
             let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 84),
@@ -125,15 +132,23 @@ final class ToastController: ObservableObject {
             p.hasShadow = true
             p.hidesOnDeactivate = false
             p.isMovableByWindowBackground = true
-            let host = NSHostingView(rootView: CallToastView().environmentObject(self).environmentObject(RecordingController.shared))
+            let host = NSHostingView(rootView: CallToastView().environmentObject(self).environmentObject(RecordingController.shared)
+                .environmentObject(PhoneSettings.shared))
+            host.autoresizingMask = [.width, .height]
             host.frame = p.contentRect(forFrameRect: p.frame)
             p.contentView = host
             panel = p
         }
         guard let panel, let screen = NSScreen.main else { return }
+        let height = Self.toastHeight + (toast?.video == true ? Self.videoHeight + 8 : 0)
         if !panel.isVisible {
             let f = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: f.maxX - panel.frame.width - 16, y: f.minY + 16))
+            panel.setFrame(NSRect(x: f.maxX - Self.width - 16, y: f.minY + 16, width: Self.width, height: height), display: true)
+        } else if abs(panel.frame.height - height) > 0.5 {
+            // unten verankert wachsen/schrumpfen (Video kommt oben dazu)
+            var fr = panel.frame
+            fr.size.height = height
+            panel.setFrame(fr, display: true, animate: true)
         }
         panel.orderFrontRegardless()
     }
@@ -191,11 +206,14 @@ final class ToastController: ObservableObject {
 struct CallToastView: View {
     @EnvironmentObject private var model: ToastController
     @EnvironmentObject private var rec: RecordingController
+    @EnvironmentObject private var settings: PhoneSettings
     @State private var hover = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             if let t = model.toast {
+              VStack(spacing: 8) {
+                if t.video { VideoAttachment() }
                 HStack(spacing: 12) {
                     Avatar(image: model.contact?.image, name: title(t))
                     VStack(alignment: .leading, spacing: 2) {
@@ -235,6 +253,8 @@ struct CallToastView: View {
                     }
                 }
                 .onHover { hover = $0 }
+              }
+              .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
     }
@@ -273,12 +293,70 @@ struct CallToastView: View {
             case .outgoing:
                 RoundKey(symbol: "phone.down.fill", color: .red, help: "Auflegen") { model.hangup() }
             case .active:
+                if settings.videoEnabled, case .softphone(let id) = t.source {
+                    RoundKey(symbol: t.video ? "video.slash.fill" : "video.fill", color: Color(white: 0.5),
+                             help: t.video ? "Video aus" : "Video einschalten") {
+                        SIPManager.shared.setVideo(callId: id, enabled: !t.video)
+                    }
+                }
                 RoundKey(symbol: rec.isOn ? "stop.fill" : "record.circle",
                          color: rec.isOn ? .red.opacity(0.85) : Color(white: 0.5),
                          help: rec.help, enabled: rec.available && !rec.busy) { rec.toggle() }
                 RoundKey(symbol: "phone.down.fill", color: .red, help: "Auflegen") { model.hangup() }
             }
         }
+    }
+}
+
+/// Videobild über dem Toast: Gegenstelle groß, eigene Kamera klein unten rechts.
+private struct VideoAttachment: View {
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            NativeVideoView(role: .remote)
+            NativeVideoView(role: .preview)
+                .frame(width: 96, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.3)))
+                .padding(8)
+        }
+        .frame(width: ToastController.width, height: ToastController.videoHeight)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.12)))
+    }
+}
+
+/// NSView, in die liblinphone das Video zeichnet (SIPManager.setVideoViews).
+private struct NativeVideoView: NSViewRepresentable {
+    enum Role { case remote, preview }
+    let role: Role
+
+    final class Holder {
+        @MainActor static var remote: NSView?
+        @MainActor static var preview: NSView?
+        @MainActor static func update() {
+            SIPManager.shared.setVideoViews(remote: remote, preview: preview)
+        }
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.black.cgColor
+        switch role {
+        case .remote: Holder.remote = v
+        case .preview: Holder.preview = v
+        }
+        DispatchQueue.main.async { Holder.update() }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+        if Holder.remote === nsView { Holder.remote = nil }
+        if Holder.preview === nsView { Holder.preview = nil }
+        Holder.update()
     }
 }
 

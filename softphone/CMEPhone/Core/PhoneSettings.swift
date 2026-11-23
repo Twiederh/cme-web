@@ -131,6 +131,9 @@ final class PhoneSettings: ObservableObject {
     @Published var localRecording: Bool { didSet { save() } }
     /// Darstellung der Wähltastatur (Mac)
     @Published var dialpadOutlined: Bool { didSet { save() } }
+    /// Gewählte Audiogeräte (Mac), leer = Systemstandard
+    @Published var audioInputId: String { didSet { save() } }
+    @Published var audioOutputId: String { didSet { save() } }
 
     static let defaultAudio: [CodecEntry] = [
         .init(mime: "G722", enabled: true),
@@ -185,6 +188,8 @@ final class PhoneSettings: ObservableObject {
         callbackPrefixZero = d.object(forKey: "callbackPrefixZero") as? Bool ?? true
         localRecording = d.object(forKey: "localRecording") as? Bool ?? true
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
+        audioInputId = d.string(forKey: "audioInputId") ?? ""
+        audioOutputId = d.string(forKey: "audioOutputId") ?? ""
         loading = false
         #if os(iOS)
         registerSettingsBundleDefaults()
@@ -330,6 +335,8 @@ final class PhoneSettings: ObservableObject {
         d.set(callbackPrefixZero, forKey: "callbackPrefixZero")
         d.set(localRecording, forKey: "localRecording")
         d.set(dialpadOutlined, forKey: "dialpadOutlined")
+        d.set(audioInputId, forKey: "audioInputId")
+        d.set(audioOutputId, forKey: "audioOutputId")
         #if os(iOS)
         // Codec-Schalter der Einstellungen-App mitführen
         for c in audioCodecs { if let k = Self.codecSwitches[c.mime] { d.set(c.enabled, forKey: k) } }

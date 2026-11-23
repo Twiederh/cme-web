@@ -8,38 +8,11 @@ import Combine
 @main
 struct CMEPhoneMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
-    @ObservedObject private var sip = SIPManager.shared
-    @ObservedObject private var settings = PhoneSettings.shared
-    @ObservedObject private var desk = DeskPhoneController.shared
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarContent()
-                .environmentObject(SIPManager.shared)
-                .environmentObject(PhoneSettings.shared)
-                .environmentObject(DeskPhoneController.shared)
-                .environmentObject(CallHistory.shared)
-        } label: {
-            Image(systemName: menuIcon)
-        }
-        .menuBarExtraStyle(.menu)
-
-        // Kein Settings-Scene: das eigene Fenster (SettingsWindow) lässt sich auch beim Start und
-        // beim erneuten Öffnen der App aus dem Finder zeigen.
+        // Menüleiste: eigenes NSStatusItem (StatusBarController) – zuverlässiger als MenuBarExtra und mit Popover.
+        // Einstellungen: eigenes Fenster (SettingsWindow).
         Settings { EmptyView() }
-    }
-
-    private var menuIcon: String {
-        if !sip.calls.isEmpty { return "phone.connection.fill" }
-        if settings.macMode == .deskPhone {
-            switch desk.status.state {
-            case .ringing: return "phone.badge.waveform.fill"
-            case .busy, .dialing: return "phone.connection.fill"
-            default: break
-            }
-        }
-        if case .ok = sip.registration { return settings.macMode == .deskPhone ? "phone.arrow.up.right.fill" : "phone.fill" }
-        return "phone.badge.exclamationmark"
     }
 }
 
@@ -59,7 +32,7 @@ enum URLRouter {
             guard !number.isEmpty else { return }
             dial(number)
         case "cmephone":
-            if url.host == "dial" { DialpadPanel.shared.show(number: url.lastPathComponent) }
+            if url.host == "dial" { StatusBarController.shared.show(number: url.lastPathComponent) }
         default: break
         }
     }
@@ -84,12 +57,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             let settings = PhoneSettings.shared
-            // Video gibt es in der Menüleisten-App nicht (kein Videofenster)
-            settings.videoEnabled = false
             SIPManager.shared.addCallStateHandler { call, state in
                 MainActor.assumeIsolated { CallHistory.shared.softphone(call: call, state: state) }
             }
             SIPManager.shared.start()
+            SIPManager.shared.applySavedAudioDevices()
+            StatusBarController.shared.setup()
             ToastController.shared.setup()
             Provisioning.refresh()
             // Erster Start: Einstellungen zeigen, sonst sieht man außer dem Menüleisten-Symbol nichts

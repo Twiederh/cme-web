@@ -376,7 +376,20 @@ final class SIPManager: ObservableObject {
     }
 
     /// Audio-Geräte (v.a. macOS: Headset, Studio Display, Mac-Lautsprecher).
-    var audioDevices: [AudioDevice] { core?.audioDevices ?? [] }
+    var audioDevices: [AudioDevice] { core?.extendedAudioDevices ?? core?.audioDevices ?? [] }
+
+    /// Gespeicherte Audiogeräte (Einstellungen) setzen; leer = Systemstandard.
+    func applySavedAudioDevices() {
+        guard let core else { return }
+        core.reloadSoundDevices()
+        let devs = audioDevices
+        if let i = devs.first(where: { $0.id == settings.audioInputId && $0.hasCapability(capability: .CapabilityRecord) }) {
+            core.defaultInputAudioDevice = i; core.inputAudioDevice = i
+        }
+        if let o = devs.first(where: { $0.id == settings.audioOutputId && $0.hasCapability(capability: .CapabilityPlay) }) {
+            core.defaultOutputAudioDevice = o; core.outputAudioDevice = o
+        }
+    }
 
     func selectAudio(input: AudioDevice?, output: AudioDevice?) {
         if let input { core?.inputAudioDevice = input; core?.defaultInputAudioDevice = input }

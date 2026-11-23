@@ -152,26 +152,25 @@ private struct GeneralTab: View {
 private struct MediaTab: View {
     @EnvironmentObject private var settings: PhoneSettings
     @EnvironmentObject private var sip: SIPManager
-    @State private var inputId = ""
-    @State private var outputId = ""
+    @State private var devices: [(id: String, name: String, record: Bool, play: Bool)] = []
 
     var body: some View {
         Form {
-            Section("Audiogeräte") {
-                Picker("Mikrofon", selection: $inputId) {
-                    ForEach(sip.audioDevices.filter { $0.hasCapability(capability: .CapabilityRecord) }, id: \.id) {
-                        Text($0.deviceName).tag($0.id)
-                    }
+            Section {
+                Picker("Mikrofon", selection: $settings.audioInputId) {
+                    Text("Systemstandard").tag("")
+                    ForEach(devices.filter(\.record), id: \.id) { Text($0.name).tag($0.id) }
                 }
-                Picker("Lautsprecher / Headset", selection: $outputId) {
-                    ForEach(sip.audioDevices.filter { $0.hasCapability(capability: .CapabilityPlay) }, id: \.id) {
-                        Text($0.deviceName).tag($0.id)
-                    }
+                Picker("Lautsprecher / Headset", selection: $settings.audioOutputId) {
+                    Text("Systemstandard").tag("")
+                    ForEach(devices.filter(\.play), id: \.id) { Text($0.name).tag($0.id) }
                 }
-                Button("Geräte übernehmen") {
-                    sip.selectAudio(input: sip.audioDevices.first { $0.id == inputId },
-                                    output: sip.audioDevices.first { $0.id == outputId })
-                }
+                Button("Liste aktualisieren") { reload() }
+            } header: { Text("Audiogeräte") } footer: {
+                Text("Die Auswahl gilt sofort und bleibt gespeichert. Klingelton und Gespräch laufen über das gewählte Ausgabegerät.")
+            }
+            Section("Video") {
+                Toggle("Video (Kamera und Bild im Call-Toast)", isOn: $settings.videoEnabled)
             }
             Section("Audio-Codecs (ziehen = Priorität)") {
                 List {
@@ -183,9 +182,18 @@ private struct MediaTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            inputId = sip.core?.inputAudioDevice?.id ?? ""
-            outputId = sip.core?.outputAudioDevice?.id ?? ""
+        .onAppear(perform: reload)
+        .onChange(of: settings.audioInputId) { _, _ in sip.applySavedAudioDevices() }
+        .onChange(of: settings.audioOutputId) { _, _ in sip.applySavedAudioDevices() }
+        .onChange(of: settings.videoEnabled) { _, _ in sip.applyMediaSettings() }
+    }
+
+    private func reload() {
+        sip.core?.reloadSoundDevices()
+        var seen = Set<String>()
+        devices = sip.audioDevices.compactMap { d in
+            guard seen.insert(d.id).inserted else { return nil }
+            return (d.id, d.deviceName, d.hasCapability(capability: .CapabilityRecord), d.hasCapability(capability: .CapabilityPlay))
         }
     }
 }

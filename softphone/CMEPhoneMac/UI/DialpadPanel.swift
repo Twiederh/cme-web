@@ -1,41 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// Wähltastatur als kleines schwebendes Fenster (Menüleiste → Wähltastatur).
-/// Tasten als Pillen mit Buchstaben, grüner "Anrufen"-Knopf; Tastatureingabe und Einfügen gehen auch.
-@MainActor
-final class DialpadPanel: NSObject, NSWindowDelegate {
-    static let shared = DialpadPanel()
-    private var window: NSWindow?
-
-    func show(number: String = "") {
-        if window == nil {
-            let w = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 470),
-                            styleMask: [.titled, .closable, .fullSizeContentView, .utilityWindow],
-                            backing: .buffered, defer: false)
-            w.title = "Wählen"
-            w.titlebarAppearsTransparent = true
-            w.isMovableByWindowBackground = true
-            w.level = .floating
-            w.isReleasedWhenClosed = false
-            w.delegate = self
-            w.contentView = NSHostingView(rootView: DialpadView(initial: number)
-                .environmentObject(PhoneSettings.shared)
-                .environmentObject(CallHistory.shared))
-            w.center()
-            window = w
-        } else if !number.isEmpty {
-            window?.contentView = NSHostingView(rootView: DialpadView(initial: number)
-                .environmentObject(PhoneSettings.shared)
-                .environmentObject(CallHistory.shared))
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
-    }
-
-    func close() { window?.orderOut(nil) }
-}
-
+/// Wähltastatur im Menüleisten-Popover: Pillen-Tasten mit Buchstaben, grüner Anrufen-Knopf.
+/// Tastatureingabe und Einfügen gehen auch. Nach dem Wählen schließt sich das Popover, der Call-Toast übernimmt.
 struct DialpadView: View {
     @EnvironmentObject private var settings: PhoneSettings
     @EnvironmentObject private var history: CallHistory
@@ -43,7 +10,7 @@ struct DialpadView: View {
     @State private var number: String
     @FocusState private var focused: Bool
 
-    init(initial: String) { _number = State(initialValue: initial) }
+    init(initial: String = "") { _number = State(initialValue: initial) }
 
     private static let keys: [(String, String)] = [
         ("1", ""), ("2", "ABC"), ("3", "DEF"),
@@ -97,12 +64,14 @@ struct DialpadView: View {
             .help(number.isEmpty ? "Wahlwiederholung" : "Anrufen")
             .padding(.top, 4)
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 30)
-        .padding(.bottom, 22)
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
         .frame(width: 300)
-        .background(scheme == .dark ? Color.black : Color.white)
         .onAppear { focused = true }
+        .onReceive(NotificationCenter.default.publisher(for: .cmePrefillNumber)) { n in
+            if let s = n.object as? String { number = s }
+        }
     }
 
     private var modeLabel: String {
@@ -117,7 +86,7 @@ struct DialpadView: View {
         guard !number.isEmpty else { return }
         URLRouter.dial(number)
         number = ""
-        DialpadPanel.shared.close()
+        StatusBarController.shared.close()
     }
 }
 
@@ -160,4 +129,9 @@ private struct PressStyle: ButtonStyle {
             .brightness(configuration.isPressed ? 0.12 : 0)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
     }
+}
+
+extension Notification.Name {
+    /// Nummer in die Wähltastatur übernehmen (cmephone://dial/…, Anrufliste)
+    static let cmePrefillNumber = Notification.Name("cmePrefillNumber")
 }
