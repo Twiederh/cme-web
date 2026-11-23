@@ -229,10 +229,6 @@ private struct DeskPhoneTab: View {
             Section("Status") {
                 LabeledContent("Leitung", value: desk.status.state.label)
                 LabeledContent("Statusabo", value: desk.subscriptionState)
-                Picker("Event-Paket", selection: $settings.statusEvent) {
-                    Text("dialog (RFC 4235)").tag(StatusEventPackage.dialog)
-                    Text("presence (PIDF)").tag(StatusEventPackage.presence)
-                }
                 Button("Statusabo neu starten") { desk.startMonitoring() }
             }
             Section("Ausprobieren") {

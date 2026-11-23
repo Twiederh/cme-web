@@ -36,12 +36,6 @@ enum MacMode: String, Codable, CaseIterable, Identifiable {
     var label: String { self == .softphone ? "Softphone (Mac telefoniert)" : "Tischtelefon steuern" }
 }
 
-/// Welches SIP-Event-Paket CME für das Statusabo liefert.
-enum StatusEventPackage: String, Codable, CaseIterable, Identifiable {
-    case dialog, presence
-    var id: String { rawValue }
-}
-
 enum MediaEncryptionSetting: String, Codable, CaseIterable, Identifiable {
     case none, srtp
     var id: String { rawValue }
@@ -133,7 +127,6 @@ final class PhoneSettings: ObservableObject {
     @Published var keyDecline: String { didSet { save() } }
     /// Tasten-URI für "an Voicemail umleiten" am Tischtelefon (z.B. iDivert-Softkey).
     @Published var keyVoicemail: String { didSet { save() } }
-    @Published var statusEvent: StatusEventPackage { didSet { save() } }
     /// Call-Toast bei eingehendem Anruf am Tischtelefon.
     @Published var deskPhoneNotify: Bool { didSet { save() } }
     /// Interne Gespräche im Softphone-Modus lokal aufnehmen (externe nimmt cme-recorder auf).
@@ -192,7 +185,6 @@ final class PhoneSettings: ObservableObject {
         keyHold = d.string(forKey: "keyHold") ?? "Key:Hold"
         keyDecline = d.string(forKey: "keyDecline") ?? "Key:Soft3"
         keyVoicemail = d.string(forKey: "keyVoicemail") ?? "Key:Soft2"
-        statusEvent = StatusEventPackage(rawValue: d.string(forKey: "statusEvent") ?? "") ?? .dialog
         deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
         localRecording = d.object(forKey: "localRecording") as? Bool ?? true
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
@@ -342,7 +334,6 @@ final class PhoneSettings: ObservableObject {
         d.set(keyHold, forKey: "keyHold")
         d.set(keyDecline, forKey: "keyDecline")
         d.set(keyVoicemail, forKey: "keyVoicemail")
-        d.set(statusEvent.rawValue, forKey: "statusEvent")
         d.set(deskPhoneNotify, forKey: "deskPhoneNotify")
         d.set(localRecording, forKey: "localRecording")
         d.set(dialpadOutlined, forKey: "dialpadOutlined")
