@@ -77,6 +77,8 @@ final class DeskPhoneController: ObservableObject {
     var backend: DeskPhoneBackend
     private let settings = PhoneSettings.shared
     private var event: Event?
+    private var eventDelegate: EventDelegateStub?
+    private var lastNotifyBody = ""
     private var delegate: CoreDelegate?
 
     private init() {
@@ -128,10 +130,8 @@ final class DeskPhoneController: ObservableObject {
                 },
                 onNotifyReceived: { [weak self] _, ev, _, body in
                     MainActor.assumeIsolated {
-                        guard let self, ev === self.event else { return }
-                        let text = body?.utf8Text ?? ""
-                        let new = DialogInfoParser.parse(text)
-                        self.handle(new)
+                        guard let self, self.isCurrent(ev) else { return }
+                        self.received(body, via: "Core")
                     }
                 }
             )
@@ -144,8 +144,18 @@ final class DeskPhoneController: ObservableObject {
             let ev = try core.createSubscribe(resource: resource, event: pkg, expires: 3600)
             ev.addCustomHeader(name: "Accept",
                                value: pkg == "dialog" ? "application/dialog-info+xml" : "application/pidf+xml")
-            try ev.sendSubscribe(body: nil)
+            let evDelegate = EventDelegateStub(
+                onNotifyReceived: { [weak self] ev, body in
+                    MainActor.assumeIsolated {
+                        guard let self, self.isCurrent(ev) else { return }
+                        self.received(body, via: "Event")
+                    }
+                }
+            )
+            ev.addDelegate(delegate: evDelegate)
+            eventDelegate = evDelegate
             event = ev
+            try ev.sendSubscribe(body: nil)
             subscriptionState = "Abo gesendet (\(pkg))"
         } catch {
             subscriptionState = "Abo fehlgeschlagen: \(error)"
@@ -155,11 +165,39 @@ final class DeskPhoneController: ObservableObject {
     func stopMonitoring() {
         event?.terminate()
         event = nil
+        eventDelegate = nil
+        lastNotifyBody = ""
         status = .unknown
+    }
+
+    /// Swift-Wrapper können für dasselbe C-Objekt verschiedene Instanzen liefern –
+    /// deshalb über den C-Zeiger vergleichen.
+    private func isCurrent(_ ev: Event) -> Bool {
+        guard let cur = event else { return false }
+        return ev === cur || ev.getCobject == cur.getCobject
+    }
+
+    /// NOTIFY kann über Core- und Event-Delegate doppelt ankommen – gleiche Inhalte nur einmal auswerten.
+    private func received(_ body: Content?, via: String) {
+        let text = body?.utf8Text ?? ""
+        if text == lastNotifyBody, !text.isEmpty { return }
+        lastNotifyBody = text
+        let type = body.map { "\($0.type)/\($0.subtype)" } ?? "ohne Inhalt"
+        guard !text.isEmpty else {
+            SIPManager.shared.log("Statusabo: NOTIFY \(type) (\(via))")
+            return
+        }
+        let new = DialogInfoParser.parse(text)
+        if new.state == .unknown {
+            let snippet = text.replacingOccurrences(of: "\n", with: " ").prefix(300)
+            SIPManager.shared.log("Statusabo: NOTIFY \(type) nicht auswertbar: \(snippet)")
+        }
+        handle(new)
     }
 
     private func handle(_ new: LineStatus) {
         let old = status
+        guard new.state != old.state || new.remoteNumber != old.remoteNumber else { return }
         status = new          // Call-Toast (ToastController) beobachtet den Status
         SIPManager.shared.log("Tischtelefon \(settings.deskPhoneExtension): \(new.state.label) \(new.remoteNumber ?? "")")
         CallHistory.shared.deskPhone(old: old, new: new)
