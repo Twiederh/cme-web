@@ -79,7 +79,9 @@ db-implementation=internal
 # Nur Requests an die Apps laufen durch Router/Push, alles andere (REGISTER, ausgehende Anrufe)
 # geht direkt weiter zur CME. CME verwirft die URI-Parameter des Contacts (doroute/CtRt) und schickt
 # Anrufe an sip:<nummer>@${HOST_IP}:${SIP_PORT} – deshalb auch alles an unsere eigene IP routen.
-filter=(is_request && (request.uri.params contains 'doroute' || request.uri.domain == '${HOST_IP}')) || is_response
+# REFER von CME (Jabber-Steuerung) bewusst NICHT an die Apps: Nimmt ein Client ihn an, behandelt CME ihn
+# wie einen echten Cisco-Client und stellt Anrufe auf Shared Lines nur noch nach Cisco-eigenem Abo zu.
+filter=(is_request && request.method != 'REFER' && (request.uri.params contains 'doroute' || request.uri.domain == '${HOST_IP}')) || is_response
 # Bindings unabhängig von der Domain: die App meldet sich als <nummer>@${SIP_DOMAIN} an,
 # CME ruft <nummer>@${HOST_IP} an
 use-global-domain=true
