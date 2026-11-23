@@ -59,7 +59,18 @@ final class PhoneSettings: ObservableObject {
     #if os(iOS)
     private let defaults = UserDefaults.standard
     #else
-    private let defaults = UserDefaults(suiteName: SharedConfig.appGroup) ?? .standard
+    // macOS: eigene UserDefaults der App (Sandbox-Container). Die App-Group brauchte der Mac nie (keine
+    // Extension), und je nach Signierprofil gingen Schreibzugriffe dort verloren.
+    private let defaults: UserDefaults = {
+        let std = UserDefaults.standard
+        if std.object(forKey: "settingsMigrated") == nil {
+            if let old = UserDefaults(suiteName: SharedConfig.appGroup)?.dictionaryRepresentation() {
+                for (k, v) in old where std.object(forKey: k) == nil { std.set(v, forKey: k) }
+            }
+            std.set(true, forKey: "settingsMigrated")
+        }
+        return std
+    }()
     #endif
 
     // MARK: cme-web (liefert den Rest der Einstellungen)

@@ -188,12 +188,25 @@ private struct MediaTab: View {
         .onChange(of: settings.videoEnabled) { _, _ in sip.applyMediaSettings() }
     }
 
+    /// "Studio Display Microphone (AppleUSBAudioEngine:…)" -> "Studio Display Microphone",
+    /// "Default Capture" -> "Standard-Mikrofon"
+    static func cleanName(_ n: String) -> String {
+        var s = n
+        if let r = s.range(of: " (", options: .backwards), s.hasSuffix(")") { s = String(s[..<r.lowerBound]) }
+        switch s {
+        case "Default Capture": return "Standard-Mikrofon (System)"
+        case "Default Playback": return "Standard-Ausgabe (System)"
+        default: return s
+        }
+    }
+
     private func reload() {
         sip.core?.reloadSoundDevices()
         var seen = Set<String>()
         devices = sip.audioDevices.compactMap { d in
             guard seen.insert(d.id).inserted else { return nil }
-            return (d.id, d.deviceName, d.hasCapability(capability: .CapabilityRecord), d.hasCapability(capability: .CapabilityPlay))
+            return (d.id, Self.cleanName(d.deviceName), d.hasCapability(capability: .CapabilityRecord),
+                    d.hasCapability(capability: .CapabilityPlay))
         }
     }
 }
