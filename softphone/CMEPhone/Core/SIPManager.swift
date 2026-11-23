@@ -345,6 +345,19 @@ final class SIPManager: ObservableObject {
 
     func decline(callId: String, toVoicemail: Bool) {
         guard let call = call(withId: callId) else { return }
+        // An die Voicemail: per 302 auf die Voicemail-Nummer umleiten. CME leitet dann den GANZEN Anruf um –
+        // auch bei einem Sammelanschluss, an dem weitere Geräte klingeln (ein "besetzt" beendete nur diesen
+        // Zweig). Asterisk findet das Postfach über die Umleitungsinfo (Diversion: diese Nebenstelle).
+        if toVoicemail, !settings.voicemailNumber.isEmpty {
+            do {
+                let target = try Factory.Instance.createAddress(addr: "sip:\(settings.voicemailNumber)@\(settings.cmeHost)")
+                try call.redirectTo(redirectAddress: target)
+                log("An Voicemail umgeleitet (\(settings.voicemailNumber))")
+                return
+            } catch {
+                log("Umleiten an Voicemail fehlgeschlagen: \(error) – lehne mit besetzt ab")
+            }
+        }
         do { try call.decline(reason: toVoicemail ? .Busy : .Declined) } catch {
             log("Abweisen: \(error)")
             try? call.terminate()

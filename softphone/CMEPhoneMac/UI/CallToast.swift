@@ -206,10 +206,10 @@ final class ToastController: ObservableObject {
 
     func voicemail() {
         guard let t = toast else { return }
-        if t.viaDesk {
-            desk.execute(settings.keyVoicemail)
-            dismissed.insert(t.key + "\(t.phase)")
-            hide()
+        if t.viaDesk, case .softphone(let id) = t.source {
+            // Der Mac klingelt im Sammelanschluss stumm mit: über seinen eigenen Zweig umleiten – das schickt
+            // den ganzen Anruf an die Voicemail (die Divert-Taste am Tischtelefon täte das nicht zuverlässig).
+            sip.decline(callId: id, toVoicemail: true)
             return
         }
         switch t.source {
