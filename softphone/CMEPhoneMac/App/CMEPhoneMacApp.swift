@@ -79,6 +79,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 .receive(on: RunLoop.main)
                 .sink { reg, mode in
                     MainActor.assumeIsolated {
+                        SIPManager.shared.setRingerEnabled(mode == .softphone)
                         if case .ok = reg, mode == .deskPhone {
                             DeskPhoneController.shared.startMonitoring()
                         } else if mode == .softphone {

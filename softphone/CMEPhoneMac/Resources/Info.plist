@@ -50,6 +50,8 @@
 	<string>public.app-category.business</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppSleepDisabled</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

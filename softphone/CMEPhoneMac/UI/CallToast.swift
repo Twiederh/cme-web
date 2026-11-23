@@ -24,6 +24,8 @@ final class ToastController: ObservableObject {
         var since: Date?
         /// Softphone-Gespräch mit Video: Bild als oberer Anhang des Toasts
         var video = false
+        /// Telefonsteuerung: eingehender Anruf auf der Shared Line des Macs – Annehmen am Tischtelefon
+        var viaDesk = false
         var key: String { switch source { case .softphone(let id): return id; case .deskPhone: return "desk" } }
     }
 
@@ -34,6 +36,8 @@ final class ToastController: ObservableObject {
     private var panel: NSPanel?
     private var cancellables = Set<AnyCancellable>()
     private var lookupFor = ""
+    /// Anrufer des letzten Shared-Line-Anrufs – presence meldet nur frei/belegt, nicht wer anruft
+    private var deskCaller: (number: String, name: String)?
 
     private var sip: SIPManager { .shared }
     private var desk: DeskPhoneController { .shared }
@@ -53,7 +57,13 @@ final class ToastController: ObservableObject {
         // Softphone: eingehend vor laufend vor ausgehend (beendete Anrufe nicht mehr zeigen)
         let live = calls.filter { ![.End, .Error, .Released].contains($0.state) }
         let pick = live.first { $0.isIncoming && Self.isRinging($0.state) } ?? live.first { !Self.isRinging($0.state) } ?? live.first
-        if let c = pick {
+        if status.state == .idle { deskCaller = nil }
+        if mode == .deskPhone, let c = pick, c.isIncoming, Self.isRinging(c.state) {
+            // Telefonsteuerung: Der Mac klingelt (stumm) über die Shared Line mit – er kennt den Anrufer,
+            // angenommen wird am Tischtelefon. Nimmt das Tischtelefon an, beendet CME den Mac-Zweig.
+            deskCaller = (c.remote, c.displayName)
+            t = Toast(source: .softphone(c.id), phase: .incoming, number: c.remote, name: c.displayName, viaDesk: true)
+        } else if let c = pick {
             let phase: Phase = Self.isRinging(c.state) ? (c.isIncoming ? .incoming : .outgoing) : .active
             let since = phase == .active ? Date().addingTimeInterval(-TimeInterval(c.duration)) : nil
             t = Toast(source: .softphone(c.id), phase: phase, number: c.remote, name: c.displayName,
@@ -67,8 +77,8 @@ final class ToastController: ObservableObject {
                 t = Toast(source: .deskPhone, phase: .outgoing, number: status.remoteNumber ?? "", name: status.remoteName ?? "")
             case .busy:
                 let keep = toast?.source == .deskPhone && toast?.phase == .active ? toast?.since : Date()
-                t = Toast(source: .deskPhone, phase: .active, number: status.remoteNumber ?? toast?.number ?? "",
-                          name: status.remoteName ?? toast?.name ?? "", since: keep)
+                t = Toast(source: .deskPhone, phase: .active, number: status.remoteNumber ?? deskCaller?.number ?? toast?.number ?? "",
+                          name: status.remoteName ?? deskCaller?.name ?? toast?.name ?? "", since: keep)
             default: break
             }
         }
@@ -157,6 +167,7 @@ final class ToastController: ObservableObject {
 
     func answer() {
         guard let t = toast else { return }
+        if t.viaDesk { desk.answer(); return }
         switch t.source {
         case .softphone(let id): CallCenter.shared.requestAnswer(callId: id)
         case .deskPhone: desk.answer()
@@ -173,6 +184,12 @@ final class ToastController: ObservableObject {
 
     func decline() {
         guard let t = toast else { return }
+        if t.viaDesk {
+            desk.decline()
+            dismissed.insert(t.key + "\(t.phase)")
+            hide()
+            return
+        }
         switch t.source {
         case .softphone(let id): sip.decline(callId: id, toVoicemail: false)
         case .deskPhone:
@@ -184,6 +201,12 @@ final class ToastController: ObservableObject {
 
     func voicemail() {
         guard let t = toast else { return }
+        if t.viaDesk {
+            desk.execute(settings.keyVoicemail)
+            dismissed.insert(t.key + "\(t.phase)")
+            hide()
+            return
+        }
         switch t.source {
         case .softphone(let id): sip.decline(callId: id, toVoicemail: true)
         case .deskPhone:
@@ -279,7 +302,7 @@ struct CallToastView: View {
             parts.append(String(format: "%d:%02d", secs / 60, secs % 60))
             if rec.isOn { parts.append("● Aufnahme") }
         }
-        if t.source == .deskPhone { parts.append("Tischtelefon") }
+        if t.source == .deskPhone || t.viaDesk { parts.append("Tischtelefon") }
         return parts.joined(separator: " · ")
     }
 

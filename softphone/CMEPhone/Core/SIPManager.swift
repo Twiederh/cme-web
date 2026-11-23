@@ -310,6 +310,16 @@ final class SIPManager: ObservableObject {
     /// Eingehenden Anruf abweisen.
     /// toVoicemail: 486 Busy – CME leitet dann per "call-forward b2bua busy" (setzt cme-web für Nummern mit
     /// Postfach) an die Voicemail. Sonst 603 Decline.
+    #if os(macOS)
+    private var defaultRing: String?
+    /// Telefonsteuerung: Mac klingelt über die Shared Line nur stumm mit (Toast), es klingelt das Tischtelefon.
+    func setRingerEnabled(_ on: Bool) {
+        guard let core else { return }
+        if defaultRing == nil { defaultRing = core.ring ?? "" }
+        core.ring = on ? (defaultRing?.isEmpty == false ? defaultRing : nil) : nil
+    }
+    #endif
+
     func decline(callId: String, toVoicemail: Bool) {
         guard let call = call(withId: callId) else { return }
         do { try call.decline(reason: toVoicemail ? .Busy : .Declined) } catch {
