@@ -190,7 +190,7 @@ final class PhoneSettings: ObservableObject {
         keyVoicemail = d.string(forKey: "keyVoicemail") ?? "Key:Soft2"
         deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
         localRecording = d.object(forKey: "localRecording") as? Bool ?? true
-        ciscoLineMode = d.object(forKey: "ciscoLineMode") as? Bool ?? false
+        ciscoLineMode = d.object(forKey: "ciscoLineMode") as? Bool ?? true
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
         audioInputId = d.string(forKey: "audioInputId") ?? ""
         audioOutputId = d.string(forKey: "audioOutputId") ?? ""

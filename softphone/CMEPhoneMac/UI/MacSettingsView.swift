@@ -116,7 +116,7 @@ private struct GeneralTab: View {
             Section {
                 Toggle("Wie ein Cisco-Telefon anmelden", isOn: $settings.ciscoLineMode)
                     .onChange(of: settings.ciscoLineMode) { SIPManager.shared.applyAccount() }
-            } header: { Text("Shared Line (experimentell)") } footer: {
+            } header: { Text("Shared Line") } footer: {
                 Text("Meldet die App mit den Cisco-Merkmalen eines Tischtelefons an und abonniert die eigene Leitung, "
                      + "damit CME sie auf einer Shared Line mit anklingelt. Bei Problemen wieder ausschalten.")
             }
