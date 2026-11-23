@@ -190,6 +190,11 @@ final class PhoneSettings: ObservableObject {
         keyVoicemail = d.string(forKey: "keyVoicemail") ?? "Key:Soft2"
         deskPhoneNotify = d.object(forKey: "deskPhoneNotify") as? Bool ?? true
         localRecording = d.object(forKey: "localRecording") as? Bool ?? true
+        // Bis zur Version mit Standard "an" wurde der Schalter als "aus" gespeichert – einmalig einschalten
+        if d.object(forKey: "ciscoLineModeDefaultOn") == nil {
+            d.set(true, forKey: "ciscoLineModeDefaultOn")
+            d.set(true, forKey: "ciscoLineMode")
+        }
         ciscoLineMode = d.object(forKey: "ciscoLineMode") as? Bool ?? true
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
         audioInputId = d.string(forKey: "audioInputId") ?? ""
