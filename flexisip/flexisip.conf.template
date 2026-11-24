@@ -10,9 +10,11 @@
 ## Die App registriert sich mit Identität sip:<nst>@<SIP_DOMAIN> und nutzt Flexisip als Outbound-Proxy.
 ## SIP_DOMAIN muss ein NAME sein (keine IP): Den Registrar mit IP-Domain verwirft Flexisip stillschweigend,
 ## wenn die IP nicht ihm selbst gehört. Weitergeleitet wird per Route an die IP der Anlage (CME_IP).
-## Flexisip leitet das REGISTER an CME weiter (Request-URI = CME), ersetzt dabei den Contact durch
-## seine eigene Adresse (ContactRouteInserter) und registriert das Gerät erst lokal,
-## wenn CME mit 200 OK antwortet (reg-on-response).
+## Flexisip ist Registrar für alle Apps einer Nummer (iPhone, iPad). Das REGISTER geht zur Passwortprüfung
+## an cme-web (sharedline.py, Pool MOB<Nummer>); Flexisip registriert das Gerät erst lokal, wenn cme-web mit
+## 200 OK antwortet (reg-on-response). An CME meldet cme-web EINEN Pool MOB<Nummer> mit Flexisip als Ziel an
+## und hält dafür das Shared-Line-Abo. CME ruft dann sip:<nummer>@${HOST_IP}:${SIP_PORT} an, Flexisip weckt
+## und klingelt alle Apps der Nummer parallel an. (Der Mac meldet sich wie Jabber direkt an CME an.)
 ##
 ## Vorlage: entrypoint.sh setzt beim Start die Werte aus dem Stack ein und schreibt /etc/flexisip/flexisip.conf
 ##   ${HOST_IP}      LAN-IP des Docker-Hosts (VM_HOST_IP)
@@ -65,7 +67,7 @@ masquerade-contacts-for-invites=false
 [module::Registrar]
 enabled=true
 reg-domains=*
-# Gerät erst lokal registrieren, wenn CME 200 OK antwortet
+# Gerät erst lokal registrieren, wenn cme-web (Passwortprüfung) 200 OK antwortet
 reg-on-response=true
 # Keine GRUU: sonst schickt Flexisip CME die GRUU (…@${SIP_DOMAIN};gr=…) als Contact und die App nutzt sie in
 # SUBSCRIBE/INVITE – Folge-Requests von CME (NOTIFY, BYE) gingen dann per Domain-Route zurück an CME (481).
@@ -81,7 +83,9 @@ db-implementation=internal
 # Anrufe an sip:<nummer>@${HOST_IP}:${SIP_PORT} – deshalb auch alles an unsere eigene IP routen.
 # REFER von CME (Jabber-Steuerung) bewusst NICHT an die Apps: Nimmt ein Client ihn an, behandelt CME ihn
 # wie einen echten Cisco-Client und stellt Anrufe auf Shared Lines nur noch nach Cisco-eigenem Abo zu.
-filter=(is_request && request.method != 'REFER' && (request.uri.params contains 'doroute' || request.uri.domain == '${HOST_IP}')) || is_response
+# NOTIFY/OPTIONS der CME (service-control, Keepalive) gehen ebenfalls nicht an die Apps (würde sie per Push
+# wecken), sondern per Route an cme-web, das sie bestätigt (entrypoint.sh).
+filter=(is_request && request.method != 'REFER' && request.method != 'NOTIFY' && request.method != 'OPTIONS' && (request.uri.params contains 'doroute' || request.uri.domain == '${HOST_IP}')) || is_response
 # Bindings unabhängig von der Domain: die App meldet sich als <nummer>@${SIP_DOMAIN} an,
 # CME ruft <nummer>@${HOST_IP} an
 use-global-domain=true

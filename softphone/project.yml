@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "5.10"
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"  # iPhone + iPad
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "251"   # TestFlight-Build-Nummer: bei jedem Upload erhöhen (z.B. auf die Build-Nummer aus build.command)
     CME_BUILD_INFO: "Xcode"   # build.command setzt Git-Commit und Zeit ein
     # Apple Vision Pro: die iPad-App läuft dort als "Designed for iPad" (kein eigenes visionOS-SDK von Linphone)
     SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: YES

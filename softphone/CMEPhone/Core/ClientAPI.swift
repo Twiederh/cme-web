@@ -19,6 +19,8 @@ enum ClientAPI {
         var voicemail: String
         var recording: Recording
         var auth: Auth?
+        /// iPhone/iPad (Anmeldung über das Push-Gateway): Zugang des Pools MOB<Nummer>, gilt für alle Mobilgeräte
+        var mobileAuth: Auth?
         var deskphone: DeskAuth?
         /// IP der CME für die direkte Anmeldung (Mac, Jabber-Modus)
         var cmeIP: String?
@@ -27,6 +29,7 @@ enum ClientAPI {
             case ext, gateway, localpush, voicemail, recording, auth, deskphone
             case deviceName = "device_name"
             case cmeIP = "cme_ip"
+            case mobileAuth = "mobile_auth"
             case cmeHost = "cme_host"
         }
     }

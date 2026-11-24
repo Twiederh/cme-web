@@ -93,3 +93,74 @@ def test_self_subscribed_device_is_left_alone(monkeypatch):
     for _ in range(3):
         agent.sync(want, {"+49": {"192.168.7.213"}})
     assert agent.status() == []
+
+
+def test_app_register_checks_mobile_pool_password():
+    creds = {"MOB4961874191283": {"username": "MOB4961874191283", "password": "Geheim123"}}
+    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda d, *a: creds.get(d, {}), "cme.local")
+    agent_port = agent.sock.getsockname()[1]
+    app = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    app.bind(("127.0.0.1", 0))
+    app.settimeout(2)
+
+    def reg(auth=""):
+        msg = ("REGISTER sip:cme.local SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:5062;branch=z9hG4bK1\r\n"
+               "From: <sip:+4961874191283@cme.local>;tag=a\r\nTo: <sip:+4961874191283@cme.local>\r\n"
+               "Call-ID: c1\r\nCSeq: 1 REGISTER\r\nContact: <sip:+4961874191283@10.0.0.5:5062;transport=tcp>\r\n"
+               "Expires: 3600\r\n" + (f"Authorization: {auth}\r\n" if auth else "") + "Content-Length: 0\r\n\r\n")
+        app.sendto(msg.encode(), ("127.0.0.1", agent_port))
+        return app.recvfrom(65535)[0].decode()
+
+    r = reg()
+    assert r.startswith("SIP/2.0 401"), r
+    ch = sharedline._header(r, "WWW-Authenticate")
+    bad = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOB4961874191283", "falsch")
+    assert reg(bad).startswith("SIP/2.0 401")
+    ch = sharedline._header(reg(), "WWW-Authenticate")
+    good = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOB4961874191283", "Geheim123")
+    ok = reg(good)
+    assert ok.startswith("SIP/2.0 200"), ok
+    assert "Expires: 600" in ok and "expires=600" in ok
+
+
+def test_app_register_without_mobile_pool_is_forbidden():
+    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda d, *a: {}, "cme.local")
+    app = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    app.bind(("127.0.0.1", 0))
+    app.settimeout(2)
+    app.sendto(b"REGISTER sip:cme.local SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1;branch=z9hG4bK2\r\nFrom: <sip:+49@cme.local>;tag=a\r\n"
+               b"To: <sip:+49@cme.local>\r\nCall-ID: c2\r\nCSeq: 1 REGISTER\r\nContent-Length: 0\r\n\r\n",
+               ("127.0.0.1", agent.sock.getsockname()[1]))
+    assert app.recvfrom(65535)[0].decode().startswith("SIP/2.0 403")
+
+
+def test_mobile_pool_registers_at_cme_with_flexisip_contact(monkeypatch):
+    cme = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    cme.bind(("127.0.0.1", 0))
+    seen = []
+
+    def run():
+        while True:
+            data, addr = cme.recvfrom(65535)
+            msg = data.decode()
+            seen.append(msg)
+            h = {k: v for k, v in re.findall(r"^(Via|From|To|Call-ID|CSeq):\s*(.*)$", msg, re.M)}
+            base = f"Via: {h['Via']}\r\nFrom: {h['From']}\r\nTo: {h['To']};tag=x\r\nCall-ID: {h['Call-ID']}\r\nCSeq: {h['CSeq']}\r\n"
+            if "Authorization:" not in msg:
+                cme.sendto(("SIP/2.0 401 Unauthorized\r\n" + base +
+                            'WWW-Authenticate: Digest realm="wiederhol.de",nonce="N1",algorithm=MD5,qop="auth"\r\n'
+                            "Content-Length: 0\r\n\r\n").encode(), addr)
+            else:
+                cme.sendto(("SIP/2.0 200 OK\r\n" + base + "Content-Length: 0\r\n\r\n").encode(), addr)
+
+    threading.Thread(target=run, daemon=True).start()
+    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "192.168.1.110:5062")
+    monkeypatch.setattr(agent, "_send", lambda text: agent.sock.sendto(text.encode(), cme.getsockname()))
+    agent.sync_regs([{"number": "+4961874191283", "device": "MOB4961874191283", "username": "MOB4961874191283",
+                      "password": "Geheim123"}])
+    st = agent.reg_status()
+    assert st[0]["state"] == "angemeldet", st
+    last = seen[-1]
+    assert '<sip:+4961874191283@192.168.1.110:5062;transport=udp>' in last
+    assert 'devicename.ccm.cisco.com="MOB4961874191283"' in last
+    assert 'username="MOB4961874191283"' in last

@@ -258,8 +258,12 @@ final class SIPManager: ObservableObject {
             // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
             // cme-web legt die App als Pool "id device-id-name CSF<Nebenstelle>" an; den Namen schickt die App
             // wie Jabber im Contact mit.
-            params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
-                + (settings.ciscoLineMode ? ";+u.sip!model.ccm.cisco.com=\"503\"" : "")
+            // Über das Push-Gateway meldet sich die App nur bei Flexisip an (cme-web prüft das Passwort);
+            // die Cisco-Merkmale braucht nur die direkte Anmeldung an CME.
+            if settings.jabberMode {
+                params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
+                    + ";+u.sip!model.ccm.cisco.com=\"503\""
+            }
 
             #if os(iOS)
             // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.
@@ -287,7 +291,7 @@ final class SIPManager: ObservableObject {
             }
 
             let account = try core.createAccount(params: params)
-            if settings.ciscoLineMode {
+            if settings.jabberMode {
                 // Wie ein Cisco-Telefon (8845: "Supported: …,X-cisco-sis-7.0.0,…"). CME antwortet dann mit
                 // X-cisco-cme-sis und behandelt das Gerät als Cisco-Endgerät (Shared Line, dialog-Abo).
                 account.addCustomHeader(headerName: "Supported", headerValue: Self.ciscoSupported)
@@ -367,7 +371,7 @@ final class SIPManager: ObservableObject {
 
     /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren.
     private func subscribeOwnLine() {
-        guard settings.ciscoLineMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
+        guard settings.jabberMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
         do {
             let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
             // CME nimmt das Gerät nur in die Shared Line auf ("show shared-line details"), wenn das Abo die eigene

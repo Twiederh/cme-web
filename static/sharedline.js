@@ -19,6 +19,11 @@
         Shared-Line-Abos für Fremdgeräte halten</label>
       ${j.error ? `<div class="msg bad" style="display:block">${esc(j.error)}</div>` : ""}
       <div class="kv"><span class="muted">Port für CME</span><span class="mono">${esc(j.host || "?")}:${esc(j.port)} (UDP)</span></div>
+      ${(j.mobile || []).length ? `<h3>Mobilgeräte (Pools MOB…, Ziel ${esc(j.flexisip || "Gateway")})</h3>
+        <table><thead><tr><th>Rufnummer</th><th>Pool</th><th>Anmeldung an CME</th><th>Letzte App-Anmeldung</th></tr></thead><tbody>
+        ${j.mobile.map(m => `<tr><td class="mono">${esc(m.number)}</td><td class="mono">${esc(m.device)}</td>
+          <td>${m.state === "angemeldet" ? badge("ok", "angemeldet") : badge("bad", esc(m.error || m.state))}</td>
+          <td>${since(m.apps)}</td></tr>`).join("")}</tbody></table>` : ""}
       <h3>Abos</h3>
       ${subs.length ? `<table><thead><tr><th>Rufnummer</th><th>Gerät</th><th>Pool</th><th>Status</th><th>Seit</th></tr></thead><tbody>
         ${subs.map(s => `<tr><td class="mono">${esc(s.number)}</td><td class="mono">${esc(s.ip)}</td><td>${esc(s.pool)}</td>

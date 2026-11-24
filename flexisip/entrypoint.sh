@@ -8,6 +8,8 @@ SIP_DOMAIN="${SIP_DOMAIN:-cme.local}"
 SIP_GW_NAME="${SIP_GW_NAME:-}"
 SIP_PORT="${SIP_PORT:-5062}"
 RELAY_PORT="${RELAY_PORT:-8092}"
+# cme-web (sharedline.py): prueft die Anmeldungen der Apps und bestaetigt Anfragen der CME an Flexisip
+SHARED_LINE_PORT="${SHARED_LINE_PORT:-5074}"
 LOG_LEVEL="${LOG_LEVEL:-message}"
 src=/usr/local/share/flexisip/flexisip.conf.template
 [ -f /etc/flexisip/flexisip.local.conf ] && src=/etc/flexisip/flexisip.local.conf
@@ -15,8 +17,14 @@ src=/usr/local/share/flexisip/flexisip.conf.template
 sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${SIP_GW_NAME}|${SIP_GW_NAME}|g" \
     -e "s|\${SIP_PORT}|${SIP_PORT}|g" -e "s|\${RELAY_PORT}|${RELAY_PORT}|g" -e "s|\${LOG_LEVEL}|${LOG_LEVEL}|g" -e "s|\${SIP_DOMAIN}|${SIP_DOMAIN}|g" \
     "$src" > /run/flexisip.conf
-# Route zu CME für die SIP-Domain der Apps (lr = Request-URI bleibt sip:...@<Domain>) und für die CME-IP
+# Routen (die erste passende gilt):
+#  * REGISTER der Apps -> cme-web: prueft das Passwort des Mobilgeraete-Pools; Flexisip ist Registrar fuer
+#    alle iPhones/iPads, CME sieht nur EINE Anmeldung je Nummer (die macht cme-web, Ziel = Flexisip)
+#  * NOTIFY/REFER/OPTIONS der CME an Flexisip (service-control, Rufumleitung, Keepalive) -> cme-web bestaetigt
+#  * Anrufe der Apps (SIP-Domain) und alles an die CME-IP -> CME (lr = Request-URI bleibt sip:...@<Domain>)
 {
+  echo "<sip:${HOST_IP}:${SHARED_LINE_PORT};transport=udp;lr>   request.method == 'REGISTER'"
+  echo "<sip:${HOST_IP}:${SHARED_LINE_PORT};transport=udp;lr>   (request.method == 'NOTIFY' || request.method == 'REFER' || request.method == 'OPTIONS') && request.uri.domain == '${HOST_IP}'"
   echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${SIP_DOMAIN}'"
   echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${CME_IP}'"
 } > /run/flexisip-routes.conf

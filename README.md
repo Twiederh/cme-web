@@ -438,8 +438,16 @@ Der Tab „Telefonbuch“ verwaltet Rufnummern mit Namen:
 Eigene App für iPhone/iPad (nur über die Telefon-App und CallKit, Einstellungen in der
 Einstellungen-App) und Mac (Menüleiste, Call-Toast, wahlweise Softphone oder Steuerung eines
 Cisco-Tischtelefons). Im Tab **Softphone**: APNs-Schlüssel hochladen, Local Push, App-Schlüssel,
-Status. Am Router wird jede App als Telefon vom Typ **CME Phone** angelegt
-(`id device-id-name CSF<Nebenstelle>`, `type Jabber-CSF-Client`).
+Status.
+
+* **Mac**: meldet sich wie Cisco Jabber direkt an CME an (UDP oder TCP, Port 5060) – Telefon vom
+  Typ **CME Phone** (`id device-id-name CSF<Nummer>`, `type Jabber-CSF-Client`). Er abonniert seine
+  Leitung selbst und klingelt so auf einer Shared Line mit.
+* **iPhone/iPad**: melden sich nur am Push-Gateway (Flexisip) an. Flexisip reicht ihre REGISTER an
+  cme-web weiter (Port `SHARED_LINE_PORT`), das sie mit dem Passwort des Pools `MOB<Nummer>` prüft.
+  Diesen einen Pool je Nummer (Tab Softphone → „Mobilgeräte einrichten“) meldet cme-web mit Flexisip
+  als Ziel an CME an und hält dafür das Shared-Line-Abo. Klingelt die Nummer, weckt Flexisip alle
+  iPhones/iPads der Nummer und klingelt sie parallel an.
 Die Apps holen sich ihre Einstellungen über `/client/v1/…` (Anmeldung mit dem App-Schlüssel)
 und schalten darüber auch die Gesprächsaufzeichnung ein und aus.
 Anleitung: [softphone/README.md](softphone/README.md).

@@ -288,7 +288,10 @@ final class PhoneSettings: ObservableObject {
             if !info.localpush.ssids.isEmpty { localPushSSIDs = info.localpush.ssids.joined(separator: ", ") }
         }
         voicemailNumber = info.voicemail
-        if let a = info.auth, let pw = a.password, !pw.isEmpty {
+        // Direkt an CME (Mac, wie Jabber): eigener Pool CSF<Nummer>. Über das Push-Gateway (iPhone/iPad):
+        // Flexisip ist Registrar, cme-web prüft das Passwort des Pools MOB<Nummer> (gilt für alle Mobilgeräte).
+        let mobile = info.mobileAuth.flatMap { ($0.password ?? "").isEmpty ? nil : $0 }
+        if let a = (jabberMode ? info.auth : (mobile ?? info.auth)), let pw = a.password, !pw.isEmpty {
             password = pw
             authUser = a.username ?? ""
         }

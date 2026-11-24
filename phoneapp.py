@@ -34,6 +34,9 @@ RE_HOST = re.compile(r"^[A-Za-z0-9.\-:\[\]]{1,253}$")
 RE_REC_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 ENVS = ("auto", "sandbox", "production")
 DEVICE_PREFIX = "CSF"          # Geraetename der App am Router (wie cme_web.SOFTPHONE_PREFIX)
+# Mobilgeraete (iPhone/iPad) einer Rufnummer: EIN Pool "MOB<Nummer>", den cme-web (sharedline.py) mit Ziel
+# Flexisip an CME anmeldet. Die Apps melden sich nur an Flexisip an; das Passwort dieses Pools prueft cme-web.
+MOBILE_PREFIX = "MOB"
 
 
 class AppError(ValueError):
@@ -179,7 +182,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                 cur["plain"] = parts[3] if len(parts) == 4 else ""
             elif parts[:1] == ["number"] and len(parts) >= 4:
                 cur["dns"].append(parts[3])
-        return [p for p in pools if p["device"].startswith(DEVICE_PREFIX)]
+        return [p for p in pools if p["device"].startswith((DEVICE_PREFIX, MOBILE_PREFIX))]
 
     def new_pw() -> str:
         import string
@@ -322,8 +325,20 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             sv = saved.get(p["device"])
             ok = bool(sv and (not p["username"] or sv["username"] == p["username"])) or bool(p["plain"])
             out.append({"tag": p["tag"], "device": p["device"], "username": p["username"], "dns": p["dns"],
-                        "creds": ok, "set": (sv or {}).get("set", "")})
-        return jsonify(ok=True, devices=out)
+                        "creds": ok, "set": (sv or {}).get("set", ""),
+                        "kind": "mobile" if p["device"].startswith(MOBILE_PREFIX) else "app"})
+        # Rufnummern fuer "Mobilgeraete einrichten" (Pool MOB<Nummer>)
+        numbers = []
+        try:
+            from cme_web import parse_voice_register_config
+            dns, _ = parse_voice_register_config(router.show("show running-config | section voice register"))
+            have = {p["device"] for p in out}
+            numbers = [{"tag": t, "number": d["number"], "shared": d["shared"],
+                        "mobile": (MOBILE_PREFIX + d["number"].lstrip("+")).upper() in have}
+                       for t, d in sorted(dns.items(), key=lambda x: int(x[0])) if d.get("number")]
+        except Exception:  # noqa: BLE001
+            pass
+        return jsonify(ok=True, devices=out, numbers=numbers)
 
     @app.post("/api/phoneapp/devices/<tag>/credentials")
     def admin_set_credentials(tag):
@@ -347,6 +362,38 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             pass
         creds_store(pool["device"], username, pw)
         return jsonify(ok=True, username=username)
+
+    @app.post("/api/phoneapp/mobile")
+    def admin_mobile():
+        """{"dn": "<tag>"} - Pool MOB<Nummer> fuer die iPhones/iPads dieser Rufnummer anlegen."""
+        from cme_web import parse_voice_register_config
+        tag_dn = str((request.get_json(force=True) or {}).get("dn", "")).strip()
+        dns, pools = parse_voice_register_config(router.show("show running-config | section voice register"))
+        dn = dns.get(tag_dn)
+        if not dn or not dn.get("number"):
+            raise AppError("Unbekannte Rufnummer.")
+        device = (MOBILE_PREFIX + dn["number"].lstrip("+")).upper()
+        if any(p["device_id"].upper() == device for p in pools.values()):
+            raise AppError(f"Für {dn['number']} gibt es den Pool {device} schon.")
+        tag = str(max([int(t) for t in pools] + [0]) + 1)
+        pw = new_pw()
+        lines = []
+        if not dn.get("shared"):
+            lines += [f"voice register dn {tag_dn}", " shared-line max-calls 5"]
+        lines += [f"voice register pool {tag}", f" id device-id-name {device}", " type Jabber-CSF-Client",
+                  f" number 1 dn {tag_dn}", f" username {device} password {pw}", " dtmf-relay rtp-nte sip-notify",
+                  " description CME Phone iPhone/iPad", "voice register global", " create profile"]
+        out = router.configure(lines)
+        bad = [l for l in str(out).splitlines() if "jabber-config" not in l
+               and (l.strip().startswith("%") or "is in use" in l or "Invalid" in l or "Error" in l)]
+        if bad:
+            raise AppError("Der Router hat den Pool nicht angelegt:\n" + "\n".join(bad[:5]))
+        try:
+            router.save()
+        except Exception:  # noqa: BLE001
+            pass
+        creds_store(device, device, pw)
+        return jsonify(ok=True, tag=tag, device=device)
 
     @app.post("/api/phoneapp/renew")
     def admin_renew():
@@ -424,11 +471,13 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             return jsonify(ok=False, error="App-Schlüssel fehlt oder ist falsch."), 401
         return None
 
-    def pool_credentials(ext: str) -> dict:
-        """SIP-Zugangsdaten des Pools CSF<ext>: aus cme-web (hier gesetzt) oder Klartext aus dem Router.
-        Passt der gespeicherte Benutzer nicht mehr zum Pool, gilt er als veraltet."""
-        want = (DEVICE_PREFIX + ext.lstrip("+")).upper()
-        pool = next((p for p in app_pools() if p["device"] == want), None)
+    def pool_credentials(ext: str, prefix: str = DEVICE_PREFIX) -> dict:
+        """SIP-Zugangsdaten des Pools CSF<ext> (bzw. MOB<ext>): aus cme-web (hier gesetzt) oder Klartext aus dem
+        Router. Passt der gespeicherte Benutzer nicht mehr zum Pool, gilt er als veraltet."""
+        return device_credentials((prefix + ext.lstrip("+")).upper())
+
+    def device_credentials(want: str, pools: list[dict] | None = None) -> dict:
+        pool = next((p for p in (pools if pools is not None else app_pools()) if p["device"] == want), None)
         saved = creds_all().get(want)
         if saved and (pool is None or not pool["username"] or pool["username"] == saved["username"]):
             return {"username": saved["username"], "password": saved["password"]}
@@ -452,6 +501,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                                   "ssids": [x for x in s.get("ssids", "").split(",") if x]},
                        voicemail=pilot(),
                        auth=pool_credentials(ext),
+                       # iPhone/iPad: Anmeldung nur an Flexisip, Passwort des Mobilgeraete-Pools (leer = keiner)
+                       mobile_auth=pool_credentials(ext, MOBILE_PREFIX),
                        deskphone={"user": s.get("exec_user", "cmephone"), "password": s.get("exec_password", "")},
                        recording={"available": bool(r), "mode": (r["settings"]().get("mode", "always") if r else "")})
 
@@ -470,6 +521,9 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         on = bool(d.get("on"))
         rec()["set"](rid, on)
         return jsonify(ok=True, on=on)
+
+    # fuer sharedline.py: Mobilgeraete-Pools anmelden, Passwoerter der Apps pruefen
+    app.config["PHONEAPP_MOBILE"] = {"prefix": MOBILE_PREFIX, "pools": app_pools, "credentials": device_credentials}
 
     if not demo:
         try:
