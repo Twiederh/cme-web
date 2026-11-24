@@ -135,8 +135,11 @@ final class SIPManager: ObservableObject {
             // zufälligen Absenderport. Der SIP-Helfer der UDM (nf_conntrack_sip) hält die Verbindung Mac→CME:5060
             // dann für unbeantwortet und lässt das INVITE der CME an den Mac nicht durch. Cisco Jabber darf auf
             // demselben Mac nicht gleichzeitig laufen.
-            t.udpPort = settings.jabberMode ? 5060 : -1
-            t.tcpPort = -1
+            // Jabber-Modus mit TCP (Einstellung "Transport"): keine IP-Fragmente. Ein INVITE der CME ist rund
+            // 1.560 Byte groß; per UDP kommt es fragmentiert an, die UDM setzt es zusammen und schickt es –
+            // bei Jumbo-Frames auf ihrer Seite – als einen zu großen Frame weiter, den der Mac (MTU 1500) verwirft.
+            t.udpPort = settings.jabberMode && !jabberTCP ? 5060 : -1
+            t.tcpPort = jabberTCP ? 5060 : -1
             try? core.setTransports(newValue: t)
         }
         #endif
@@ -171,6 +174,10 @@ final class SIPManager: ObservableObject {
     // MARK: - Konto
 
     private var applyGeneration = 0
+    /// Jabber-Modus direkt an CME: UDP wie Jabber, oder TCP, wenn in den Einstellungen gewählt
+    /// (CME-Pool dann mit "session-transport tcp"). TLS wird hier nicht unterstützt.
+    private var jabberTCP: Bool { settings.jabberMode && settings.transport == .tcp }
+    private var jabberTransport: TransportType { jabberTCP ? .Tcp : .Udp }
     /// Jabber-Modus: CME lehnt eine neue Anmeldung (neue Call-ID) mit "403 Registration is active for another
     /// client" ab, solange eine frühere noch gilt – etwa nach einem Absturz. Ein Abmelden mit neuer Call-ID
     /// beantwortet CME mit 404. Deshalb kurze Anmeldedauer (s. jabberExpires) und bei 403 regelmäßig neu versuchen.
@@ -210,6 +217,17 @@ final class SIPManager: ObservableObject {
         guard let core else { return }
         core.clearAllAuthInfo()
         guard settings.isConfigured else { log("Kein Konto konfiguriert"); return }
+        #if os(macOS)
+        // Transport im Jabber-Modus geändert (UDP ↔ TCP): lokale Ports ohne Neustart anpassen
+        if settings.jabberMode, let t = core.transports {
+            let udp = jabberTCP ? -1 : 5060, tcp = jabberTCP ? 5060 : -1
+            if t.udpPort != udp || t.tcpPort != tcp {
+                t.udpPort = udp; t.tcpPort = tcp
+                try? core.setTransports(newValue: t)
+                log("Jabber-Modus: \(jabberTCP ? "TCP" : "UDP") 5060")
+            }
+        }
+        #endif
 
         do {
             let identity = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
@@ -231,7 +249,7 @@ final class SIPManager: ObservableObject {
             }
             let server = try Factory.Instance.createAddress(addr: "sip:\(serverHost):\(serverPort)")
             // Jabber meldet sich per UDP direkt an der CME an
-            try server.setTransport(newValue: settings.jabberMode ? .Udp : settings.transport.linphone)
+            try server.setTransport(newValue: settings.jabberMode ? jabberTransport : settings.transport.linphone)
             try params.setServeraddress(newValue: server)
             // Bei Gateway-Betrieb: alle Requests über Flexisip (Outbound-Proxy), Request-URI bleibt CME.
             params.outboundProxyEnabled = viaGateway
@@ -328,7 +346,7 @@ final class SIPManager: ObservableObject {
                 let p = try core.createAccountParams()
                 try p.setIdentityaddress(newValue: try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(host)"))
                 let server = try Factory.Instance.createAddress(addr: "sip:\(settings.sipHost):5060")
-                try server.setTransport(newValue: .Udp)
+                try server.setTransport(newValue: jabberTransport)
                 try p.setServeraddress(newValue: server)
                 p.registerEnabled = false
                 p.pushNotificationAllowed = false
