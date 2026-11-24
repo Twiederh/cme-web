@@ -87,6 +87,9 @@ final class PhoneSettings: ObservableObject {
     @Published var cmeIP: String { didSet { save() } }
     /// Gerätename des Pools laut cme-web (bleibt, wenn der Pool auf eine andere Nummer umgestellt wird)
     @Published var poolDeviceName: String { didSet { save() } }
+    /// Gerätename, wie in cme-web angelegt (Mac: Pool vom Typ CME Phone, z.B. SIPMacMini; iPhone/iPad:
+    /// Mobilgerät, z.B. MOBIphone). Leer: cme-web sucht den Pool über die Nummer.
+    @Published var deviceLabel: String { didSet { save() } }
     /// SIP-Passwort des Pools (CME verlangt es von Soft-Clients; kommt aus cme-web)
     @Published var password: String { didSet { save() } }
     /// SIP-Benutzername des Pools (leer = Nebenstelle ohne "+")
@@ -168,6 +171,7 @@ final class PhoneSettings: ObservableObject {
         cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
         cmeIP = d.string(forKey: "cmeIP") ?? "192.168.11.4"
         poolDeviceName = d.string(forKey: "poolDeviceName") ?? ""
+        deviceLabel = d.string(forKey: "deviceLabel") ?? ""
         password = d.string(forKey: "password") ?? ""
         authUser = d.string(forKey: "authUser") ?? ""
         useGateway = d.object(forKey: "useGateway") as? Bool ?? true
@@ -239,6 +243,7 @@ final class PhoneSettings: ObservableObject {
         cmeWebURL = (d.string(forKey: "cmeWebURL") ?? "").trimmingCharacters(in: .whitespaces)
         appToken = (d.string(forKey: "appToken") ?? "").trimmingCharacters(in: .whitespaces)
         extensionNumber = (d.string(forKey: "extensionNumber") ?? "").trimmingCharacters(in: .whitespaces)
+        deviceLabel = (d.string(forKey: "deviceLabel") ?? "").trimmingCharacters(in: .whitespaces)
         displayName = d.string(forKey: "displayName") ?? ""
         cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
         gatewayHost = d.string(forKey: "gatewayHost") ?? gatewayHost
@@ -268,7 +273,7 @@ final class PhoneSettings: ObservableObject {
     var accountFingerprint: String {
         [extensionNumber, displayName, cmeHost, password, authUser, "\(useGateway)", gatewayHost, "\(gatewayPort)",
          transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)",
-         "\(ciscoLineMode)", cmeIP, poolDeviceName].joined(separator: "|")
+         "\(ciscoLineMode)", cmeIP, poolDeviceName, deviceLabel].joined(separator: "|")
     }
 
     /// Werte aus cme-web übernehmen (GET /client/v1/info).
@@ -345,6 +350,7 @@ final class PhoneSettings: ObservableObject {
         d.set(cmeHost, forKey: "cmeHost")
         d.set(cmeIP, forKey: "cmeIP")
         d.set(poolDeviceName, forKey: "poolDeviceName")
+        d.set(deviceLabel, forKey: "deviceLabel")
         d.set(password, forKey: "password")
         d.set(authUser, forKey: "authUser")
         d.set(useGateway, forKey: "useGateway")

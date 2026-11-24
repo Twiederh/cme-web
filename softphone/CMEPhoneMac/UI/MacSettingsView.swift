@@ -55,6 +55,7 @@ private struct AccountTab: View {
                 TextField("cme-web-Adresse", text: $settings.cmeWebURL, prompt: Text("https://…"))
                 SecureField("App-Schlüssel", text: $settings.appToken)
                 TextField("Nebenstelle des Macs", text: $settings.extensionNumber)
+                TextField("Gerätename", text: $settings.deviceLabel, prompt: Text("z. B. SIPMacMini"))
                 TextField("Anzeigename", text: $settings.displayName)
                 HStack {
                     Text(settings.provisioningStatus.isEmpty ? "Noch nicht abgerufen" : settings.provisioningStatus)

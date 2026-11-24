@@ -441,13 +441,15 @@ Cisco-Tischtelefons). Im Tab **Softphone**: APNs-Schlüssel hochladen, Local Pus
 Status.
 
 * **Mac**: meldet sich wie Cisco Jabber direkt an CME an (UDP oder TCP, Port 5060) – Telefon vom
-  Typ **CME Phone** (`id device-id-name CSF<Nummer>`, `type Jabber-CSF-Client`). Er abonniert seine
-  Leitung selbst und klingelt so auf einer Shared Line mit.
-* **iPhone/iPad**: melden sich nur am Push-Gateway (Flexisip) an. Flexisip reicht ihre REGISTER an
-  cme-web weiter (Port `SHARED_LINE_PORT`), das sie mit dem Passwort des Pools `MOB<Nummer>` prüft.
-  Diesen einen Pool je Nummer (Tab Softphone → „Mobilgeräte einrichten“) meldet cme-web mit Flexisip
-  als Ziel an CME an und hält dafür das Shared-Line-Abo. Klingelt die Nummer, weckt Flexisip alle
-  iPhones/iPads der Nummer und klingelt sie parallel an.
+  Typ **CME Phone** (`id device-id-name <Name>`, z. B. `SIPMacMini`, `type Jabber-CSF-Client`). Er
+  abonniert seine Leitung selbst und klingelt so auf einer Shared Line mit.
+* **iPhone/iPad/Vision Pro**: melden sich nur am Push-Gateway (Flexisip) an, jedes mit eigenem Namen
+  (z. B. `MOBIphone`, Tab Softphone → „Mobilgeräte“) und Passwort. Flexisip reicht ihre REGISTER an
+  cme-web weiter (Port `SHARED_LINE_PORT`), das Name, Passwort und Nummer prüft. Für CME stehen alle
+  Mobilgeräte einer Nummer als EIN Pool `MOB<Nummer>`, den cme-web anlegt, mit Flexisip als Ziel
+  anmeldet und für den es das Shared-Line-Abo hält. Klingelt die Nummer, weckt Flexisip alle
+  Mobilgeräte der Nummer und klingelt sie parallel an.
+* In der App: Nummer und **Gerätename** eintragen (wie in cme-web angelegt); den Rest holt sie sich.
 Die Apps holen sich ihre Einstellungen über `/client/v1/…` (Anmeldung mit dem App-Schlüssel)
 und schalten darüber auch die Gesprächsaufzeichnung ein und aus.
 Anleitung: [softphone/README.md](softphone/README.md).

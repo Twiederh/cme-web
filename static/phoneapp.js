@@ -19,7 +19,7 @@
   const secretTxt = (v) => reveal ? esc(v) : (v ? "•".repeat(12) : '<span class="muted">–</span>');
 
   async function load() {
-    const [j, d] = await Promise.all([api("/api/phoneapp"), api("/api/phoneapp/devices")]);
+    const [j, d, mob] = await Promise.all([api("/api/phoneapp"), api("/api/phoneapp/devices"), api("/api/phoneapp/mobiles")]);
     const b = $("#pa-body");
     if (!j.ok) { b.innerHTML = `<div class="msg bad" style="display:block">${esc(j.error || "Fehler")}</div>`; return; }
     const r = j.relay || {}, a = j.apns || {}, devs = (r.localpush || {}).devices || [];
@@ -42,21 +42,32 @@
       <div class="kv"><span class="muted">Letzter APNs-Versand</span><span class="mono">${esc((r.apns || {}).last_result || "–")}</span></div>
 
       <h3>Geräte (Pools vom Typ CME Phone)</h3>
-      <div class="hint">Der <b>Mac</b> meldet sich wie Cisco Jabber direkt an CME an (Pool <span class="mono">${esc(j.prefix)}&lt;Nummer&gt;</span>).
-        <b>iPhones und iPads</b> melden sich nur am Push-Gateway an; für CME steht je Rufnummer ein Pool
-        <span class="mono">MOB&lt;Nummer&gt;</span>, den cme-web mit dem Gateway als Ziel anmeldet – so klingeln alle Mobilgeräte
-        der Nummer zusammen mit Tischtelefon und Mac (Shared Line). Das Passwort des Pools gilt für alle Mobilgeräte der Nummer.
-        CME speichert Passwörter verschlüsselt, deshalb merkt cme-web sie sich; fehlt eins, hier <b>Zugangsdaten setzen</b>.</div>
+      <div class="hint">Der <b>Mac</b> meldet sich wie Cisco Jabber direkt an CME an – als Telefon vom Typ <b>CME Phone</b>
+        (Tab Telefone) mit frei wählbarem Gerätenamen, z. B. <span class="mono">SIPMacMini</span>; denselben Namen in der App eintragen.
+        Die Pools <span class="mono">MOB&lt;Nummer&gt;</span> legt cme-web selbst an: Sie stehen für CME stellvertretend für alle
+        Mobilgeräte einer Nummer (Ziel Push-Gateway). CME speichert Passwörter verschlüsselt, deshalb merkt cme-web sie sich;
+        fehlt eins, hier <b>Zugangsdaten setzen</b>.</div>
       ${(d && d.devices && d.devices.length) ? d.devices.map(x => `
         <div class="kv"><span><span class="mono">${esc(x.device)}</span> <span class="muted">Pool ${esc(x.tag)} · ${x.kind === "mobile" ? "iPhone/iPad" : "Mac/App"}</span></span>
           <span>${x.creds ? badge("ok", "Zugangsdaten hinterlegt") : badge("bad", "Zugangsdaten fehlen")}
             <button class="small" data-act="creds" data-tag="${esc(x.tag)}">${x.creds ? "Neu setzen" : "Zugangsdaten setzen"}</button></span></div>`).join("")
         : '<div class="empty">Noch kein Telefon vom Typ CME Phone (Tab Telefone).</div>'}
-      ${(d && d.numbers && d.numbers.some(n => !n.mobile)) ? `
-        <div class="kv"><span class="muted">Mobilgeräte einrichten für</span><span>
-          <select id="pa-mobile-dn">${d.numbers.filter(n => !n.mobile).map(n =>
+
+      <h3>Mobilgeräte (iPhone, iPad, Vision Pro)</h3>
+      <div class="hint">Mobilgeräte melden sich nur am Push-Gateway an, jedes mit eigenem Namen (z. B.
+        <span class="mono">MOBIphone</span>) – denselben Namen in der App unter <b>Gerätename</b> eintragen; das Passwort holt
+        sie sich hier ab. Alle Mobilgeräte einer Nummer klingeln zusammen mit Tischtelefon und Mac (Shared Line).</div>
+      ${((mob && mob.devices) || []).map(m => `
+        <div class="kv"><span><span class="mono">${esc(m.name)}</span> <span class="muted">${esc(m.number)}</span></span>
+          <span><button class="small" data-act="mob-pw" data-name="${esc(m.name)}">Neues Passwort</button>
+            <button class="small" data-act="mob-del" data-name="${esc(m.name)}">Entfernen</button></span></div>`).join("")
+        || '<div class="empty">Noch kein Mobilgerät.</div>'}
+      ${(d && d.numbers && d.numbers.length) ? `
+        <div class="kv"><span class="muted">Mobilgerät hinzufügen</span><span>
+          <input id="pa-mob-name" placeholder="MOBIphone" size="14">
+          <select id="pa-mob-dn">${d.numbers.map(n =>
             `<option value="${esc(n.tag)}">${esc(n.number)}${n.shared ? "" : " (wird Shared Line)"}</option>`).join("")}</select>
-          <button class="small" data-act="mobile">Pool anlegen</button></span></div>` : ""}
+          <button class="small" data-act="mob-add">Hinzufügen</button></span></div>` : ""}
 
       <h3>Einrichtung in der App</h3>
       <div class="hint">iPhone/iPad: <b>Einstellungen → Apps → CME Phone</b>. Mac: Menüleiste → <b>Einstellungen</b>.
@@ -153,12 +164,21 @@ telephony-service
       if (!r.ok) { alert(r.error || "Fehler"); b.disabled = false; return; }
       return load();
     }
-    if (act === "mobile") {
-      const sel = $("#pa-mobile-dn");
-      if (!confirm(`Pool für die iPhones/iPads von ${sel.selectedOptions[0].textContent} anlegen?`)) return;
+    if (act === "mob-add") {
       b.disabled = true;
-      const r = await api("/api/phoneapp/mobile", { method: "POST", body: JSON.stringify({ dn: sel.value }) });
+      const r = await api("/api/phoneapp/mobiles", { method: "POST",
+        body: JSON.stringify({ name: $("#pa-mob-name").value.trim(), dn: $("#pa-mob-dn").value }) });
       if (!r.ok) { alert(r.error || "Fehler"); b.disabled = false; return; }
+      return load();
+    }
+    if (act === "mob-del") {
+      if (!confirm(`${b.dataset.name} entfernen? Das Gerät kann sich danach nicht mehr anmelden.`)) return;
+      await api(`/api/phoneapp/mobiles/${encodeURIComponent(b.dataset.name)}`, { method: "DELETE" });
+      return load();
+    }
+    if (act === "mob-pw") {
+      if (!confirm(`Neues Passwort für ${b.dataset.name}? Die App holt es sich beim nächsten Abruf.`)) return;
+      await api(`/api/phoneapp/mobiles/${encodeURIComponent(b.dataset.name)}/password`, { method: "POST", body: "{}" });
       return load();
     }
     if (act === "del-apns") {

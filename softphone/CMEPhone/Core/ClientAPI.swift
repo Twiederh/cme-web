@@ -96,8 +96,10 @@ enum ClientAPI {
         do { return try JSONDecoder().decode(T.self, from: data) } catch { throw APIError.invalid }
     }
 
-    static func info(ext: String) async throws -> Info {
-        try await load(try request("/client/v1/info", query: ["ext": ext]), as: Info.self)
+    static func info(ext: String, device: String = "") async throws -> Info {
+        var q = ["ext": ext]
+        if !device.isEmpty { q["device"] = device }
+        return try await load(try request("/client/v1/info", query: q), as: Info.self)
     }
 
     static func calls(ext: String) async throws -> [RecCall] {
@@ -122,9 +124,15 @@ enum Provisioning {
         Task { @MainActor in
             defer { running = false }
             do {
-                let info = try await ClientAPI.info(ext: s.extensionNumber)
+                let info = try await ClientAPI.info(ext: s.extensionNumber, device: s.deviceLabel)
                 let changed = s.apply(info: info)
                 s.provisioningStatus = "Von cme-web übernommen (\(Date().formatted(date: .omitted, time: .shortened)))"
+                if !s.jabberMode, (info.mobileAuth?.password ?? "").isEmpty {
+                    // Über das Push-Gateway braucht jedes Gerät einen eigenen Namen in cme-web
+                    s.provisioningStatus = s.deviceLabel.isEmpty
+                        ? "Gerätename fehlt – in cme-web (Tab Softphone → Mobilgeräte) anlegen und hier eintragen"
+                        : "\(s.deviceLabel) ist in cme-web nicht als Mobilgerät angelegt (Tab Softphone → Mobilgeräte)"
+                }
                 SIPManager.shared.log("cme-web: Einstellungen übernommen, Gateway \(info.gateway.host):\(info.gateway.port)")
                 if changed { SIPManager.shared.applyAccount() }
                 #if os(iOS)

@@ -96,8 +96,9 @@ def test_self_subscribed_device_is_left_alone(monkeypatch):
 
 
 def test_app_register_checks_mobile_pool_password():
-    creds = {"MOB4961874191283": {"username": "MOB4961874191283", "password": "Geheim123"}}
-    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda d, *a: creds.get(d, {}), "cme.local")
+    accounts = {"MOBIphone": {"number": "+4961874191283", "password": "Geheim123"},
+                "MOBIpad": {"number": "+4961874192090", "password": "Anders123"}}
+    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda n: accounts.get(n, {}), "cme.local")
     agent_port = agent.sock.getsockname()[1]
     app = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     app.bind(("127.0.0.1", 0))
@@ -114,23 +115,27 @@ def test_app_register_checks_mobile_pool_password():
     r = reg()
     assert r.startswith("SIP/2.0 401"), r
     ch = sharedline._header(r, "WWW-Authenticate")
-    bad = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOB4961874191283", "falsch")
+    bad = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOBIphone", "falsch")
     assert reg(bad).startswith("SIP/2.0 401")
     ch = sharedline._header(reg(), "WWW-Authenticate")
-    good = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOB4961874191283", "Geheim123")
+    other = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOBIpad", "Anders123")
+    assert reg(other).startswith("SIP/2.0 403"), "Gerät einer anderen Nummer"
+    ch = sharedline._header(reg(), "WWW-Authenticate")
+    good = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOBIphone", "Geheim123")
     ok = reg(good)
     assert ok.startswith("SIP/2.0 200"), ok
     assert "Expires: 600" in ok and "expires=600" in ok
 
 
-def test_app_register_without_mobile_pool_is_forbidden():
-    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda d, *a: {}, "cme.local")
+def test_app_register_unknown_device_is_forbidden():
+    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda n: {}, "cme.local")
     app = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     app.bind(("127.0.0.1", 0))
     app.settimeout(2)
-    app.sendto(b"REGISTER sip:cme.local SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1;branch=z9hG4bK2\r\nFrom: <sip:+49@cme.local>;tag=a\r\n"
-               b"To: <sip:+49@cme.local>\r\nCall-ID: c2\r\nCSeq: 1 REGISTER\r\nContent-Length: 0\r\n\r\n",
-               ("127.0.0.1", agent.sock.getsockname()[1]))
+    auth = 'Digest username="MOBGibtsNicht", realm="cme.local", nonce="x", uri="sip:cme.local", response="0"'
+    app.sendto(("REGISTER sip:cme.local SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1;branch=z9hG4bK2\r\nFrom: <sip:+49@cme.local>;tag=a\r\n"
+                f"To: <sip:+49@cme.local>\r\nCall-ID: c2\r\nCSeq: 1 REGISTER\r\nAuthorization: {auth}\r\n"
+                "Content-Length: 0\r\n\r\n").encode(), ("127.0.0.1", agent.sock.getsockname()[1]))
     assert app.recvfrom(65535)[0].decode().startswith("SIP/2.0 403")
 
 

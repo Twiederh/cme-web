@@ -57,6 +57,11 @@ def _headers(msg: str, name: str) -> list[str]:
     return [v.strip() for v in re.findall(rf"^{name}\s*:\s*(.*)$", msg, re.I | re.M)]
 
 
+def _tail(n: str) -> str:
+    d = re.sub(r"\D", "", n or "")
+    return d[-8:] if len(d) >= 8 else d
+
+
 def _md5(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
@@ -141,7 +146,7 @@ class Agent:
     def __init__(self, cme: str, host: str, port: int, flexisip: str = "", credentials=None, realm: str = "cme-web"):
         self.cme, self.host, self.port = cme, host, port
         self.flexisip = flexisip                      # "IP:Port" von Flexisip (Contact der Mobilgeräte-Pools)
-        self.credentials = credentials or (lambda device: {})
+        self.credentials = credentials or (lambda name: {})   # Mobilgerät: Name -> {number, password}
         self.realm = realm
         self.regs: dict[str, Reg] = {}
         self.nonces: dict[str, float] = {}
@@ -197,26 +202,28 @@ class Agent:
         self.sock.sendto("\r\n".join(lines).encode(), addr)
 
     def _app_register(self, msg: str, addr) -> None:
-        """REGISTER einer App über Flexisip: Passwort des Pools MOB<Nummer> prüfen."""
+        """REGISTER einer App über Flexisip: Name (Anmeldename) und Passwort des Mobilgeräts prüfen.
+        Das Gerät muss zur Nummer im To gehören."""
         m = re.search(r"sip:([^@;>]+)@", _header(msg, "To"))
         number = m.group(1) if m else ""
-        device = "MOB" + number.lstrip("+").upper()
-        creds = self.credentials(device) if number else {}
         auth = _header(msg, "Authorization")
         now = time.time()
         for n, t in list(self.nonces.items()):
             if now - t > 600:
                 del self.nonces[n]
-        ok = False
-        if auth and creds:
+        ok, known = False, True
+        if auth:
             p = digest_params(auth)
-            if p.get("nonce") in self.nonces and p.get("username") == creds.get("username") and p.get("realm") == self.realm:
-                want = digest_response(p, "REGISTER", creds["username"], creds["password"], p.get("uri", ""),
+            acc = self.credentials(p.get("username", "")) or {}
+            known = bool(acc) and _tail(acc.get("number", "")) == _tail(number)
+            if known and p.get("nonce") in self.nonces and p.get("realm") == self.realm:
+                want = digest_response(p, "REGISTER", p["username"], acc["password"], p.get("uri", ""),
                                        p.get("cnonce", ""), p.get("nc", ""))
                 ok = want == p.get("response")
         if not ok:
-            if not creds:
-                self._reply(msg, addr, "403 Forbidden", ["Warning: 399 cme-web \"Kein Mobilgeräte-Pool für diese Nummer\""])
+            if not known:
+                self._reply(msg, addr, "403 Forbidden",
+                            ["Warning: 399 cme-web \"Gerät in cme-web nicht angelegt oder andere Nummer\""])
                 return
             nonce = _rnd(24)
             self.nonces[nonce] = now
@@ -425,9 +432,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
     def mobile_cfg() -> dict:
         return app.config.get("PHONEAPP_MOBILE") or {}
 
-    def credentials(device: str) -> dict:
+    def credentials(name: str) -> dict:
+        """Mobilgerät (z.B. MOBIphone) -> {number, password}"""
         mc = mobile_cfg()
-        return mc["credentials"](device) if mc else {}
+        return mc["account"](name) if mc and "account" in mc else {}
 
     def mobile_pools(dns: dict, pools: dict) -> list[dict]:
         """Pools MOB<Nummer> mit Zugangsdaten -> an CME anzumelden"""

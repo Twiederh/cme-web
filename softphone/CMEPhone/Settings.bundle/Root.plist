@@ -56,6 +56,24 @@
 			<key>IsSecure</key>
 			<false/>
 			<key>Key</key>
+			<string>deviceLabel</string>
+			<key>KeyboardType</key>
+			<string>Alphabet</string>
+			<key>Title</key>
+			<string>Gerätename</string>
+			<key>Type</key>
+			<string>PSTextFieldSpecifier</string>
+		</dict>
+		<dict>
+			<key>AutocapitalizationType</key>
+			<string>None</string>
+			<key>AutocorrectionType</key>
+			<string>No</string>
+			<key>DefaultValue</key>
+			<string></string>
+			<key>IsSecure</key>
+			<false/>
+			<key>Key</key>
 			<string>displayName</string>
 			<key>KeyboardType</key>
 			<string>Alphabet</string>
