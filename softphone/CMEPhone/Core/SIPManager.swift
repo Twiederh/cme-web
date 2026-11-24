@@ -352,9 +352,8 @@ final class SIPManager: ObservableObject {
             // 401 mit den Zugangsdaten des Pools wiederholt – wie beim 8845. Nur dann führt CME das Gerät in
             // "show shared-line details" und lässt es bei einer Shared Line mitklingeln.
             let ev: Event
-            // Testschalter (nur zum Eingrenzen, was CME für die Shared Line braucht):
-            //   defaults write de.wiederhol.cmephone.mac testAboFromCME -bool YES        → From mit CME-Adresse
-            //   defaults write de.wiederhol.cmephone.mac testAboOhneGeraetename -bool YES → Contact ohne Gerätename
+            // Testschalter (Einstellungen → Allgemein → Shared Line → Test), nur zum Eingrenzen, was CME für die
+            // Shared Line braucht: From mit CME-Adresse statt eigener IP / Contact ohne Gerätename.
             let testFromCME = UserDefaults.standard.bool(forKey: "testAboFromCME")
             let testNoName = UserDefaults.standard.bool(forKey: "testAboOhneGeraetename")
             if testFromCME || testNoName {
