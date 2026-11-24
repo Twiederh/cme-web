@@ -68,6 +68,12 @@ def key_id_from_name(name: str) -> str:
     return m.group(1) if m else ""
 
 
+def harmless(line: str) -> bool:
+    """"create profile" meldet "%Error deleting flash:/its/<Datei>", wenn es eine Datei (jabber-config.xml,
+    <Geraet>.cnf.xml) noch nicht gibt - harmlos."""
+    return "Error deleting flash:" in line or "jabber-config" in line
+
+
 def tail(n: str) -> str:
     d = re.sub(r"\D", "", n or "")
     return d[-8:] if len(d) >= 8 else d
@@ -352,7 +358,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                                 "voice register global", " create profile"])
         # "create profile" meldet "%Error deleting flash:/its/jabber-config.xml", wenn es die Datei noch
         # nicht gibt - harmlos
-        bad = [l for l in str(out).splitlines() if "jabber-config" not in l
+        bad = [l for l in str(out).splitlines() if not harmless(l)
                and (l.strip().startswith("%") or "is in use" in l or "Invalid" in l or "Error" in l)]
         if bad:
             raise AppError("Der Router hat das Passwort nicht übernommen:\n" + "\n".join(bad[:5]))
@@ -382,9 +388,9 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             lines += [f"voice register dn {tag_dn}", " shared-line max-calls 5"]
         lines += [f"voice register pool {tag}", f" id device-id-name {device}", " type Jabber-CSF-Client",
                   f" number 1 dn {tag_dn}", f" username {device} password {pw}", " dtmf-relay rtp-nte sip-notify",
-                  " description CME Phone iPhone/iPad", "voice register global", " create profile"]
+                  " description CME Mobil", "voice register global", " create profile"]
         out = router.configure(lines)
-        bad = [l for l in str(out).splitlines() if "jabber-config" not in l
+        bad = [l for l in str(out).splitlines() if not harmless(l)
                and (l.strip().startswith("%") or "is in use" in l or "Invalid" in l or "Error" in l)]
         if bad:
             raise AppError("Der Router hat den Pool nicht angelegt:\n" + "\n".join(bad[:5]))
