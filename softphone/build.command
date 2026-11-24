@@ -1,6 +1,11 @@
 #!/bin/zsh
 # CME Phone – beide Projekte erzeugen und bauen (iOS + macOS).
 # Doppelklick im Finder oder: ./build.command
+#   nur iOS:   ONLY=ios zsh build.command   (die laufende Mac-App bleibt unberührt)
+#   nur Mac:   ONLY=mac zsh build.command
+# Die Mac-App wird nach dem Bauen nach /Applications/CMEPhone.app kopiert und neu gestartet
+# (INSTALL=0 schaltet das ab). Starte sie immer von dort – nicht aus build/DerivedData: dort ersetzt jeder
+# Build das Bundle, und macOS beendet die laufende App dabei.
 # Logs: build-logs/*.log
 cd "$(dirname "$0")"
 mkdir -p build-logs
@@ -77,21 +82,45 @@ else
   say "Signierung: aus (nur Kompilieren)"
 fi
 
-say "--- macOS bauen"
-xcodebuild -project CMEPhoneMac.xcodeproj -scheme CMEPhoneMac -configuration Debug \
-  -derivedDataPath "$DD" "${SIGNARGS[@]}" \
-  CURRENT_PROJECT_VERSION="$BUILD_NO" CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-mac.log 2>&1
-MAC=$?
-say "macOS: $([ $MAC -eq 0 ] && echo ERFOLG || echo "FEHLER ($MAC)")"
-grep -E "error:|warning: .*deprecated" build-logs/build-mac.log | sort -u | head -60 >> "$LOG"
+MAC=-; IOS=-
+if [ "${ONLY:-}" != "ios" ]; then
+  say "--- macOS bauen"
+  xcodebuild -project CMEPhoneMac.xcodeproj -scheme CMEPhoneMac -configuration Debug \
+    -derivedDataPath "$DD" "${SIGNARGS[@]}" \
+    CURRENT_PROJECT_VERSION="$BUILD_NO" CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-mac.log 2>&1
+  MAC=$?
+  say "macOS: $([ $MAC -eq 0 ] && echo ERFOLG || echo "FEHLER ($MAC)")"
+  grep -E "error:|warning: .*deprecated" build-logs/build-mac.log | sort -u | head -60 >> "$LOG"
+fi
 
-say "--- iOS bauen (generisches Gerät)"
-xcodebuild -project CMEPhone.xcodeproj -scheme CMEPhone -configuration Debug \
-  -destination 'generic/platform=iOS' -derivedDataPath "$DD" "${SIGNARGS[@]}" \
-  CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-ios.log 2>&1
-IOS=$?
-say "iOS: $([ $IOS -eq 0 ] && echo ERFOLG || echo "FEHLER ($IOS)")"
-grep -E "error:" build-logs/build-ios.log | sort -u | head -60 >> "$LOG"
+if [ "${ONLY:-}" != "mac" ]; then
+  say "--- iOS bauen (generisches Gerät)"
+  xcodebuild -project CMEPhone.xcodeproj -scheme CMEPhone -configuration Debug \
+    -destination 'generic/platform=iOS' -derivedDataPath "$DD" "${SIGNARGS[@]}" \
+    CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-ios.log 2>&1
+  IOS=$?
+  say "iOS: $([ $IOS -eq 0 ] && echo ERFOLG || echo "FEHLER ($IOS)")"
+  grep -E "error:" build-logs/build-ios.log | sort -u | head -60 >> "$LOG"
+fi
+
+# Mac-App installieren: laufende App sauber beenden (meldet sich an der CME ab), nach /Applications kopieren,
+# neu starten. So läuft immer eine feste Kopie, die ein neuer Build nicht unter der laufenden App ersetzt.
+if [ "$MAC" = "0" ] && [ "${INSTALL:-1}" = "1" ]; then
+  BID=de.wiederhol.cmephone.mac
+  SRC="$DD/Build/Products/Debug/CMEPhone.app"
+  DEST=/Applications/CMEPhone.app
+  if pgrep -f "/CMEPhone.app/Contents/MacOS/" >/dev/null 2>&1; then
+    say "Mac-App beenden …"
+    osascript -e "tell application id \"$BID\" to quit" >/dev/null 2>&1
+    for i in {1..10}; do pgrep -f "/CMEPhone.app/Contents/MacOS/" >/dev/null 2>&1 || break; sleep 0.5; done
+  fi
+  if ditto "$SRC" "$DEST.new" 2>>"$LOG" && rm -rf "$DEST" && mv "$DEST.new" "$DEST"; then
+    say "Mac-App installiert: $DEST (Build $BUILD_NO)"
+    open "$DEST"
+  else
+    rm -rf "$DEST.new"
+    say "FEHLER: konnte $DEST nicht ersetzen – Mac-App liegt in $SRC"
+  fi
+fi
 
 say "=== fertig: macOS=$MAC iOS=$IOS ==="
-[ $MAC -eq 0 ] && say "Mac-App: $DD/Build/Products/Debug/CMEPhone.app"
