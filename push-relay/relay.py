@@ -15,6 +15,7 @@ Endpunkte
                GET      /health
                GET      /devices (Diagnose: verbundene Local-Push-Geräte)
   TCP   :5072  Local-Push-Kanal (zeilenbasiertes JSON, siehe softphone/Shared/SharedConfig.swift)
+  Datei outbox/*.json  Mitteilungen an die App (schreibt cme-web, z.B. „gehalten – übernehmen“)
 
 Verwaltet wird der Relay in cme-web (Tab "Softphone"). Beide teilen sich das Volume RELAY_DATA_DIR:
   apns/AuthKey.p8, apns/apns.json   APNs-Schlüssel (schreibt cme-web, liest der Relay bei jeder Änderung neu)
@@ -370,6 +371,61 @@ class APNs:
         )
         return r.status_code, r.text
 
+    async def send_app(self, token: str, payload: dict, sandbox: bool, alert: bool = True,
+                       collapse: str = "") -> tuple[int, str]:
+        """Normaler Push an die App (Topic = Bundle-ID): Mitteilung (alert) oder still (background)."""
+        host = "api.sandbox.push.apple.com" if sandbox else "api.push.apple.com"
+        headers = {
+            "authorization": f"bearer {self._token()}",
+            "apns-topic": self.cfg.apns_bundle_id,
+            "apns-push-type": "alert" if alert else "background",
+            "apns-priority": "10" if alert else "5",
+            "apns-expiration": str(int(time.time()) + 120),
+        }
+        if collapse:
+            headers["apns-collapse-id"] = collapse[:64]
+        r = await self.client.post(f"https://{host}/3/device/{token}", json=payload, headers=headers)
+        return r.status_code, r.text
+
+
+# ---------------------------------------------------------------------------
+# Aufträge von cme-web (Mitteilungen, z.B. gehaltene Gespräche): Dateien in RELAY_DATA_DIR/outbox
+# ---------------------------------------------------------------------------
+
+
+async def outbox_loop(cfg: Config, apns: APNs, every: float = 1.0) -> None:
+    box = Path(cfg.data_dir) / "outbox"
+    while True:
+        await asyncio.sleep(every)
+        try:
+            files = sorted(box.glob("*.json"))
+        except OSError:
+            continue
+        for f in files:
+            try:
+                job = json.loads(f.read_text())
+            except (OSError, ValueError):
+                job = None
+            try:
+                f.unlink()
+            except OSError:
+                pass
+            if not job or time.time() - float(job.get("time", 0)) > 60 or not apns.configured:
+                continue
+            token = str(job.get("token", ""))
+            alert = job.get("type") != "background"
+            sandbox = job.get("env") == "sandbox"
+            try:
+                status, text = await apns.send_app(token, job.get("payload", {}), sandbox, alert, job.get("collapse", ""))
+                if status == 400 and "BadDeviceToken" in text:
+                    sandbox = not sandbox
+                    status, text = await apns.send_app(token, job.get("payload", {}), sandbox, alert,
+                                                       job.get("collapse", ""))
+                log.info("Mitteilung (%s, %s) an %s… -> %s %s", "alert" if alert else "still",
+                         "sandbox" if sandbox else "prod", token[:10], status, text[:120])
+            except Exception as e:  # noqa: BLE001
+                log.warning("Mitteilung an %s… fehlgeschlagen: %s", token[:10], e)
+
 
 # ---------------------------------------------------------------------------
 # HTTP (Flexisip external-push-uri)
@@ -507,6 +563,7 @@ async def main():
     await web.TCPSite(runner, cfg.http_host, cfg.http_port).start()
     log.info("HTTP %s:%s, Local Push %s:%s", cfg.http_host, cfg.http_port, cfg.lp_host, cfg.lp_port)
     asyncio.create_task(write_status(cfg, hub, apns))
+    asyncio.create_task(outbox_loop(cfg, apns))
     async with lp_server:
         await lp_server.serve_forever()
 

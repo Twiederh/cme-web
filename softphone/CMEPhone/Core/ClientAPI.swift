@@ -106,6 +106,14 @@ enum ClientAPI {
         try await load(try request("/client/v1/calls", query: ["ext": ext]), as: CallsResponse.self).calls
     }
 
+    /// Normaler APNs-Token der App (Mitteilungen wie „gehalten – übernehmen“). env: "prod" (TestFlight/App Store)
+    /// oder "sandbox" (aus Xcode installiert).
+    static func registerPush(device: String, token: String, env: String) async throws {
+        _ = try await load(try request("/client/v1/push", method: "POST",
+                                       body: ["device": device, "token": token, "env": env]),
+                           as: ErrorResponse.self)
+    }
+
     static func setRecording(id: String, ext: String, on: Bool) async throws {
         _ = try await load(try request("/client/v1/calls/\(id)", method: "POST", body: ["ext": ext, "on": on]),
                            as: ErrorResponse.self)
@@ -126,6 +134,9 @@ enum Provisioning {
             do {
                 let info = try await ClientAPI.info(ext: s.extensionNumber, device: s.deviceLabel)
                 let changed = s.apply(info: info)
+                #if os(iOS)
+                HeldCallNotifications.shared.sendToken()
+                #endif
                 s.provisioningStatus = "Von cme-web übernommen (\(Date().formatted(date: .omitted, time: .shortened)))"
                 if !s.jabberMode, (info.mobileAuth?.password ?? "").isEmpty {
                     // Über das Push-Gateway braucht jedes Gerät einen eigenen Namen in cme-web

@@ -56,7 +56,7 @@
         <span class="mono">MOBIphone</span>) – denselben Namen in der App unter <b>Gerätename</b> eintragen; das Passwort holt
         sie sich hier ab. Alle Mobilgeräte einer Nummer klingeln zusammen mit Tischtelefon und Mac (Shared Line).</div>
       ${((mob && mob.devices) || []).map(m => `
-        <div class="kv"><span><span class="mono">${esc(m.name)}</span> <span class="muted">${esc(m.number)}</span></span>
+        <div class="kv"><span><span class="mono">${esc(m.name)}</span> <span class="muted">${esc(m.number)}${m.push ? " · Mitteilungen an" : ""}</span></span>
           <span><button class="small" data-act="mob-pw" data-name="${esc(m.name)}">Neues Passwort</button>
             <button class="small" data-act="mob-del" data-name="${esc(m.name)}">Entfernen</button></span></div>`).join("")
         || '<div class="empty">Noch kein Mobilgerät.</div>'}

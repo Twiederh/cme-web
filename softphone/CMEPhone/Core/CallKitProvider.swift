@@ -20,6 +20,8 @@ final class CallKitProvider: NSObject {
     private var callIdByUUID: [UUID: String] = [:]
     /// Anrufe, die per Push gemeldet wurden, bevor das INVITE angekommen ist und der Nutzer schon angenommen hat.
     private var pendingAnswer: Set<String> = []
+    /// "Übernehmen" aus der Mitteilung: CallKit-UUID -> gehaltenes Gespräch (INVITE mit Replaces statt Wählen)
+    private var pendingTakeover: [UUID: SIPManager.HeldLineCall] = [:]
 
     private override init() {
         let config = CXProviderConfiguration()
@@ -79,6 +81,23 @@ final class CallKitProvider: NSObject {
     }
 
     // MARK: - Ausgehend
+
+    /// Gehaltenes Gespräch eines anderen Geräts übernehmen – als ausgehender CallKit-Anruf (Audio-Session,
+    /// Sperrbildschirm, "Zuletzt"), technisch ein INVITE mit "Replaces".
+    func startTakeover(_ h: SIPManager.HeldLineCall) {
+        let uuid = UUID()
+        pendingTakeover[uuid] = h
+        let number = h.remoteURI.replacingOccurrences(of: "sip:", with: "").components(separatedBy: "@").first ?? h.remoteURI
+        let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .phoneNumber, value: number))
+        controller.request(CXTransaction(action: action)) { [weak self] error in
+            if let error {
+                Task { @MainActor in
+                    self?.pendingTakeover.removeValue(forKey: uuid)
+                    self?.sip.log("Übernehmen (CallKit): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
 
     func startOutgoing(number: String, video: Bool) {
         let uuid = UUID()
@@ -142,12 +161,14 @@ extension CallKitProvider: CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         MainActor.assumeIsolated {
-            guard let call = self.sip.placeCall(to: action.handle.value, video: action.isVideo),
-                  let callId = call.callLog?.callId else { action.fail(); return }
+            let takeover = self.pendingTakeover.removeValue(forKey: action.callUUID)
+            let placed = takeover.map { self.sip.takeOver($0) } ?? self.sip.placeCall(to: action.handle.value, video: action.isVideo)
+            guard let call = placed, let callId = call.callLog?.callId else { action.fail(); return }
             self.uuidByCallId[callId] = action.callUUID
             self.callIdByUUID[action.callUUID] = callId
             let update = CXCallUpdate()
             update.remoteHandle = action.handle
+            if let name = takeover?.remoteName, !name.isEmpty { update.localizedCallerName = name }
             update.hasVideo = action.isVideo
             update.supportsDTMF = true
             update.supportsHolding = true

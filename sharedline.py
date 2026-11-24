@@ -56,6 +56,27 @@ def _header(msg: str, name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def parse_dialogs(body: str) -> tuple[str, list[dict]]:
+    """dialog-info-XML der CME -> (entity, [{id, call_id, local_tag, remote_tag, state, held, remote_uri, remote_name}]).
+    Gehalten: <local>…<param pname="+sip.rendering" pval="no"/> (Cisco schreibt "pval"); läuft das Gespräch
+    wieder, fehlen <local>/<remote>."""
+    entity = (re.search(r'\bentity="([^"]*)"', body) or [None, ""])[1]
+    out = []
+    for d in re.findall(r"<dialog\s.*?</dialog>", body, re.S):
+        attr = dict(re.findall(r'([\w-]+)="([^"]*)"', d.split(">", 1)[0]))
+        rend = re.findall(r'pname="\+sip\.rendering"\s+pval(?:ue)?="([^"]*)"', d)
+        rem = re.search(r"<remote>.*?<identity([^>]*)>([^<]*)</identity>", d, re.S)
+        out.append({
+            "id": attr.get("id", ""), "call_id": attr.get("call-id", ""),
+            "local_tag": attr.get("local-tag", ""), "remote_tag": attr.get("remote-tag", ""),
+            "state": (re.search(r"<state[^>]*>([^<]*)</state>", d) or [None, ""])[1].strip(),
+            "held": "no" in rend,
+            "remote_uri": rem.group(2).strip() if rem else "",
+            "remote_name": (re.search(r'display="([^"]*)"', rem.group(1)) or [None, ""])[1].strip() if rem else "",
+        })
+    return entity, out
+
+
 def _headers(msg: str, name: str) -> list[str]:
     return [v.strip() for v in re.findall(rf"^{name}\s*:\s*(.*)$", msg, re.I | re.M)]
 
@@ -158,6 +179,10 @@ class Agent:
         self.missing: dict[tuple[str, str], int] = {}
         self.lock = threading.Lock()
         self.waiting: dict[tuple[str, int], tuple[threading.Event, list]] = {}
+        # Gehaltene Gespräche (Nummer, Call-ID) -> Dialog; Rückrufe setzt register() (Push an die Mobilgeräte)
+        self.held: dict[tuple[str, str], dict] = {}
+        self.on_held = None
+        self.on_held_end = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("0.0.0.0", port))
         threading.Thread(target=self._recv_loop, daemon=True, name="sharedline-recv").start()
@@ -197,6 +222,10 @@ class Agent:
                 self._reply_ok(msg, addr)
                 if msg.startswith("NOTIFY") and _header(msg, "Event").lower().startswith("dialog"):
                     self._log_dialog(msg)
+                    try:
+                        self._track_held(msg)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"sharedline: Halten auswerten: {e}", flush=True)
 
     _last_dialog: dict = {}
 
@@ -207,16 +236,34 @@ class Agent:
         if self._last_dialog.get(to) == body:
             return
         self._last_dialog[to] = body
-        parts = []
-        for d in re.findall(r"<dialog\s.*?</dialog>", body, re.S):
-            attr = dict(re.findall(r'([\w-]+)="([^"]*)"', d.split(">", 1)[0]))
-            state = (re.search(r"<state[^>]*>([^<]*)</state>", d) or [None, "?"])[1]
-            rend = re.findall(r'pname="\+sip\.rendering"\s+pval(?:ue)?="([^"]*)"', d)  # Cisco: "pval"
-            remote = (re.search(r"<remote>.*?<identity[^>]*>([^<]*)</identity>", d, re.S) or [None, ""])[1]
-            parts.append(f"{attr.get('id', '?')} {state} call-id={attr.get('call-id', '')} "
-                         f"local-tag={attr.get('local-tag', '')} remote-tag={attr.get('remote-tag', '')} "
-                         f"rendering={'/'.join(rend) or '-'} remote={remote}")
+        _, dialogs = parse_dialogs(body)
+        parts = [f"{d['id'] or '?'} {d['state'] or '?'} call-id={d['call_id']} local-tag={d['local_tag']} "
+                 f"remote-tag={d['remote_tag']} {'GEHALTEN ' if d['held'] else ''}remote={d['remote_uri']}"
+                 for d in dialogs]
         print(f"sharedline: dialog-NOTIFY an {to}: " + ("; ".join(parts) or "keine Dialoge"), flush=True)
+
+    def _track_held(self, msg: str) -> None:
+        """Nur Abos der Mobilgeräte-Pools (From/To = eigene Adresse): Gespräche, die ein anderes Gerät der Shared
+        Line hält, an on_held(nummer, dialog, holder) melden; fortgesetzt/beendet -> on_held_end(nummer, call_id)."""
+        m = re.search(r"sip:([^@;>]+)@([^;>:]+)", _header(msg, "To"))
+        if not m or m.group(2) != self.host:
+            return
+        number = m.group(1)
+        body = msg.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in msg else ""
+        entity, dialogs = parse_dialogs(body)
+        holder_host = (re.search(r"@([^;>:]+)", entity) or [None, ""])[1]
+        for d in dialogs:
+            if not d["call_id"]:
+                continue
+            key = (number, d["call_id"])
+            if d["held"] and d["state"] != "terminated" and d["remote_uri"]:
+                # Hält ein Mobilgerät selbst (Contact = Flexisip/diese Adresse), braucht es keinen Hinweis
+                if key not in self.held and holder_host != self.host:
+                    self.held[key] = d
+                    if self.on_held:
+                        self.on_held(number, d, entity)
+            elif self.held.pop(key, None) is not None and self.on_held_end:
+                self.on_held_end(number, d["call_id"])
 
     def _reply(self, req: str, addr, status: str, extra: list[str] | None = None) -> None:
         keep = [l for l in req.split("\r\n") if re.match(r"(Via|From|Call-ID|CSeq)\s*:", l, re.I)]
@@ -462,6 +509,12 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
         mc = mobile_cfg()
         return mc["account"](name) if mc and "account" in mc else {}
 
+    def notify(kind: str, number: str, d: dict, holder: str) -> None:
+        """Gehaltenes Gespräch an die Mobilgeräte dieser Nummer melden (phoneapp: Push über den Relay)."""
+        fn = mobile_cfg().get("notify_held")
+        if fn:
+            threading.Thread(target=fn, args=(kind, number, d, holder), daemon=True).start()
+
     def mobile_pools(dns: dict, pools: dict) -> list[dict]:
         """Pools MOB<Nummer> mit Zugangsdaten -> an CME anzumelden"""
         mc = mobile_cfg()
@@ -503,7 +556,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
         while True:
             try:
                 if info["agent"] is None and cme and host:
-                    info["agent"] = Agent(cme, host, port, flexisip, credentials, realm)
+                    a = Agent(cme, host, port, flexisip, credentials, realm)
+                    a.on_held = lambda number, d, holder: notify("held", number, d, holder)
+                    a.on_held_end = lambda number, call_id: notify("held_end", number, {"call_id": call_id}, "")
+                    info["agent"] = a
                 check()
                 info["error"] = ""
             except Exception as e:  # noqa: BLE001

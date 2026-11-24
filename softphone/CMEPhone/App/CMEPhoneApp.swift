@@ -76,6 +76,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         SIPManager.shared.start()
         LocalPushController.shared.load()
         MainActor.assumeIsolated {
+            // Mitteilungen „gehalten – übernehmen“ (normaler Push, Token an cme-web)
+            HeldCallNotifications.shared.setup(application)
             // Anmeldestatus in der Einstellungen-App anzeigen
             SIPManager.shared.$registration
                 .removeDuplicates()
@@ -89,6 +91,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             Provisioning.refresh()
         }
         return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        MainActor.assumeIsolated { HeldCallNotifications.shared.didRegister(token: deviceToken) }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        MainActor.assumeIsolated { SIPManager.shared.log("Mitteilungen: kein Push-Token (\(error.localizedDescription))") }
+    }
+
+    /// Stiller Push "heldEnd": Gespräch läuft wieder bzw. ist beendet – Mitteilung entfernen.
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        let handled = MainActor.assumeIsolated { HeldCallNotifications.shared.handleBackground(userInfo) }
+        completionHandler(handled ? .newData : .noData)
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {

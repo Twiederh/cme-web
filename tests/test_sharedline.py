@@ -169,3 +169,42 @@ def test_mobile_pool_registers_at_cme_with_flexisip_contact(monkeypatch):
     assert '<sip:+4961874191283@192.168.1.110:5062;transport=udp>' in last
     assert 'devicename.ccm.cisco.com="MOB4961874191283"' in last
     assert 'username="MOB4961874191283"' in last
+
+
+HELD_BODY = ('<?xml version="1.0"?><dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="20" '
+             'notify-state="partial" entity="sip:+4961874191283@192.168.11.46"><dialog id="4255" '
+             'call-id="3E11@192.168.11.4" local-tag="5006ab" remote-tag="13ED" direction="recipient">'
+             '<state>confirmed</state><local><identity display="Testnummer">sip:+49@192.168.11.46:5060</identity>'
+             '<target uri="sip:+49@192.168.11.46:5060"><param pname="+sip.rendering" pval="no"/></target></local>'
+             '<remote><identity display="Thomas Handy ">sip:001796907106@192.168.11.4</identity></remote>'
+             '</dialog></dialog-info>')
+RESUMED_BODY = ('<dialog-info entity="sip:+4961874191283@192.168.11.46"><dialog id="4255" call-id="3E11@192.168.11.4" '
+                'local-tag="5006ab" remote-tag="13ED" direction="recipient"><state>confirmed</state></dialog></dialog-info>')
+
+
+def _notify(to_host: str, body: str) -> str:
+    return (f"NOTIFY sip:x SIP/2.0\r\nTo: <sip:+4961874191283@{to_host}>;tag=1\r\nEvent: dialog\r\n\r\n" + body)
+
+
+def test_parse_dialogs_held():
+    entity, ds = sharedline.parse_dialogs(HELD_BODY)
+    assert entity == "sip:+4961874191283@192.168.11.46"
+    d = ds[0]
+    assert d["held"] and d["call_id"] == "3E11@192.168.11.4" and d["local_tag"] == "5006ab"
+    assert d["remote_tag"] == "13ED" and d["remote_uri"] == "sip:001796907106@192.168.11.4"
+    assert d["remote_name"] == "Thomas Handy"
+    assert not sharedline.parse_dialogs(RESUMED_BODY)[1][0]["held"]
+
+
+def test_track_held_notifies_once_and_ends():
+    a = object.__new__(sharedline.Agent)
+    a.host, a.held = "192.168.1.110", {}
+    events = []
+    a.on_held = lambda n, d, h: events.append(("held", n, d["call_id"], h))
+    a.on_held_end = lambda n, c: events.append(("end", n, c))
+    a._track_held(_notify("192.168.11.6", HELD_BODY))      # Abo fürs Gigaset: kein Mobilgerät
+    a._track_held(_notify("192.168.1.110", HELD_BODY))
+    a._track_held(_notify("192.168.1.110", HELD_BODY))     # CME wiederholt: nur einmal melden
+    a._track_held(_notify("192.168.1.110", RESUMED_BODY))
+    assert events == [("held", "+4961874191283", "3E11@192.168.11.4", "sip:+4961874191283@192.168.11.46"),
+                      ("end", "+4961874191283", "3E11@192.168.11.4")]

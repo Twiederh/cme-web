@@ -445,7 +445,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
 
     @app.get("/api/phoneapp/mobiles")
     def admin_mobiles():
-        return jsonify(ok=True, devices=[{"name": k, "number": v["number"], "set": v.get("set", "")}
+        return jsonify(ok=True, devices=[{"name": k, "number": v["number"], "set": v.get("set", ""),
+                                          "push": bool(v.get("apns", {}).get("token"))}
                                          for k, v in sorted(mobiles().items())])
 
     @app.post("/api/phoneapp/mobiles")
@@ -647,9 +648,65 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         rec()["set"](rid, on)
         return jsonify(ok=True, on=on)
 
-    # fuer sharedline.py: Mobilgeraete-Pools anmelden, Passwoerter der Apps pruefen
+    # ---------------- Mitteilungen an die Mobilgeräte (gehaltene Gespräche) ----------------
+
+    RE_APNS_TOKEN = re.compile(r"^[0-9a-fA-F]{32,200}$")
+    outbox = data / "outbox"
+
+    @app.post("/client/v1/push")
+    def client_push():
+        """{"device": "MOBIphone", "token": "<APNs-Token hex>", "env": "prod|sandbox"} – normaler Push-Token der App
+        (Mitteilungen; der VoIP-Token für Anrufe steckt in der Anmeldung bei Flexisip)."""
+        d = request.get_json(force=True) or {}
+        name = str(d.get("device", "")).strip()
+        token = str(d.get("token", "")).strip()
+        env = "sandbox" if d.get("env") == "sandbox" else "prod"
+        if not RE_APNS_TOKEN.match(token):
+            raise AppError("Ungültiger Push-Token.")
+        with lock:
+            m = mobiles()
+            key = next((k for k in m if k.lower() == name.lower()), None)
+            if key is None:
+                raise AppError(f"{name or 'Das Gerät'} ist nicht als Mobilgerät angelegt.")
+            m[key]["apns"] = {"token": token.lower(), "env": env, "set": time.strftime("%Y-%m-%d %H:%M")}
+            mobile_save(m)
+        return jsonify(ok=True)
+
+    def queue_push(token: str, env: str, payload: dict, collapse: str = "", alert: bool = True) -> None:
+        """Auftrag für den push-relay (gemeinsames Volume): er verschickt ihn per APNs und löscht die Datei."""
+        job = {"time": time.time(), "token": token, "env": env, "payload": payload, "collapse": collapse,
+               "type": "alert" if alert else "background"}
+        _write(outbox / f"{time.time_ns()}-{secrets.token_hex(3)}.json", json.dumps(job), 0o600)
+
+    def notify_held(kind: str, number: str, d: dict, holder: str) -> None:
+        """sharedline: auf einem anderen Gerät gehalten -> Mitteilung „Übernehmen“; fortgesetzt -> wieder entfernen."""
+        targets = [v["apns"] for v in mobiles().values()
+                   if tail(v.get("number", "")) == tail(number) and v.get("apns", {}).get("token")]
+        if not targets:
+            return
+        call_id = d.get("call_id", "")
+        collapse = "held-" + re.sub(r"[^\w-]", "", call_id)[:40]
+        if kind == "held":
+            other = d.get("remote_uri", "").removeprefix("sip:").split("@")[0]
+            title = d.get("remote_name") or other or "Gespräch"
+            payload = {
+                "aps": {"alert": {"title": title, "body": "Gehalten – tippen zum Übernehmen"},
+                        "sound": "default", "category": "HELD_CALL", "thread-id": "held"},
+                "held": {"callId": call_id, "localTag": d.get("local_tag", ""), "remoteTag": d.get("remote_tag", ""),
+                         "remoteURI": d.get("remote_uri", ""), "remoteName": d.get("remote_name", ""),
+                         "holder": holder},
+            }
+            for t in targets:
+                queue_push(t["token"], t.get("env", "prod"), payload, collapse)
+            print(f"Softphone: gehalten {title} ({number}) -> Mitteilung an {len(targets)} Gerät(e)", flush=True)
+        else:
+            payload = {"aps": {"content-available": 1}, "heldEnd": {"callId": call_id}}
+            for t in targets:
+                queue_push(t["token"], t.get("env", "prod"), payload, "", alert=False)
+
+    # fuer sharedline.py: Mobilgeraete-Pools anmelden, Passwoerter der Apps pruefen, gehaltene Gespräche melden
     app.config["PHONEAPP_MOBILE"] = {"prefix": MOBILE_PREFIX, "pools": app_pools, "credentials": device_credentials,
-                                     "account": mobile_account}
+                                     "account": mobile_account, "notify_held": notify_held}
 
     if not demo:
         try:

@@ -82,4 +82,19 @@ r = c.post("/client/v1/calls/20261122-160000-abcdef", json={"ext": "21", "on": T
 check(r.get_json().get("ok"), "Aufnahme einschalten")
 r = c.post("/client/v1/calls/20261122-160000-abcdef", json={"ext": "22", "on": True}, headers=H)
 check(r.status_code == 400, "fremde Nebenstelle darf nicht schalten")
+# Mitteilungen: Push-Token eines Mobilgeräts, gehaltenes Gespräch -> Auftrag im outbox-Ordner des Relays
+import glob
+json.dump({"MOBIphone": {"number": "+4961874191283", "password": "x"}},
+          open(tempfile.gettempdir() + "/cme-web-demo-vm/config/cme-phoneapp-mobile.json", "w"))
+r = c.post("/client/v1/push", json={"device": "mobiphone", "token": "ab" * 32, "env": "prod"}, headers=H)
+check(r.get_json().get("ok"), "Push-Token speichern")
+check(c.post("/client/v1/push", json={"device": "Fremd", "token": "ab" * 32}, headers=H).status_code == 400,
+      "unbekanntes Gerät -> 400")
+app.config["PHONEAPP_MOBILE"]["notify_held"]("held", "+4961874191283", {
+    "call_id": "3E11@192.168.11.4", "local_tag": "5006ab", "remote_tag": "13ED",
+    "remote_uri": "sip:001796907106@192.168.11.4", "remote_name": "Thomas Handy"}, "sip:+49@192.168.11.46")
+jobs = [json.load(open(f)) for p in (d + "/push", tempfile.gettempdir() + "/cme-web-demo-push")
+        for f in glob.glob(p + "/outbox/*.json")]
+check(len(jobs) == 1 and jobs[0]["token"] == "ab" * 32 and jobs[0]["payload"]["aps"]["category"] == "HELD_CALL"
+      and jobs[0]["payload"]["held"]["localTag"] == "5006ab", "Mitteilung „gehalten“ für den Relay")
 print("ALLE PHONEAPP-TESTS OK")
