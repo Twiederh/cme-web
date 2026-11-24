@@ -352,7 +352,15 @@ final class SIPManager: ObservableObject {
             // 401 mit den Zugangsdaten des Pools wiederholt – wie beim 8845. Nur dann führt CME das Gerät in
             // "show shared-line details" und lässt es bei einer Shared Line mitklingeln.
             let ev: Event
-            if let proxy = lineProxy() {
+            // Testschalter (nur zum Eingrenzen, was CME für die Shared Line braucht):
+            //   defaults write de.wiederhol.cmephone.mac testAboFromCME -bool YES        → From mit CME-Adresse
+            //   defaults write de.wiederhol.cmephone.mac testAboOhneGeraetename -bool YES → Contact ohne Gerätename
+            let testFromCME = UserDefaults.standard.bool(forKey: "testAboFromCME")
+            let testNoName = UserDefaults.standard.bool(forKey: "testAboOhneGeraetename")
+            if testFromCME || testNoName {
+                log("Cisco-Leitungsmodus: TEST – From mit CME-Adresse: \(testFromCME), ohne Gerätename: \(testNoName)")
+            }
+            if !testFromCME, let proxy = lineProxy() {
                 ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
             } else if let proxy = core.defaultProxyConfig {
                 ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
@@ -363,7 +371,7 @@ final class SIPManager: ObservableObject {
             ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
             // Wie 8845/Jabber den Gerätenamen auch im Contact des SUBSCRIBE (liblinphone setzt die Contact-Parameter
             // des Kontos nur beim REGISTER). CME ordnet das Abo darüber dem Pool zu.
-            if let c = core.defaultAccount?.contactAddress, let host = c.domain, !host.isEmpty {
+            if !testNoName, let c = core.defaultAccount?.contactAddress, let host = c.domain, !host.isEmpty {
                 let port = c.port > 0 ? ":\(c.port)" : ""
                 ev.addCustomHeader(name: "Contact",
                                    value: "<sip:\(settings.extensionNumber)@\(host)\(port);transport=udp>;"
