@@ -477,10 +477,26 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             return jsonify(ok=False, error="App-Schlüssel fehlt oder ist falsch."), 401
         return None
 
+    def pool_device(ext: str, prefix: str = DEVICE_PREFIX) -> str:
+        """Geraetename des Pools fuer diese Nummer: CSF<ext> bzw. MOB<ext> - oder, wenn der Pool spaeter auf eine
+        andere Nummer umgestellt wurde (Name bleibt), der CSF/MOB-Pool, an dem die Nummer haengt."""
+        want = (prefix + ext.lstrip("+")).upper()
+        pools = [p for p in app_pools() if p["device"].startswith(prefix)]
+        if any(p["device"] == want for p in pools):
+            return want
+        try:
+            from cme_web import parse_voice_register_config
+            dns, _ = parse_voice_register_config(router.show("show running-config | section voice register"))
+        except Exception:  # noqa: BLE001
+            return want
+        tags = {t for t, d in dns.items() if tail(d.get("number", "")) == tail(ext)}
+        hit = next((p["device"] for p in pools if tags & set(p["dns"])), "")
+        return hit or want
+
     def pool_credentials(ext: str, prefix: str = DEVICE_PREFIX) -> dict:
         """SIP-Zugangsdaten des Pools CSF<ext> (bzw. MOB<ext>): aus cme-web (hier gesetzt) oder Klartext aus dem
         Router. Passt der gespeicherte Benutzer nicht mehr zum Pool, gilt er als veraltet."""
-        return device_credentials((prefix + ext.lstrip("+")).upper())
+        return device_credentials(pool_device(ext, prefix))
 
     def device_credentials(want: str, pools: list[dict] | None = None) -> dict:
         pool = next((p for p in (pools if pools is not None else app_pools()) if p["device"] == want), None)
@@ -498,7 +514,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         r = rec()
         # SIP-Domain der Apps: ein Name (Flexisip nimmt Anmeldungen mit fremder IP-Domain nicht an),
         # Flexisip leitet ihn per Route an CME_HOST weiter
-        return jsonify(ok=True, ext=ext, device_name=DEVICE_PREFIX + ext.lstrip("+"),
+        return jsonify(ok=True, ext=ext, device_name=pool_device(ext),
                        cme_host=os.environ.get("SIP_DOMAIN", "").strip() or os.environ.get("CME_HOST", ""),
                        # direkte Anmeldung an CME (Mac, wie Jabber): Shared Line funktioniert nur ohne Flexisip
                        cme_ip=os.environ.get("CME_HOST", "").strip(),

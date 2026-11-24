@@ -85,6 +85,8 @@ final class PhoneSettings: ObservableObject {
     @Published var cmeHost: String { didSet { save() } }
     /// IP der CME (aus cme-web) – Ziel der direkten Anmeldung im Jabber-Modus
     @Published var cmeIP: String { didSet { save() } }
+    /// Gerätename des Pools laut cme-web (bleibt, wenn der Pool auf eine andere Nummer umgestellt wird)
+    @Published var poolDeviceName: String { didSet { save() } }
     /// SIP-Passwort des Pools (CME verlangt es von Soft-Clients; kommt aus cme-web)
     @Published var password: String { didSet { save() } }
     /// SIP-Benutzername des Pools (leer = Nebenstelle ohne "+")
@@ -165,6 +167,7 @@ final class PhoneSettings: ObservableObject {
         displayName = d.string(forKey: "displayName") ?? ""
         cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
         cmeIP = d.string(forKey: "cmeIP") ?? "192.168.11.4"
+        poolDeviceName = d.string(forKey: "poolDeviceName") ?? ""
         password = d.string(forKey: "password") ?? ""
         authUser = d.string(forKey: "authUser") ?? ""
         useGateway = d.object(forKey: "useGateway") as? Bool ?? true
@@ -210,7 +213,7 @@ final class PhoneSettings: ObservableObject {
     }
 
     /// Gerätename am Router (Pool "CME Phone" in cme-web: id device-id-name CSF<Nebenstelle>, wie Cisco Jabber).
-    var deviceName: String { "CSF" + extensionNumber.filter { $0.isNumber } }
+    var deviceName: String { poolDeviceName.isEmpty ? "CSF" + extensionNumber.filter { $0.isNumber } : poolDeviceName }
 
     var hasCmeWeb: Bool { !cmeWebURL.trimmingCharacters(in: .whitespaces).isEmpty && !appToken.isEmpty }
 
@@ -265,7 +268,7 @@ final class PhoneSettings: ObservableObject {
     var accountFingerprint: String {
         [extensionNumber, displayName, cmeHost, password, authUser, "\(useGateway)", gatewayHost, "\(gatewayPort)",
          transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)",
-         "\(ciscoLineMode)", cmeIP].joined(separator: "|")
+         "\(ciscoLineMode)", cmeIP, poolDeviceName].joined(separator: "|")
     }
 
     /// Werte aus cme-web übernehmen (GET /client/v1/info).
@@ -275,6 +278,7 @@ final class PhoneSettings: ObservableObject {
         loading = true
         if !info.cmeHost.isEmpty { cmeHost = info.cmeHost }
         if let ip = info.cmeIP, !ip.isEmpty { cmeIP = ip }
+        poolDeviceName = info.deviceName
         if !info.gateway.host.isEmpty {
             useGateway = true
             gatewayHost = info.gateway.host
@@ -340,6 +344,7 @@ final class PhoneSettings: ObservableObject {
         d.set(displayName, forKey: "displayName")
         d.set(cmeHost, forKey: "cmeHost")
         d.set(cmeIP, forKey: "cmeIP")
+        d.set(poolDeviceName, forKey: "poolDeviceName")
         d.set(password, forKey: "password")
         d.set(authUser, forKey: "authUser")
         d.set(useGateway, forKey: "useGateway")
