@@ -56,6 +56,13 @@ fi
 
 DD="$PWD/build/DerivedData"
 
+# Build-Nummer aus Git: Anzahl Commits (steigt mit jedem Commit), Hash, "+" bei uncommitteten Änderungen, Zeit
+BUILD_NO=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+BUILD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
+git diff --quiet HEAD -- . 2>/dev/null || BUILD_HASH="$BUILD_HASH+"
+BUILD_INFO="Build $BUILD_NO · $BUILD_HASH · $(date '+%d.%m. %H:%M')"
+say "$BUILD_INFO"
+
 # Standard: ohne Signierung kompilieren (prüft den Code, braucht keinen Apple-Account in Xcode).
 # Signiert bauen (Profile automatisch anlegen):  SIGN=1 zsh build.command
 if [ "${SIGN:-0}" = "1" ]; then
@@ -69,14 +76,16 @@ fi
 
 say "--- macOS bauen"
 xcodebuild -project CMEPhoneMac.xcodeproj -scheme CMEPhoneMac -configuration Debug \
-  -derivedDataPath "$DD" "${SIGNARGS[@]}" build > build-logs/build-mac.log 2>&1
+  -derivedDataPath "$DD" "${SIGNARGS[@]}" \
+  CURRENT_PROJECT_VERSION="$BUILD_NO" CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-mac.log 2>&1
 MAC=$?
 say "macOS: $([ $MAC -eq 0 ] && echo ERFOLG || echo "FEHLER ($MAC)")"
 grep -E "error:|warning: .*deprecated" build-logs/build-mac.log | sort -u | head -60 >> "$LOG"
 
 say "--- iOS bauen (generisches Gerät)"
 xcodebuild -project CMEPhone.xcodeproj -scheme CMEPhone -configuration Debug \
-  -destination 'generic/platform=iOS' -derivedDataPath "$DD" "${SIGNARGS[@]}" build > build-logs/build-ios.log 2>&1
+  -destination 'generic/platform=iOS' -derivedDataPath "$DD" "${SIGNARGS[@]}" \
+  CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-ios.log 2>&1
 IOS=$?
 say "iOS: $([ $IOS -eq 0 ] && echo ERFOLG || echo "FEHLER ($IOS)")"
 grep -E "error:" build-logs/build-ios.log | sort -u | head -60 >> "$LOG"

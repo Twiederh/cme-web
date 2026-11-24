@@ -149,7 +149,7 @@ final class SIPManager: ObservableObject {
         applyMediaSettings()
 
         do { try core.start() } catch { log("Core-Start fehlgeschlagen: \(error)"); return }
-        log("liblinphone \(Core.getVersion) gestartet")
+        log("CME Phone \(BuildInfo.text), liblinphone \(Core.getVersion) gestartet")
         applyAccount()
     }
 

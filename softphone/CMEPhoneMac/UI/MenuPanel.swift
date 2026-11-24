@@ -96,7 +96,7 @@ struct MenuPanel: View {
                 .buttonStyle(.borderless).help("Einstellungen (⌘,)")
                 .keyboardShortcut(",")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
-                    .buttonStyle(.borderless).help("CME Phone beenden")
+                    .buttonStyle(.borderless).help("CME Phone beenden – \(BuildInfo.text)")
             }
             .padding(.horizontal, 14)
             .padding(.top, 12)

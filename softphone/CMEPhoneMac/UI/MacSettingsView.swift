@@ -86,6 +86,7 @@ private struct AccountTab: View {
                 if !settings.voicemailNumber.isEmpty {
                     LabeledContent("Voicemail", value: settings.voicemailNumber)
                 }
+                LabeledContent("App-Version", value: BuildInfo.text).textSelection(.enabled)
             }
             DisclosureGroup("Ohne cme-web / manuell", isExpanded: $manual) {
                 TextField("CME-Adresse", text: $settings.cmeHost)

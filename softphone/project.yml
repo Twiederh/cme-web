@@ -12,6 +12,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"  # iPhone + iPad
     CURRENT_PROJECT_VERSION: "2"
+    CME_BUILD_INFO: "Xcode"   # build.command setzt Git-Commit und Zeit ein
     # Apple Vision Pro: die iPad-App läuft dort als "Designed for iPad" (kein eigenes visionOS-SDK von Linphone)
     SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: YES
 
@@ -44,6 +45,7 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         # Build-Nummer: für jeden TestFlight-Upload erhöhen (CURRENT_PROJECT_VERSION, z.B. per build.command)
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CMEBuildInfo: "$(CME_BUILD_INFO)"
         UILaunchScreen: {}
         # Nur Standard-Verschlüsselung (TLS/SRTP) -> keine Exportdokumente für TestFlight/App Store nötig
         ITSAppUsesNonExemptEncryption: false
