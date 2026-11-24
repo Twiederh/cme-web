@@ -83,7 +83,18 @@ final class SIPManager: ObservableObject {
         let configPath = configDir.appendingPathComponent("linphonerc").path
 
         do {
-            core = try Factory.Instance.createCore(configPath: configPath, factoryConfigPath: "", systemContext: nil)
+            // Konfiguration vor dem Erzeugen des Cores setzen: manche Werte (z.B. der NAT-Helfer) liest liblinphone
+            // nur beim Erzeugen, nicht erst bei core.start().
+            let config = try Factory.Instance.createConfig(path: configPath)
+            #if os(macOS)
+            // CME setzt in Antworten kein "received"/"rport" in den Via. belle-sips NAT-Helfer hält den Contact dann
+            // für falsch und schickt jedes REGISTER/SUBSCRIBE sofort ein zweites Mal ("resubmitting request because
+            // contact sent was not correct"). Das erste NOTIFY von CME kommt mitten in diese Wiederholung und wird
+            // mit 481 abgelehnt – CME nimmt den Mac dann nicht in die Shared Line auf. Im LAN direkt an CME ist der
+            // Helfer überflüssig.
+            config.setInt(section: "net", key: "enable_nat_helper", value: settings.jabberMode ? 0 : 1)
+            #endif
+            core = try Factory.Instance.createCoreWithConfig(config: config, systemContext: nil)
         } catch {
             log("Core konnte nicht erstellt werden: \(error)")
             return
@@ -119,12 +130,6 @@ final class SIPManager: ObservableObject {
             return u
         }()
         core.config?.setString(section: "misc", key: "uuid", value: uuid)
-        // CME setzt in Antworten kein "received"/"rport" in den Via. belle-sips NAT-Helfer hält den Contact dann
-        // für falsch und schickt jedes SUBSCRIBE sofort ein zweites Mal ("resubmitting request because contact
-        // sent was not correct"). Das erste NOTIFY von CME kommt mitten in diese Wiederholung und wird mit 481
-        // abgelehnt – CME nimmt den Mac dann nicht in die Shared Line auf. Im LAN direkt an CME ist der Helfer
-        // überflüssig. Wird beim core.start() gelesen.
-        core.config?.setInt(section: "net", key: "enable_nat_helper", value: settings.jabberMode ? 0 : 1)
         if let t = core.transports {
             t.udpPort = settings.jabberMode ? 5065 : -1
             t.tcpPort = -1
