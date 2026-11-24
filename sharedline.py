@@ -211,7 +211,7 @@ class Agent:
         for d in re.findall(r"<dialog\s.*?</dialog>", body, re.S):
             attr = dict(re.findall(r'([\w-]+)="([^"]*)"', d.split(">", 1)[0]))
             state = (re.search(r"<state[^>]*>([^<]*)</state>", d) or [None, "?"])[1]
-            rend = re.findall(r'pname="\+sip\.rendering"\s+pvalue="([^"]*)"', d)
+            rend = re.findall(r'pname="\+sip\.rendering"\s+pval(?:ue)?="([^"]*)"', d)  # Cisco: "pval"
             remote = (re.search(r"<remote>.*?<identity[^>]*>([^<]*)</identity>", d, re.S) or [None, ""])[1]
             parts.append(f"{attr.get('id', '?')} {state} call-id={attr.get('call-id', '')} "
                          f"local-tag={attr.get('local-tag', '')} remote-tag={attr.get('remote-tag', '')} "

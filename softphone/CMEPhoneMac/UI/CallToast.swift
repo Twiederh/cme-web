@@ -13,8 +13,9 @@ import linphonesw
 final class ToastController: ObservableObject {
     static let shared = ToastController()
 
-    enum Phase: Equatable { case incoming, outgoing, active }
-    enum Source: Equatable { case softphone(String), deskPhone }
+    /// held: Gespräch, das ein anderes Gerät der Shared Line gehalten hat – hier übernehmbar
+    enum Phase: Equatable { case incoming, outgoing, active, held }
+    enum Source: Equatable { case softphone(String), deskPhone, held(String) }
 
     struct Toast: Equatable {
         var source: Source
@@ -28,7 +29,9 @@ final class ToastController: ObservableObject {
         var viaDesk = false
         /// Softphone-Gespräch auf Halten (Shared Line: an einem anderen Gerät übernehmbar)
         var held = false
-        var key: String { switch source { case .softphone(let id): return id; case .deskPhone: return "desk" } }
+        var key: String {
+            switch source { case .softphone(let id): return id; case .deskPhone: return "desk"; case .held(let id): return "held-" + id }
+        }
     }
 
     @Published private(set) var toast: Toast?
@@ -47,14 +50,19 @@ final class ToastController: ObservableObject {
 
     func setup() {
         Publishers.CombineLatest4(sip.$calls, desk.$status, settings.$macMode, desk.$pendingDial)
+            .combineLatest(sip.$heldOnLine)
             .receive(on: RunLoop.main)
-            .sink { [weak self] calls, status, mode, dialed in
-                MainActor.assumeIsolated { self?.update(calls: calls, desk: status, mode: mode, dialed: dialed) }
+            .sink { [weak self] v, held in
+                let (calls, status, mode, dialed) = v
+                MainActor.assumeIsolated {
+                    self?.update(calls: calls, desk: status, mode: mode, dialed: dialed, held: held)
+                }
             }
             .store(in: &cancellables)
     }
 
-    private func update(calls: [SIPManager.CallInfo], desk status: LineStatus, mode: MacMode, dialed: String?) {
+    private func update(calls: [SIPManager.CallInfo], desk status: LineStatus, mode: MacMode, dialed: String?,
+                        held: [SIPManager.HeldLineCall] = []) {
         var t: Toast?
         // Softphone: eingehend vor laufend vor ausgehend (beendete Anrufe nicht mehr zeigen)
         let live = calls.filter { ![.End, .Error, .Released].contains($0.state) }
@@ -90,6 +98,11 @@ final class ToastController: ObservableObject {
                     t = Toast(source: .deskPhone, phase: .outgoing, number: dialed, name: "")
                 }
             }
+        }
+        // Nichts los am Mac, aber ein anderes Gerät hält ein Gespräch der Shared Line: zum Übernehmen anbieten
+        if t == nil, let h = held.last {
+            let number = h.remoteURI.replacingOccurrences(of: "sip:", with: "").components(separatedBy: "@").first ?? h.remoteURI
+            t = Toast(source: .held(h.callId), phase: .held, number: number, name: h.remoteName)
         }
         guard let t else {
             dismissed.removeAll()
@@ -128,6 +141,7 @@ final class ToastController: ObservableObject {
             switch t.source {
             case .softphone(let id): RecordingController.shared.track(ext: settings.extensionNumber, localCallId: id)
             case .deskPhone: RecordingController.shared.track(ext: settings.deskPhoneExtension, localCallId: nil)
+            case .held: break
             }
         }
         presentPanel()
@@ -180,6 +194,8 @@ final class ToastController: ObservableObject {
         switch t.source {
         case .softphone(let id): CallCenter.shared.requestAnswer(callId: id)
         case .deskPhone: desk.answer()
+        case .held(let id):
+            if let h = sip.heldOnLine.first(where: { $0.callId == id }) { sip.takeOver(h) }
         }
     }
 
@@ -188,6 +204,7 @@ final class ToastController: ObservableObject {
         switch t.source {
         case .softphone(let id): sip.terminate(callId: id)
         case .deskPhone: desk.hangup()
+        case .held: close()
         }
     }
 
@@ -198,6 +215,7 @@ final class ToastController: ObservableObject {
         switch t.source {
         case .softphone(let id): CallCenter.shared.requestHold(callId: id, held: !t.held)
         case .deskPhone: desk.hold()
+        case .held: break
         }
     }
 
@@ -215,6 +233,7 @@ final class ToastController: ObservableObject {
             desk.decline()
             dismissed.insert(t.key + "\(t.phase)")
             hide()
+        case .held: close()
         }
     }
 
@@ -232,6 +251,7 @@ final class ToastController: ObservableObject {
             desk.execute(settings.keyVoicemail)
             dismissed.insert(t.key + "\(t.phase)")
             hide()
+        case .held: close()
         }
     }
 
@@ -321,6 +341,8 @@ struct CallToastView: View {
             parts.append(String(format: "%d:%02d", secs / 60, secs % 60))
             if t.held { parts.append("Gehalten") }
             if rec.isOn { parts.append("● Aufnahme") }
+        case .held:
+            parts.append("Gehalten auf der Leitung – übernehmen?")
         }
         if t.source == .deskPhone || t.viaDesk { parts.append("Tischtelefon") }
         return parts.joined(separator: " · ")
@@ -335,6 +357,10 @@ struct CallToastView: View {
                 RoundKey(symbol: "phone.fill", color: .green, help: "Annehmen") { model.answer() }
             case .outgoing:
                 RoundKey(symbol: "phone.down.fill", color: .red, help: "Auflegen") { model.hangup() }
+            case .held:
+                RoundKey(symbol: "xmark", color: Color(white: 0.5), help: "Ausblenden") { model.close() }
+                RoundKey(symbol: "phone.arrow.down.left.fill", color: .green,
+                         help: "Übernehmen – das Gespräch wird auf diesem Mac fortgesetzt") { model.answer() }
             case .active:
                 if settings.videoEnabled, case .softphone(let id) = t.source {
                     RoundKey(symbol: t.video ? "video.slash.fill" : "video.fill", color: Color(white: 0.5),

@@ -354,6 +354,93 @@ final class SIPManager: ObservableObject {
         core.stop()
     }
 
+    // MARK: - Gehaltene Gespräche auf der Shared Line (Übernehmen)
+
+    /// Ein auf einem anderen Gerät der Shared Line gehaltenes Gespräch. CME meldet es im dialog-NOTIFY mit
+    /// <local>…<param pname="+sip.rendering" pval="no"/>…</local>; ohne <local>/<remote> läuft es wieder.
+    struct HeldLineCall: Equatable, Identifiable {
+        var id: String { callId }
+        let callId: String
+        let localTag: String     // Tag des haltenden Geräts
+        let remoteTag: String    // Tag der CME
+        let remoteURI: String    // Gegenstelle, z.B. sip:0179…@192.168.11.4
+        let remoteName: String
+        let holder: String       // Gerät, das hält (entity, z.B. sip:+49…@192.168.11.46)
+    }
+    @Published private(set) var heldOnLine: [HeldLineCall] = []
+
+    private static func attr(_ name: String, in text: String) -> String {
+        let p = "\\b\(name)=\"([^\"]*)\""
+        guard let re = try? NSRegularExpression(pattern: p),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let r = Range(m.range(at: 1), in: text) else { return "" }
+        return String(text[r])
+    }
+
+    private static func firstGroup(_ pattern: String, in text: String) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let r = Range(m.range(at: 1), in: text) else { return "" }
+        return String(text[r])
+    }
+
+    func handleLineNotify(_ xml: String) {
+        guard xml.contains("<dialog") else { return }
+        let entity = Self.attr("entity", in: xml)
+        guard let re = try? NSRegularExpression(pattern: "<dialog\\s.*?</dialog>", options: [.dotMatchesLineSeparators])
+        else { return }
+        let ownIds = Set(core?.calls.compactMap { $0.callLog?.callId } ?? [])
+        var list = heldOnLine
+        for m in re.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)) {
+            guard let r = Range(m.range, in: xml) else { continue }
+            let d = String(xml[r])
+            let head = String(d.prefix(while: { $0 != ">" }))
+            let callId = Self.attr("call-id", in: head)
+            guard !callId.isEmpty else { continue }
+            let state = Self.firstGroup("<state[^>]*>([^<]*)</state>", in: d)
+            let held = d.range(of: "\\+sip\\.rendering\"\\s+pval(ue)?=\"no\"", options: .regularExpression) != nil
+            list.removeAll { $0.callId == callId }
+            guard held, state != "terminated", !ownIds.contains(callId) else { continue }
+            let remote = Self.firstGroup("<remote>.*?<identity([^>]*)>", in: d)
+            let uri = Self.firstGroup("<remote>.*?<identity[^>]*>([^<]*)</identity>", in: d)
+            guard !uri.isEmpty else { continue }
+            list.append(HeldLineCall(callId: callId, localTag: Self.attr("local-tag", in: head),
+                                     remoteTag: Self.attr("remote-tag", in: head), remoteURI: uri,
+                                     remoteName: Self.attr("display", in: remote).trimmingCharacters(in: .whitespaces),
+                                     holder: entity))
+        }
+        if list != heldOnLine {
+            heldOnLine = list
+            log("Shared Line: gehalten auf anderem Gerät: \(list.map { "\($0.remoteURI) (\($0.holder))" }.joined(separator: ", "))")
+        }
+    }
+
+    /// Gehaltenes Gespräch übernehmen wie ein Cisco-Telefon: INVITE an die Gegenstelle mit
+    /// "Replaces: <call-id>;to-tag=<Tag des haltenden Geräts>;from-tag=<Tag der CME>". CME verbindet die
+    /// Gegenstelle mit diesem Gerät und beendet den Zweig des haltenden Geräts.
+    @discardableResult
+    func takeOver(_ h: HeldLineCall) -> Call? {
+        guard let core else { return nil }
+        do {
+            let addr = try Factory.Instance.createAddress(addr: h.remoteURI)
+            let params = try core.createCallParams(call: nil)
+            params.videoEnabled = false
+            params.mediaEncryption = settings.mediaEncryption == .srtp ? .SRTP : .None
+            params.addCustomHeader(headerName: "Replaces",
+                                   headerValue: "\(h.callId);to-tag=\(h.localTag);from-tag=\(h.remoteTag)")
+            params.recordFile = Self.recordingPath(remote: addr.username ?? "unbekannt")
+            #if os(iOS)
+            core.configureAudioSession()
+            #endif
+            heldOnLine.removeAll { $0.callId == h.callId }
+            log("Übernehme gehaltenes Gespräch \(h.remoteURI)")
+            return core.inviteAddressWithParams(addr: addr, params: params)
+        } catch {
+            log("Übernehmen fehlgeschlagen: \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Cisco-Leitungsmodus (experimentell)
 
     /// Genau wie Cisco Jabber für Mac 15.3 (REGISTER an CME). "X-cisco-duplicate-reg" sorgt dafür, dass CME eine
@@ -415,6 +502,9 @@ final class SIPManager: ObservableObject {
             ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
             ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
             let d = EventDelegateStub(
+                onNotifyReceived: { [weak self] _, body in
+                    MainActor.assumeIsolated { self?.handleLineNotify(body?.utf8Text ?? "") }
+                },
                 onSubscribeStateChanged: { [weak self] ev, state in
                     MainActor.assumeIsolated {
                         let code = ev.errorInfo?.protocolCode ?? 0
