@@ -601,6 +601,20 @@ final class SIPManager: ObservableObject {
         core?.calls.first { $0.callLog?.callId == callId }
     }
 
+    /// Parameter für ein Re-INVITE (Halten, Video). createCallParams(call:) übernimmt die eigenen Header früherer
+    /// INVITEs – nach dem Übernehmen "Replaces", nach dem Halten "Call-Info: …hold". "Replaces" lehnt CME in einem
+    /// Re-INVITE als ungültig ab ("invalid IE content", keine Antwort). Deshalb immer frische Parameter mit den
+    /// Einstellungen dieses Gesprächs.
+    private func updateParams(for call: Call) throws -> CallParams {
+        guard let core else { throw NSError(domain: "SIP", code: 1) }
+        let cur = try core.createCallParams(call: call)
+        let p = try core.createCallParams(call: nil)
+        p.videoEnabled = cur.videoEnabled
+        p.mediaEncryption = cur.mediaEncryption
+        p.recordFile = cur.recordFile
+        return p
+    }
+
     func accept(callId: String) {
         guard let core, let call = call(withId: callId) else { return }
         do {
@@ -692,9 +706,9 @@ final class SIPManager: ObservableObject {
     /// Gespräch – die anderen Geräte zeigen es dann mit "Fortsetzen" an und können es übernehmen (call.pause()
     /// schickt den Header nicht; CME behandelt das Gespräch dann als privat weiterlaufend).
     func setHeld(callId: String, held: Bool) {
-        guard let core, let call = call(withId: callId) else { return }
+        guard let call = call(withId: callId) else { return }
         do {
-            let p = try core.createCallParams(call: call)
+            let p = try updateParams(for: call)
             p.audioDirection = held ? .SendOnly : .SendRecv
             if p.videoEnabled { p.videoDirection = held ? .SendOnly : .SendRecv }
             p.addCustomHeader(headerName: "Call-Info",
@@ -749,9 +763,9 @@ final class SIPManager: ObservableObject {
     }
 
     func setVideo(callId: String, enabled: Bool) {
-        guard let core, let call = call(withId: callId) else { return }
+        guard let call = call(withId: callId) else { return }
         do {
-            let params = try core.createCallParams(call: call)
+            let params = try updateParams(for: call)
             params.videoEnabled = enabled
             try call.update(params: params)
         } catch { log("Video-Update: \(error)") }
