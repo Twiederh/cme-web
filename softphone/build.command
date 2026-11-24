@@ -83,13 +83,23 @@ else
 fi
 
 MAC=-; IOS=-
+# Mac-App immer signiert bauen (Team-Zertifikat aus Xcode): Nur so läuft sie in der Sandbox und liest ihre
+# Einstellungen aus ~/Library/Containers/de.wiederhol.cmephone.mac. Unsigniert hätte sie eigene, leere
+# Einstellungen (kein Gerätename/Passwort -> 401 Unauthorized). MACSIGN=0 baut unsigniert (nur zum Kompilieren).
+if [ "${MACSIGN:-1}" = "1" ]; then
+  MACSIGNARGS=(-allowProvisioningUpdates)
+else
+  MACSIGNARGS=("${SIGNARGS[@]}")
+fi
 if [ "${ONLY:-}" != "ios" ]; then
   say "--- macOS bauen"
   xcodebuild -project CMEPhoneMac.xcodeproj -scheme CMEPhoneMac -configuration Debug \
-    -derivedDataPath "$DD" "${SIGNARGS[@]}" \
+    -derivedDataPath "$DD" "${MACSIGNARGS[@]}" \
     CURRENT_PROJECT_VERSION="$BUILD_NO" CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-mac.log 2>&1
   MAC=$?
   say "macOS: $([ $MAC -eq 0 ] && echo ERFOLG || echo "FEHLER ($MAC)")"
+  [ $MAC -ne 0 ] && [ "${MACSIGN:-1}" = "1" ] && grep -q -i -E "signing|provision|certificate" build-logs/build-mac.log && \
+    say "Hinweis: Signieren fehlgeschlagen – in Xcode unter Settings → Accounts anmelden (Team 83BLV56527)"
   grep -E "error:|warning: .*deprecated" build-logs/build-mac.log | sort -u | head -60 >> "$LOG"
 fi
 
@@ -105,7 +115,7 @@ fi
 
 # Mac-App installieren: laufende App sauber beenden (meldet sich an der CME ab), nach /Applications kopieren,
 # neu starten. So läuft immer eine feste Kopie, die ein neuer Build nicht unter der laufenden App ersetzt.
-if [ "$MAC" = "0" ] && [ "${INSTALL:-1}" = "1" ]; then
+if [ "$MAC" = "0" ] && [ "${INSTALL:-1}" = "1" ] && [ "${MACSIGN:-1}" = "1" ]; then
   BID=de.wiederhol.cmephone.mac
   SRC="$DD/Build/Products/Debug/CMEPhone.app"
   DEST=/Applications/CMEPhone.app

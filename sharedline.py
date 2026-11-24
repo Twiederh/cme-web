@@ -195,6 +195,28 @@ class Agent:
                 # NOTIFY (Event: dialog, service-control), REFER, OPTIONS u. a. bestätigen – ohne die Bestätigung
                 # des ersten NOTIFY nimmt CME das Gerät nicht in die Shared Line auf
                 self._reply_ok(msg, addr)
+                if msg.startswith("NOTIFY") and _header(msg, "Event").lower().startswith("dialog"):
+                    self._log_dialog(msg)
+
+    _last_dialog: dict = {}
+
+    def _log_dialog(self, msg: str) -> None:
+        """Diagnose: Inhalt der dialog-NOTIFYs der CME knapp ins Log (Gehalten/Übernehmen auf der Shared Line)."""
+        body = msg.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in msg else ""
+        to = _header(msg, "To")
+        if self._last_dialog.get(to) == body:
+            return
+        self._last_dialog[to] = body
+        parts = []
+        for d in re.findall(r"<dialog\s.*?</dialog>", body, re.S):
+            attr = dict(re.findall(r'([\w-]+)="([^"]*)"', d.split(">", 1)[0]))
+            state = (re.search(r"<state[^>]*>([^<]*)</state>", d) or [None, "?"])[1]
+            rend = re.findall(r'pname="\+sip\.rendering"\s+pvalue="([^"]*)"', d)
+            remote = (re.search(r"<remote>.*?<identity[^>]*>([^<]*)</identity>", d, re.S) or [None, ""])[1]
+            parts.append(f"{attr.get('id', '?')} {state} call-id={attr.get('call-id', '')} "
+                         f"local-tag={attr.get('local-tag', '')} remote-tag={attr.get('remote-tag', '')} "
+                         f"rendering={'/'.join(rend) or '-'} remote={remote}")
+        print(f"sharedline: dialog-NOTIFY an {to}: " + ("; ".join(parts) or "keine Dialoge"), flush=True)
 
     def _reply(self, req: str, addr, status: str, extra: list[str] | None = None) -> None:
         keep = [l for l in req.split("\r\n") if re.match(r"(Via|From|Call-ID|CSeq)\s*:", l, re.I)]
