@@ -373,6 +373,19 @@ Nummer nur noch auf einem Telefon liegt.
 Geänderte Konfiguration wird erst mit „Konfiguration speichern“ (`write memory`)
 dauerhaft gespeichert.
 
+**Wer klingelt mit?** CME klingelt eine Shared Line nur an den Geräten an, die die
+Leitung per `SUBSCRIBE Event: dialog` abonniert haben (`show shared-line details`).
+Den Teilnehmer führt CME unter dem From-URI des Abos und sucht dessen Dial-Peer über
+die IP darin. Cisco-Telefone und CME Phone abonnieren selbst. Für alle anderen
+angemeldeten Geräte auf einer Shared Line – etwa eine Gigaset-Basis – hält cme-web das
+Abo stellvertretend (`sharedline.py`, Tab Telefone → „Shared Line für Fremdgeräte“):
+SUBSCRIBE mit der IP des Geräts im From, NOTIFYs bestätigen, erneuern, beim Abmelden
+beenden. Die Anrufe schickt CME weiter direkt an das Gerät.
+
+Dafür muss CME cme-web per UDP erreichen: `SHARED_LINE_PORT` (Standard `5074`) auf
+`VM_HOST_IP` bzw. `SHARED_LINE_HOST`. Zum Ausprobieren ohne cme-web:
+`python3 tools/shared_line_sub.py --cme <CME-IP> --number <Nummer> --device-ip <IP des Geräts>`.
+
 ### Visual Voicemail am Telefon
 
 Im Tab „Voicemail“ gibt es einen Telefondienst, der die Asterisk-Mailboxen ähnlich wie die

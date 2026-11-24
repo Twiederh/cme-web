@@ -45,7 +45,7 @@
   for (const [id, src] of [["firmware-card", "/static/firmware.js"], ["phonecfg-card", "/static/phonecfg.js"],
                            ["queue-card", "/static/queues.js"], ["vvm-card", "/static/vvm.js"],
                            ["phonebook-card", "/static/phonebook.js"], ["users-card", "/static/users.js"],
-                           ["phoneapp-card", "/static/phoneapp.js"]]) {
+                           ["phoneapp-card", "/static/phoneapp.js"], ["sharedline-card", "/static/sharedline.js"]]) {
     if (document.getElementById(id)) continue;
     const c = document.createElement("section");
     c.className = "card";
@@ -84,7 +84,7 @@
     { id: "overview", label: "Übersicht",
       parts: [top(".kpis"), devices, top("#t-trunks"), top("#raw-out")] },
     { id: "phones", label: "Telefone & Rufnummern",
-      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#pickup-card"), top("#cor-card"), top("#firmware-card"), top("#phonecfg-card")] },
+      parts: [top("#t-phones"), top("#f-phone"), top("#t-numbers"), top("#egress-card"), top("#t-hunts"), top("#t-codecs"), top("#pickup-card"), top("#cor-card"), top("#firmware-card"), top("#phonecfg-card"), top("#sharedline-card")] },
     { id: "dialpeers", label: "Dial-Peers & Trunks", parts: [top("#dialpeer-card")] },
     { id: "translation", label: "Übersetzungen", parts: [top("#translation-card"), top("#e164-card")] },
     { id: "voicemail", label: "Voicemail, IVR & Konferenzen", parts: [top("#voicemail-card"), top("#vvm-card"), top("#queue-card"), top("#conf-card")] },

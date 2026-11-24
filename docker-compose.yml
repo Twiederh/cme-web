@@ -9,6 +9,8 @@ services:
       - "${CME_WEB_PORT:-8080}:8080"
       # Telefondienste (Visual Voicemail) fuer die Cisco-Telefone, nur /ipphone/...
       - "${CME_PHONE_PORT:-8081}:8081"
+      # Shared Line fuer Fremdgeraete (sharedline.py): NOTIFYs der CME an die stellvertretenden Abos
+      - "${SHARED_LINE_PORT:-5074}:${SHARED_LINE_PORT:-5074}/udp"
     environment:
       CME_HOST: ${CME_HOST}
       CME_USER: ${CME_USER}
@@ -43,6 +45,7 @@ services:
       VM_REC_DIR: /data/recordings
       # Visual Voicemail: Port, unter dem die Telefone cme-web erreichen (siehe ports)
       CME_PHONE_URL_PORT: ${CME_PHONE_PORT:-8081}
+      SHARED_LINE_PORT: ${SHARED_LINE_PORT:-5074}
       # CME Phone (Tab Softphone, siehe softphone/README.md)
       PHONEAPP_DATA_DIR: /data/push
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}

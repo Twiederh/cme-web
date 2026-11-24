@@ -718,3 +718,7 @@ def register(app, router, apply, demo: bool) -> None:
     # CME Phone (Softphone): APNs-Schluessel, Local-Push-Secret, Schnittstelle fuer die Apps
     import phoneapp
     phoneapp.register(app, router, demo, cfgdir)
+
+    # Shared Line fuer Geraete ohne eigenes Abo (z. B. Gigaset): stellvertretende dialog-Abos
+    import sharedline
+    sharedline.register(app, router, demo, cfgdir)
