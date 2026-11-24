@@ -373,14 +373,14 @@ final class SIPManager: ObservableObject {
         let p = "\\b\(name)=\"([^\"]*)\""
         guard let re = try? NSRegularExpression(pattern: p),
               let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Range(m.range(at: 1), in: text) else { return "" }
+              let r = Swift.Range(m.range(at: 1), in: text) else { return "" }
         return String(text[r])
     }
 
     private static func firstGroup(_ pattern: String, in text: String) -> String {
         guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
               let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Range(m.range(at: 1), in: text) else { return "" }
+              let r = Swift.Range(m.range(at: 1), in: text) else { return "" }
         return String(text[r])
     }
 
@@ -392,7 +392,7 @@ final class SIPManager: ObservableObject {
         let ownIds = Set(core?.calls.compactMap { $0.callLog?.callId } ?? [])
         var list = heldOnLine
         for m in re.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)) {
-            guard let r = Range(m.range, in: xml) else { continue }
+            guard let r = Swift.Range(m.range, in: xml) else { continue }
             let d = String(xml[r])
             let head = String(d.prefix(while: { $0 != ">" }))
             let callId = Self.attr("call-id", in: head)

@@ -76,10 +76,10 @@ DD="$PWD/build/DerivedData"
 if [ "${SIGN:-0}" = "1" ]; then
   # -allowProvisioningDeviceRegistration: trägt diesen Mac selbst im Developer-Account ein
   SIGNARGS=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
-  say "Signierung: an (Team 83BLV56527)"
+  say "Signierung iOS: an (Team 83BLV56527)"
 else
   SIGNARGS=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
-  say "Signierung: aus (nur Kompilieren)"
+  say "Signierung iOS: aus (nur Kompilieren) – Mac-App wird immer signiert"
 fi
 
 MAC=-; IOS=-
@@ -98,7 +98,7 @@ if [ "${ONLY:-}" != "ios" ]; then
     CURRENT_PROJECT_VERSION="$BUILD_NO" CME_BUILD_INFO="$BUILD_INFO" build > build-logs/build-mac.log 2>&1
   MAC=$?
   say "macOS: $([ $MAC -eq 0 ] && echo ERFOLG || echo "FEHLER ($MAC)")"
-  [ $MAC -ne 0 ] && [ "${MACSIGN:-1}" = "1" ] && grep -q -i -E "signing|provision|certificate" build-logs/build-mac.log && \
+  [ $MAC -ne 0 ] && [ "${MACSIGN:-1}" = "1" ] && grep -q -i -E "error:.*(sign|provision|certificate|team)" build-logs/build-mac.log && \
     say "Hinweis: Signieren fehlgeschlagen – in Xcode unter Settings → Accounts anmelden (Team 83BLV56527)"
   grep -E "error:|warning: .*deprecated" build-logs/build-mac.log | sort -u | head -60 >> "$LOG"
 fi
