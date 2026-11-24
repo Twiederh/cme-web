@@ -156,11 +156,11 @@ final class SIPManager: ObservableObject {
     // MARK: - Konto
 
     private var applyGeneration = 0
-    /// Jabber-Modus: Wie Cisco Jabber vor dem Anmelden erst abmelden (REGISTER mit Expires 0). CME lehnt eine
-    /// neue Anmeldung mit "403 Registration is active for another client" ab, solange eine frühere (andere
-    /// Call-ID) noch gilt – etwa nach einem Absturz oder wenn sich die App beim Beenden nicht abmelden konnte.
-    private var cleanupPending = false
-    private var lastCleanup = Date.distantPast
+    /// Jabber-Modus: CME lehnt eine neue Anmeldung (neue Call-ID) mit "403 Registration is active for another
+    /// client" ab, solange eine frühere noch gilt – etwa nach einem Absturz. Ein Abmelden mit neuer Call-ID
+    /// beantwortet CME mit 404. Deshalb kurze Anmeldedauer (s. jabberExpires) und bei 403 regelmäßig neu versuchen.
+    private static let jabberExpires = 120
+    private var forbiddenRetry: DispatchWorkItem?
 
     func applyAccount() {
         guard let core else { return }
@@ -176,8 +176,7 @@ final class SIPManager: ObservableObject {
         let wasRegistered = old.contains { $0.state == .Ok || $0.state == .Progress }
         for acc in old { core.removeAccount(account: acc) }
         registration = .none
-        cleanupPending = settings.jabberMode
-        if settings.jabberMode { lastCleanup = Date() }
+        forbiddenRetry?.cancel(); forbiddenRetry = nil
         if wasRegistered {
             log("Konto wird neu angemeldet – alte Anmeldung wird zuerst beendet")
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -221,11 +220,7 @@ final class SIPManager: ObservableObject {
             // Bei Gateway-Betrieb: alle Requests über Flexisip (Outbound-Proxy), Request-URI bleibt CME.
             params.outboundProxyEnabled = viaGateway
             params.registerEnabled = true
-            params.expires = settings.jabberMode ? 3600 : 600
-            if settings.jabberMode && cleanupPending {
-                params.expires = 0
-                log("Jabber-Modus: erst abmelden (Expires 0), dann anmelden")
-            }
+            params.expires = settings.jabberMode ? Self.jabberExpires : 600
             // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
             // cme-web legt die App als Pool "id device-id-name CSF<Nebenstelle>" an; den Namen schickt die App
             // wie Jabber im Contact mit.
@@ -266,16 +261,6 @@ final class SIPManager: ObservableObject {
             try core.addAccount(account: account)
             core.defaultAccount = account
             log("Konto \(identity.asStringUriOnly()) über \(server.asStringUriOnly())")
-            if params.expires == 0 {
-                // Falls CME nicht antwortet: trotzdem nach 5 s richtig anmelden
-                let generation = applyGeneration
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                    MainActor.assumeIsolated {
-                        guard let self, self.cleanupPending, self.applyGeneration == generation else { return }
-                        self.finishCleanup()
-                    }
-                }
-            }
         } catch {
             log("Konto-Fehler: \(error)")
             registration = .failed("\(error)")
@@ -283,14 +268,6 @@ final class SIPManager: ObservableObject {
     }
 
     func refreshRegistration() { core?.refreshRegisters() }
-
-    /// Abmeldung (Expires 0) ist durch – jetzt mit neuem Konto richtig anmelden.
-    private func finishCleanup() {
-        guard let core else { return }
-        cleanupPending = false
-        for acc in core.accountList { core.removeAccount(account: acc) }
-        addConfiguredAccount()
-    }
 
     /// Abmelden und kurz warten, bis CME es bestätigt (beim Beenden der App).
     func unregisterBlocking(timeout: TimeInterval) {
@@ -302,12 +279,14 @@ final class SIPManager: ObservableObject {
             p.registerEnabled = false
             acc.params = p
         }
+        log("Beenden: Konten \(core.accountList.map { "\($0.state)" }.joined(separator: ","))")
         let end = Date().addingTimeInterval(timeout)
-        while Date() < end, core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress }) {
+        repeat {
             core.iterate()
             Thread.sleep(forTimeInterval: 0.02)
-        }
-        log("Beim Beenden abgemeldet")
+        } while Date() < end && core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress })
+        log("Beim Beenden abgemeldet: \(core.accountList.map { "\($0.state)" }.joined(separator: ","))")
+        core.stop()
     }
 
     // MARK: - Cisco-Leitungsmodus (experimentell)
@@ -598,23 +577,18 @@ final class SIPManager: ObservableObject {
             log("Alte Anmeldung: \(state) \(message)")
             return
         }
-        if cleanupPending {
-            if state == .Ok || state == .Cleared || state == .Failed {
-                log("Vorab-Abmeldung: \(state) \(message)")
-                DispatchQueue.main.async { [weak self] in
-                    MainActor.assumeIsolated { if self?.cleanupPending == true { self?.finishCleanup() } }
+        // Alte Anmeldung hält CME noch fest: alle 20 s neu versuchen, bis sie abgelaufen ist (≤ jabberExpires)
+        if state == .Failed, settings.jabberMode, message.contains("Forbidden"), forbiddenRetry == nil {
+            let item = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.forbiddenRetry = nil
+                    self.log("Erneuter Anmeldeversuch nach 403")
+                    self.core?.refreshRegisters()
                 }
             }
-            return
-        }
-        // Trotzdem abgewiesen (z.B. Anmeldung hängt nach Router-Neustart/Netzwechsel): höchstens einmal pro
-        // Minute erneut abmelden und anmelden.
-        if state == .Failed, settings.jabberMode, message.contains("Forbidden"),
-           Date().timeIntervalSince(lastCleanup) > 60 {
-            log("Registrierung: \(state) \(message) – melde ab und neu an")
-            lastCleanup = Date()
-            DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.applyAccount() } }
-            return
+            forbiddenRetry = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: item)
         }
         switch state {
         case .Progress: registration = .progress
