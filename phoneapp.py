@@ -37,6 +37,8 @@ DEVICE_PREFIX = "CSF"          # Geraetename der App am Router (wie cme_web.SOFT
 # Mobilgeraete (iPhone/iPad) einer Rufnummer: EIN Pool "MOB<Nummer>", den cme-web (sharedline.py) mit Ziel
 # Flexisip an CME anmeldet. Die Apps melden sich nur an Flexisip an; das Passwort dieses Pools prueft cme-web.
 MOBILE_PREFIX = "MOB"
+# Codec-Liste 3 (G.722, G.711); ohne Angabe bietet CME G.729 an, das liblinphone nicht hat
+MOBILE_CODEC = " voice-class codec 3"
 
 
 class AppError(ValueError):
@@ -413,10 +415,18 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         device = (MOBILE_PREFIX + dn["number"].lstrip("+")).upper()
         have = next((t for t, p in pools.items() if p["device_id"].upper() == device), None)
         if have:
+            fix = []
+            if not pools[have].get("codec") and not pools[have].get("codec_list"):
+                # Ohne Codec-Angabe bietet CME G.729 an - das kann die App nicht (488 Not acceptable here)
+                fix.append(MOBILE_CODEC)
+            pw = None
             if not device_credentials(device):
                 pw = new_pw()
-                configure_ok([f"voice register pool {have}", f" username {device} password {pw}",
-                              "voice register global", " create profile"], "das Passwort")
+                fix.append(f" username {device} password {pw}")
+            if fix:
+                configure_ok([f"voice register pool {have}", *fix, "voice register global", " create profile"],
+                             "den Pool")
+            if pw:
                 creds_store(device, device, pw)
             return device
         tag = str(max([int(t) for t in pools] + [0]) + 1)
@@ -425,7 +435,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         if not dn.get("shared"):
             lines += [f"voice register dn {tag_dn}", " shared-line max-calls 5"]
         lines += [f"voice register pool {tag}", f" id device-id-name {device}", " type Jabber-CSF-Client",
-                  f" number 1 dn {tag_dn}", f" username {device} password {pw}", " dtmf-relay rtp-nte sip-notify",
+                  f" number 1 dn {tag_dn}", f" username {device} password {pw}", " dtmf-relay rtp-nte sip-notify", MOBILE_CODEC,
                   " description CME Mobil", "voice register global", " create profile"]
         configure_ok(lines, "den Pool")
         creds_store(device, device, pw)
