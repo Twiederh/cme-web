@@ -122,7 +122,7 @@ final class SIPManager: ObservableObject {
         // Wie Jabber: gleichbleibender Contact (feste UDP-Adresse + feste +sip.instance). CME lehnt eine
         // Anmeldung mit 403 "Registration is active for another client" ab, solange die vorige Anmeldung
         // desselben Pools von einem anderen Contact noch gilt – wechselnde Ports/IDs würden das bei jedem
-        // Neustart auslösen. 5060 bleibt frei (Cisco Jabber).
+        // Neustart auslösen.
         let uuidKey = "sipInstanceUUID"
         let uuid = UserDefaults.standard.string(forKey: uuidKey) ?? {
             let u = UUID().uuidString.lowercased()
@@ -131,7 +131,11 @@ final class SIPManager: ObservableObject {
         }()
         core.config?.setString(section: "misc", key: "uuid", value: uuid)
         if let t = core.transports {
-            t.udpPort = settings.jabberMode ? 5065 : -1
+            // 5060 wie ein Cisco-Telefon: CME antwortet auf Anfragen von einem anderen Port als 5060 aus einem
+            // zufälligen Absenderport. Der SIP-Helfer der UDM (nf_conntrack_sip) hält die Verbindung Mac→CME:5060
+            // dann für unbeantwortet und lässt das INVITE der CME an den Mac nicht durch. Cisco Jabber darf auf
+            // demselben Mac nicht gleichzeitig laufen.
+            t.udpPort = settings.jabberMode ? 5060 : -1
             t.tcpPort = -1
             try? core.setTransports(newValue: t)
         }
@@ -348,18 +352,11 @@ final class SIPManager: ObservableObject {
         guard settings.ciscoLineMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
         do {
             let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
-            // Über das Konto abonnieren: dann trägt das SUBSCRIBE dessen Contact (mit Gerätename) und wird bei
-            // 401 mit den Zugangsdaten des Pools wiederholt – wie beim 8845. Nur dann führt CME das Gerät in
-            // "show shared-line details" und lässt es bei einer Shared Line mitklingeln.
+            // CME nimmt das Gerät nur in die Shared Line auf ("show shared-line details"), wenn das Abo die eigene
+            // IP im From trägt (Hilfskonto, s. lineProxy) und die App das erste NOTIFY mit 200 bestätigt (dafür
+            // NAT-Helfer aus, s. start()). Ein Gerätename im Contact ist nicht nötig (getestet 24.11.2026).
             let ev: Event
-            // Testschalter (Einstellungen → Allgemein → Shared Line → Test), nur zum Eingrenzen, was CME für die
-            // Shared Line braucht: From mit CME-Adresse statt eigener IP / Contact ohne Gerätename.
-            let testFromCME = UserDefaults.standard.bool(forKey: "testAboFromCME")
-            let testNoName = UserDefaults.standard.bool(forKey: "testAboOhneGeraetename")
-            if testFromCME || testNoName {
-                log("Cisco-Leitungsmodus: TEST – From mit CME-Adresse: \(testFromCME), ohne Gerätename: \(testNoName)")
-            }
-            if !testFromCME, let proxy = lineProxy() {
+            if let proxy = lineProxy() {
                 ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
             } else if let proxy = core.defaultProxyConfig {
                 ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
@@ -368,14 +365,6 @@ final class SIPManager: ObservableObject {
             }
             ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
             ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
-            // Wie 8845/Jabber den Gerätenamen auch im Contact des SUBSCRIBE (liblinphone setzt die Contact-Parameter
-            // des Kontos nur beim REGISTER). CME ordnet das Abo darüber dem Pool zu.
-            if !testNoName, let c = core.defaultAccount?.contactAddress, let host = c.domain, !host.isEmpty {
-                let port = c.port > 0 ? ":\(c.port)" : ""
-                ev.addCustomHeader(name: "Contact",
-                                   value: "<sip:\(settings.extensionNumber)@\(host)\(port);transport=udp>;"
-                                   + "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\";+u.sip!model.ccm.cisco.com=\"503\"")
-            }
             let d = EventDelegateStub(
                 onSubscribeStateChanged: { [weak self] ev, state in
                     MainActor.assumeIsolated {

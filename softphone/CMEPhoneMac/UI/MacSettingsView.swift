@@ -110,8 +110,6 @@ private struct AccountTab: View {
 }
 
 private struct GeneralTab: View {
-    @AppStorage("testAboOhneGeraetename") private var testNoName = false
-    @AppStorage("testAboFromCME") private var testFromCME = false
     @EnvironmentObject private var settings: PhoneSettings
 
     var body: some View {
@@ -119,14 +117,6 @@ private struct GeneralTab: View {
             Section {
                 Toggle("Wie ein Cisco-Telefon anmelden", isOn: $settings.ciscoLineMode)
                     .onChange(of: settings.ciscoLineMode) { SIPManager.shared.applyAccount() }
-                if settings.ciscoLineMode {
-                    DisclosureGroup("Test") {
-                        Toggle("Abo ohne Gerätenamen im Contact", isOn: $testNoName)
-                            .onChange(of: testNoName) { SIPManager.shared.applyAccount() }
-                        Toggle("Abo mit CME-Adresse im From", isOn: $testFromCME)
-                            .onChange(of: testFromCME) { SIPManager.shared.applyAccount() }
-                    }
-                }
             } header: { Text("Shared Line") } footer: {
                 Text("Meldet den Mac wie Cisco Jabber direkt an der CME an (UDP, ohne Push-Gateway, Cisco-Merkmale, "
                      + "Abo der eigenen Leitung). Nur so klingelt CME ihn auf einer Shared Line zusammen mit den Tischtelefonen an. "
