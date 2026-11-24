@@ -263,6 +263,24 @@ final class SIPManager: ObservableObject {
 
     func refreshRegistration() { core?.refreshRegisters() }
 
+    /// Abmelden und kurz warten, bis CME es bestätigt (beim Beenden der App).
+    func unregisterBlocking(timeout: TimeInterval) {
+        guard let core else { return }
+        lineEvent?.terminate()
+        lineEvent = nil
+        for acc in core.accountList {
+            guard let p = acc.params?.clone() else { continue }
+            p.registerEnabled = false
+            acc.params = p
+        }
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end, core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress }) {
+            core.iterate()
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        log("Beim Beenden abgemeldet")
+    }
+
     // MARK: - Cisco-Leitungsmodus (experimentell)
 
     /// Genau wie Cisco Jabber für Mac 15.3 (REGISTER an CME). "X-cisco-duplicate-reg" sorgt dafür, dass CME eine
