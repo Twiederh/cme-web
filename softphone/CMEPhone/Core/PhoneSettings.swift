@@ -83,6 +83,8 @@ final class PhoneSettings: ObservableObject {
     @Published var displayName: String { didSet { save() } }
     /// SIP-Domain = Adresse der CME (Request-URI-Ziel). Standard: 192.168.11.4
     @Published var cmeHost: String { didSet { save() } }
+    /// IP der CME (aus cme-web) – Ziel der direkten Anmeldung im Jabber-Modus
+    @Published var cmeIP: String { didSet { save() } }
     /// SIP-Passwort des Pools (CME verlangt es von Soft-Clients; kommt aus cme-web)
     @Published var password: String { didSet { save() } }
     /// SIP-Benutzername des Pools (leer = Nebenstelle ohne "+")
@@ -162,6 +164,7 @@ final class PhoneSettings: ObservableObject {
         extensionNumber = d.string(forKey: "extensionNumber") ?? ""
         displayName = d.string(forKey: "displayName") ?? ""
         cmeHost = d.string(forKey: "cmeHost") ?? "192.168.11.4"
+        cmeIP = d.string(forKey: "cmeIP") ?? "192.168.11.4"
         password = d.string(forKey: "password") ?? ""
         authUser = d.string(forKey: "authUser") ?? ""
         useGateway = d.object(forKey: "useGateway") as? Bool ?? true
@@ -262,7 +265,7 @@ final class PhoneSettings: ObservableObject {
     var accountFingerprint: String {
         [extensionNumber, displayName, cmeHost, password, authUser, "\(useGateway)", gatewayHost, "\(gatewayPort)",
          transport.rawValue, audioCodecs.map { "\($0.mime)\($0.enabled)" }.joined(), "\(videoEnabled)",
-         "\(ciscoLineMode)"].joined(separator: "|")
+         "\(ciscoLineMode)", cmeIP].joined(separator: "|")
     }
 
     /// Werte aus cme-web übernehmen (GET /client/v1/info).
@@ -271,6 +274,7 @@ final class PhoneSettings: ObservableObject {
         let before = accountFingerprint
         loading = true
         if !info.cmeHost.isEmpty { cmeHost = info.cmeHost }
+        if let ip = info.cmeIP, !ip.isEmpty { cmeIP = ip }
         if !info.gateway.host.isEmpty {
             useGateway = true
             gatewayHost = info.gateway.host
@@ -299,6 +303,20 @@ final class PhoneSettings: ObservableObject {
 
     var isConfigured: Bool { !extensionNumber.isEmpty && !cmeHost.isEmpty }
 
+    /// Mac im Cisco-Leitungsmodus: direkt an CME anmelden – genau wie Cisco Jabber (UDP, Domain = CME-IP).
+    /// Über Flexisip kommen alle Apps von derselben IP; CME hält das für eine doppelte Anmeldung und
+    /// lässt das Gerät dann bei Shared Lines aus. iOS bleibt beim Gateway (Push).
+    var jabberMode: Bool {
+        #if os(macOS)
+        return ciscoLineMode && !cmeIP.isEmpty
+        #else
+        return false
+        #endif
+    }
+
+    /// Host für Request-URIs (Anmeldung, Anrufe, Abos): im Jabber-Modus die CME-IP, sonst die SIP-Domain.
+    var sipHost: String { jabberMode ? cmeIP : cmeHost }
+
     var ssidList: [String] {
         localPushSSIDs.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
@@ -318,6 +336,7 @@ final class PhoneSettings: ObservableObject {
         d.set(extensionNumber, forKey: "extensionNumber")
         d.set(displayName, forKey: "displayName")
         d.set(cmeHost, forKey: "cmeHost")
+        d.set(cmeIP, forKey: "cmeIP")
         d.set(password, forKey: "password")
         d.set(authUser, forKey: "authUser")
         d.set(useGateway, forKey: "useGateway")

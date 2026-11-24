@@ -117,8 +117,9 @@ private struct GeneralTab: View {
                 Toggle("Wie ein Cisco-Telefon anmelden", isOn: $settings.ciscoLineMode)
                     .onChange(of: settings.ciscoLineMode) { SIPManager.shared.applyAccount() }
             } header: { Text("Shared Line") } footer: {
-                Text("Meldet die App mit den Cisco-Merkmalen eines Tischtelefons an und abonniert die eigene Leitung, "
-                     + "damit CME sie auf einer Shared Line mit anklingelt. Bei Problemen wieder ausschalten.")
+                Text("Meldet den Mac wie Cisco Jabber direkt an der CME an (UDP, ohne Push-Gateway, Cisco-Merkmale, "
+                     + "Abo der eigenen Leitung). Nur so klingelt CME ihn auf einer Shared Line zusammen mit den Tischtelefonen an. "
+                     + "Cisco Jabber auf demselben Mac vorher beenden.")
             }
             Section {
                 Toggle("Interne Gespräche lokal aufnehmen (nur Softphone)", isOn: $settings.localRecording)

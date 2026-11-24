@@ -20,10 +20,13 @@ enum ClientAPI {
         var recording: Recording
         var auth: Auth?
         var deskphone: DeskAuth?
+        /// IP der CME für die direkte Anmeldung (Mac, Jabber-Modus)
+        var cmeIP: String?
 
         enum CodingKeys: String, CodingKey {
             case ext, gateway, localpush, voicemail, recording, auth, deskphone
             case deviceName = "device_name"
+            case cmeIP = "cme_ip"
             case cmeHost = "cme_host"
         }
     }

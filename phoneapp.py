@@ -445,6 +445,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         # Flexisip leitet ihn per Route an CME_HOST weiter
         return jsonify(ok=True, ext=ext, device_name=DEVICE_PREFIX + ext.lstrip("+"),
                        cme_host=os.environ.get("SIP_DOMAIN", "").strip() or os.environ.get("CME_HOST", ""),
+                       # direkte Anmeldung an CME (Mac, wie Jabber): Shared Line funktioniert nur ohne Flexisip
+                       cme_ip=os.environ.get("CME_HOST", "").strip(),
                        gateway={"host": s["gateway_host"], "port": s["gateway_port"], "transport": "tcp"},
                        localpush={"host": s["gateway_host"], "port": s["localpush_port"], "secret": lp_secret(),
                                   "ssids": [x for x in s.get("ssids", "").split(",") if x]},

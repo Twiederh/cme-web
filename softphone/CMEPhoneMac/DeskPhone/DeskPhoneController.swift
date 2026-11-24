@@ -167,7 +167,7 @@ final class DeskPhoneController: ObservableObject {
         do {
             // CME liefert für SIP-Telefone nur presence (frei/belegt); "dialog" nimmt er an, schickt aber nie NOTIFYs.
             let pkg = "presence"
-            let resource = try Factory.Instance.createAddress(addr: "sip:\(settings.deskPhoneExtension)@\(settings.cmeHost)")
+            let resource = try Factory.Instance.createAddress(addr: "sip:\(settings.deskPhoneExtension)@\(settings.sipHost)")
             let ev = try core.createSubscribe(resource: resource, event: pkg, expires: 3600)
             ev.addCustomHeader(name: "Accept", value: "application/pidf+xml")
             let evDelegate = EventDelegateStub(

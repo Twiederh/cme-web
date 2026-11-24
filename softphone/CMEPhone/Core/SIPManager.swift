@@ -107,6 +107,14 @@ final class SIPManager: ObservableObject {
         RunLoop.main.add(t, forMode: .common)
         iterateTimer = t
         #endif
+        #if os(macOS)
+        // Eigene, zufällige SIP-Ports: CME schickt Anrufe an den Contact; 5060 belegt evtl. Cisco Jabber.
+        if let t = core.transports {
+            t.udpPort = -1
+            t.tcpPort = -1
+            try? core.setTransports(newValue: t)
+        }
+        #endif
         core.keepAliveEnabled = true
         core.ipv6Enabled = true
         // RFC 2833 / rtp-nte – passt zu "dtmf-relay rtp-nte" in CME.
@@ -172,7 +180,7 @@ final class SIPManager: ObservableObject {
         guard settings.isConfigured else { log("Kein Konto konfiguriert"); return }
 
         do {
-            let identity = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.cmeHost)")
+            let identity = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
             if !settings.displayName.isEmpty { try identity.setDisplayname(newValue: settings.displayName) }
 
             let params = try core.createAccountParams()
@@ -180,18 +188,20 @@ final class SIPManager: ObservableObject {
 
             let serverHost: String
             let serverPort: Int
-            if settings.useGateway {
+            let viaGateway = settings.useGateway && !settings.jabberMode
+            if viaGateway {
                 serverHost = settings.gatewayHost; serverPort = settings.gatewayPort
             } else {
-                serverHost = settings.cmeHost; serverPort = 5060
+                serverHost = settings.sipHost; serverPort = 5060
             }
             let server = try Factory.Instance.createAddress(addr: "sip:\(serverHost):\(serverPort)")
-            try server.setTransport(newValue: settings.transport.linphone)
+            // Jabber meldet sich per UDP direkt an der CME an
+            try server.setTransport(newValue: settings.jabberMode ? .Udp : settings.transport.linphone)
             try params.setServeraddress(newValue: server)
             // Bei Gateway-Betrieb: alle Requests über Flexisip (Outbound-Proxy), Request-URI bleibt CME.
-            params.outboundProxyEnabled = settings.useGateway
+            params.outboundProxyEnabled = viaGateway
             params.registerEnabled = true
-            params.expires = 600
+            params.expires = settings.jabberMode ? 3600 : 600
             // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
             // cme-web legt die App als Pool "id device-id-name CMEP<Nebenstelle>" an; den Namen schickt die App
             // wie Jabber im Contact mit.
@@ -200,7 +210,7 @@ final class SIPManager: ObservableObject {
 
             #if os(iOS)
             // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.
-            params.pushNotificationAllowed = settings.useGateway
+            params.pushNotificationAllowed = viaGateway
             params.remotePushNotificationAllowed = false
             #if DEBUG
             params.pushNotificationConfig?.provider = "apns.dev"
@@ -242,15 +252,18 @@ final class SIPManager: ObservableObject {
 
     // MARK: - Cisco-Leitungsmodus (experimentell)
 
-    static let ciscoSupported = "X-cisco-callinfo,X-cisco-serviceuri,X-cisco-escapecodes,X-cisco-service-control,"
-        + "X-cisco-srtp-fallback,X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1"
+    /// Genau wie Cisco Jabber für Mac 15.3 (REGISTER an CME). "X-cisco-duplicate-reg" sorgt dafür, dass CME eine
+    /// erneute Anmeldung desselben Geräts nicht als Duplikat behandelt (sonst fehlt es bei Shared Lines).
+    static let ciscoSupported = "replaces,join,sdp-anat,norefersub,resource-priority,extended-refer,"
+        + "X-cisco-callinfo,X-cisco-serviceuri,X-cisco-escapecodes,X-cisco-service-control,X-cisco-srtp-fallback,"
+        + "X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1,X-cisco-graceful-reg,X-cisco-duplicate-reg"
     private var lineEvent: Event?
 
     /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren.
     private func subscribeOwnLine() {
         guard settings.ciscoLineMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
         do {
-            let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.cmeHost)")
+            let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
             let ev = try core.createSubscribe(resource: me, event: "dialog", expires: 7200)
             ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
             try ev.sendSubscribe(body: nil)
@@ -320,7 +333,7 @@ final class SIPManager: ObservableObject {
     @discardableResult
     func placeCall(to number: String, video: Bool) -> Call? {
         guard let core else { return nil }
-        let target = number.contains("@") ? number : "sip:\(number)@\(settings.cmeHost)"
+        let target = number.contains("@") ? number : "sip:\(number)@\(settings.sipHost)"
         do {
             let addr = try Factory.Instance.createAddress(addr: target.hasPrefix("sip") ? target : "sip:\(target)")
             let params = try core.createCallParams(call: nil)
@@ -379,7 +392,7 @@ final class SIPManager: ObservableObject {
         // Zweig). Asterisk findet das Postfach über die Umleitungsinfo (Diversion: diese Nebenstelle).
         if toVoicemail, !settings.voicemailNumber.isEmpty {
             do {
-                let target = try Factory.Instance.createAddress(addr: "sip:\(settings.voicemailNumber)@\(settings.cmeHost)")
+                let target = try Factory.Instance.createAddress(addr: "sip:\(settings.voicemailNumber)@\(settings.sipHost)")
                 try call.redirectTo(redirectAddress: target)
                 log("An Voicemail umgeleitet (\(settings.voicemailNumber))")
                 return
@@ -492,7 +505,7 @@ final class SIPManager: ObservableObject {
     func transfer(callId: String, to number: String) {
         guard let call = call(withId: callId) else { return }
         do {
-            let addr = try Factory.Instance.createAddress(addr: "sip:\(number)@\(settings.cmeHost)")
+            let addr = try Factory.Instance.createAddress(addr: "sip:\(number)@\(settings.sipHost)")
             try call.transferTo(referTo: addr)
         } catch { log("Transfer: \(error)") }
     }
