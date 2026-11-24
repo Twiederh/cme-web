@@ -10,6 +10,10 @@ SIP_PORT="${SIP_PORT:-5062}"
 RELAY_PORT="${RELAY_PORT:-8092}"
 # cme-web (sharedline.py): prueft die Anmeldungen der Apps und bestaetigt Anfragen der CME an Flexisip
 SHARED_LINE_PORT="${SHARED_LINE_PORT:-5074}"
+# NICHT die LAN-IP: die ist ein Alias von Flexisip (aliases=...) - eine Route dorthin haelt Flexisip fuer
+# "an mich", streicht sie und antwortet 482 Loop Detected bzw. sucht die Domain per DNS. cme-web ist ueber den
+# veroeffentlichten Docker-Port auch auf 127.0.0.1 erreichbar.
+SHARED_LINE_HOST="${SHARED_LINE_HOST:-127.0.0.1}"
 LOG_LEVEL="${LOG_LEVEL:-message}"
 src=/usr/local/share/flexisip/flexisip.conf.template
 [ -f /etc/flexisip/flexisip.local.conf ] && src=/etc/flexisip/flexisip.local.conf
@@ -23,8 +27,8 @@ sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${SIP_GW_NAME}|${SIP_GW_NAME}|g" \
 #  * NOTIFY/REFER/OPTIONS der CME an Flexisip (service-control, Rufumleitung, Keepalive) -> cme-web bestaetigt
 #  * Anrufe der Apps (SIP-Domain) und alles an die CME-IP -> CME (lr = Request-URI bleibt sip:...@<Domain>)
 {
-  echo "<sip:${HOST_IP}:${SHARED_LINE_PORT};transport=udp;lr>   request.method == 'REGISTER'"
-  echo "<sip:${HOST_IP}:${SHARED_LINE_PORT};transport=udp;lr>   (request.method == 'NOTIFY' || request.method == 'REFER' || request.method == 'OPTIONS') && request.uri.domain == '${HOST_IP}'"
+  echo "<sip:${SHARED_LINE_HOST}:${SHARED_LINE_PORT};transport=udp;lr>   request.method == 'REGISTER'"
+  echo "<sip:${SHARED_LINE_HOST}:${SHARED_LINE_PORT};transport=udp;lr>   (request.method == 'NOTIFY' || request.method == 'REFER' || request.method == 'OPTIONS') && request.uri.domain == '${HOST_IP}'"
   echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${SIP_DOMAIN}'"
   echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${CME_IP}'"
 } > /run/flexisip-routes.conf
