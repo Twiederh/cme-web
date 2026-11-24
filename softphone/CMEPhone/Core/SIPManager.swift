@@ -168,6 +168,15 @@ final class SIPManager: ObservableObject {
 
         do { try core.start() } catch { log("Core-Start fehlgeschlagen: \(error)"); return }
         log("CME Phone \(BuildInfo.text), liblinphone \(Core.getVersion) gestartet")
+        let d = UserDefaults.standard
+        if !settings.jabberMode {
+            d.set(false, forKey: Self.runningKey)
+        } else if d.bool(forKey: Self.runningKey) {
+            log("Letzter Lauf endete ohne Beenden-Ablauf (Absturz, Kill oder Neustart des Macs) – CME hält die alte Anmeldung evtl. noch bis zu \(Self.jabberExpires) s")
+        } else if let last = d.string(forKey: Self.cleanQuitKey) {
+            log("Letztes Beenden: \(last)")
+        }
+        if settings.jabberMode { d.set(true, forKey: Self.runningKey) }
         applyAccount()
     }
 
@@ -181,7 +190,12 @@ final class SIPManager: ObservableObject {
     /// Jabber-Modus: CME lehnt eine neue Anmeldung (neue Call-ID) mit "403 Registration is active for another
     /// client" ab, solange eine frühere noch gilt – etwa nach einem Absturz. Ein Abmelden mit neuer Call-ID
     /// beantwortet CME mit 404. Deshalb kurze Anmeldedauer (s. jabberExpires) und bei 403 regelmäßig neu versuchen.
-    private static let jabberExpires = 120
+    /// 60 s: Bleibt eine Anmeldung nach einem harten Ende (Absturz, Kill, Ruhezustand) bei CME hängen, ist die
+    /// Leitung höchstens so lange blockiert. CME akzeptiert 60 s als kleinste Dauer.
+    private static let jabberExpires = 60
+    /// Merker für "der letzte Lauf hat sich sauber abgemeldet" (Diagnose für 403 nach dem Start)
+    private static let cleanQuitKey = "lastQuitUnregistered"
+    private static let runningKey = "sipRunning"
     private var forbiddenRetry: DispatchWorkItem?
 
     func applyAccount() {
@@ -329,7 +343,14 @@ final class SIPManager: ObservableObject {
             core.iterate()
             Thread.sleep(forTimeInterval: 0.02)
         } while Date() < end && core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress })
-        log("Beim Beenden abgemeldet: \(core.accountList.map { "\($0.state)" }.joined(separator: ","))")
+        let states = core.accountList.map { "\($0.state)" }.joined(separator: ",")
+        log("Beim Beenden abgemeldet: \(states)")
+        let ok = !core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress })
+        let stamp = Date().formatted(date: .numeric, time: .standard)
+        UserDefaults.standard.set("\(stamp) \(ok ? "abgemeldet" : "Abmelden NICHT bestätigt") (\(states))",
+                                  forKey: Self.cleanQuitKey)
+        UserDefaults.standard.set(false, forKey: Self.runningKey)
+        UserDefaults.standard.synchronize()
         core.stop()
     }
 
@@ -692,7 +713,7 @@ final class SIPManager: ObservableObject {
             log("Alte Anmeldung: \(state) \(message)")
             return
         }
-        // Alte Anmeldung hält CME noch fest: alle 20 s neu versuchen, bis sie abgelaufen ist (≤ jabberExpires)
+        // Alte Anmeldung hält CME noch fest: alle 10 s neu versuchen, bis sie abgelaufen ist (≤ jabberExpires)
         if state == .Failed, settings.jabberMode, message.contains("Forbidden"), forbiddenRetry == nil {
             let item = DispatchWorkItem { [weak self] in
                 MainActor.assumeIsolated {
@@ -703,7 +724,7 @@ final class SIPManager: ObservableObject {
                 }
             }
             forbiddenRetry = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: item)
         }
         switch state {
         case .Progress: registration = .progress
