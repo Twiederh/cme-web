@@ -42,14 +42,24 @@ mit Push-Gateway (Flexisip) und push-relay. Eingerichtet wird es im Tab **Softph
 | `VM_HOST_IP` | `192.168.1.110` | LAN-IP des Docker-Hosts (Voicemail, Aufzeichnung, Push-Gateway) |
 | `SIP_GW_NAME` | `sip-gw.example.de` | DNS-Name des Push-Gateways für die Apps (optional) |
 | `APNS_TEAM_ID` | `ABCDE12345` | Apple-Team-ID (Vorbelegung im Tab Softphone, optional) |
+| `IMAGE_PREFIX` | `ghcr.io/twiederh` | Woher die Images kommen (eigener Fork: `ghcr.io/<account>`) |
 
-4. **Deploy the stack**. Portainer baut die Images aus den Dockerfiles. Flexisip wird aus den Quellen
-   gebaut (20–40 Minuten); schneller und ohne Timeout der Weboberfläche vorher per SSH:
-   `docker build -t flexisip:local ./flexisip` im ausgecheckten Repo.
+4. **Deploy the stack**. Portainer baut nichts selbst, sondern holt fertige Images aus der GitHub
+   Container Registry. Gebaut werden sie von GitHub Actions (`.github/workflows/images.yml`) bei jedem
+   Push auf `main` – Flexisip beim ersten Mal aus den Quellen (dauert), danach aus dem Cache.
 5. Öffnen: `http://<docker-host>:8080`
 
-Updates: Im Stack **Pull and redeploy** (mit „Re-pull image and redeploy“) klicken,
-oder unter **GitOps updates** automatisches Aktualisieren einschalten.
+**Updates:** Änderungen pushen, warten, bis unter GitHub → **Actions** der Lauf „Images“ grün ist, dann im
+Stack **Pull and redeploy** mit **„Re-pull image and redeploy“**.
+Die Dienste tragen das Label `com.centurylinklabs.watchtower.enable=false`: Ein laufender Watchtower
+lässt sie in Ruhe, damit kein neues Image den Stack mitten in einem Gespräch neu startet.
+
+**Eigene Kopie (Fork):** Actions im Fork einschalten, einmal pushen; die Images landen unter
+`ghcr.io/<account>/…`. Unter GitHub → Packages jedes Paket auf **Public** stellen (oder in Portainer
+unter Registries ghcr.io mit einem Token eintragen) und im Stack `IMAGE_PREFIX=ghcr.io/<account>` setzen.
+
+**Selbst bauen** (ohne GitHub, z. B. zum Testen):
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 ## Hinter Traefik
 

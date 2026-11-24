@@ -2,9 +2,8 @@
 # In Portainer als "Compose path" diese Datei angeben.
 services:
   cme-web:
-    build: .
-    image: cme-web:latest
-    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
+    # Fertige Images aus GitHub (.github/workflows/images.yml); selbst bauen: docker-compose.build.yml
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-web:${IMAGE_TAG:-latest}
     container_name: cme-web
     restart: unless-stopped
     # Oberflaeche nur ueber Traefik. Eigener Port fuer die Telefondienste (Visual Voicemail):
@@ -67,6 +66,8 @@ services:
       - default
       - traefik
     labels:
+      # Updates über Portainer (Pull and redeploy), nicht über Watchtower
+      - "com.centurylinklabs.watchtower.enable=false"
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
       # HTTPS
@@ -93,9 +94,10 @@ services:
 
   # Asterisk als Voicemail fuer CME. Braucht auf dem Docker-Host UDP 5060 und 10000-10049.
   asterisk:
-    build: ./asterisk
-    image: cme-voicemail:latest
-    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-voicemail:${IMAGE_TAG:-latest}
+    labels:
+      # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
+      - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-voicemail
     restart: unless-stopped
     ulimits:
@@ -124,9 +126,10 @@ services:
   # Gespraechsaufzeichnung: nimmt die vom Router (SIPREC) kopierten Gespraeche an.
   # Braucht auf dem Docker-Host UDP/TCP 5070 und UDP 10100-10139.
   recorder:
-    build: ./recorder
-    image: cme-recorder:latest
-    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-recorder:${IMAGE_TAG:-latest}
+    labels:
+      # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
+      - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-recorder
     restart: unless-stopped
     environment:
@@ -150,6 +153,9 @@ services:
   # Spracherkennung fuer die Abschrift der Voicemails (lokal, nur im Docker-Netz erreichbar)
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
+    labels:
+      # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
+      - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-whisper
     restart: unless-stopped
     environment:
@@ -162,17 +168,12 @@ services:
   # ---------------- CME Phone (Softphone, Ordner softphone/) ----------------
   # Push-Gateway vor CME: Die Apps melden sich hierueber an, CME schickt eingehende Anrufe hierher.
   # Host-Netz (SIP braucht die echten Absender-IPs), nicht hinter Traefik. Braucht TCP/UDP SIP_GW_PORT (5062).
-  # Das Image baut beim ersten Mal 20-40 Minuten (Flexisip aus den Quellen); vorher von Hand bauen geht schneller:
-  #   docker build -t flexisip:local ./flexisip
+  # Das Image baut GitHub (.github/workflows/images.yml); Flexisip wird dort aus den Quellen gebaut.
   flexisip:
-    build:
-      context: ./flexisip
-      args:
-        FLEXISIP_VERSION: "2.6.2"
-        LINPHONESDK_VERSION: "5.5.16"
-        NJOBS: "4"
-    image: flexisip:local
-    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-flexisip:${IMAGE_TAG:-latest}
+    labels:
+      # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
+      - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-flexisip
     network_mode: host
     restart: unless-stopped
@@ -194,9 +195,10 @@ services:
   # Weckt schlafende Apps: im Heim-WLAN per Local Push (TCP RELAY_LOCALPUSH_PORT, 5072), sonst per APNs.
   # Eingerichtet wird er in cme-web (Tab Softphone): APNs-Schluessel und Secret liegen im Volume softphone-data.
   push-relay:
-    build: ./push-relay
-    image: cme-push-relay:latest
-    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-push-relay:${IMAGE_TAG:-latest}
+    labels:
+      # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
+      - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-push-relay
     network_mode: host
     restart: unless-stopped

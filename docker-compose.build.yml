@@ -1,0 +1,19 @@
+# Images selbst bauen statt sie aus GitHub (ghcr.io) zu holen, z. B. zum Testen eigener Änderungen:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# (mit Traefik: docker-compose.traefik.yml statt docker-compose.yml)
+services:
+  cme-web:
+    build: .
+  asterisk:
+    build: ./asterisk
+  recorder:
+    build: ./recorder
+  push-relay:
+    build: ./push-relay
+  flexisip:
+    build:
+      context: ./flexisip
+      args:
+        FLEXISIP_VERSION: "2.6.2"
+        LINPHONESDK_VERSION: "5.5.16"
+        NJOBS: "4"
