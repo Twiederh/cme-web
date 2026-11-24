@@ -567,9 +567,26 @@ final class SIPManager: ObservableObject {
         refreshCalls()
     }
 
+    /// Gespräche, die die App auf Halten gesetzt hat (Re-INVITE sendonly – liblinphone-Zustand bleibt StreamsRunning).
+    private var heldCalls = Set<String>()
+
+    /// Halten / Fortsetzen wie ein Cisco-Telefon: Re-INVITE mit a=sendonly bzw. a=sendrecv und dem Header
+    /// "Call-Info: <urn:x-cisco-remotecc:hold|resume>". Nur daran erkennt CME ein auf der Shared Line gehaltenes
+    /// Gespräch – die anderen Geräte zeigen es dann mit "Fortsetzen" an und können es übernehmen (call.pause()
+    /// schickt den Header nicht; CME behandelt das Gespräch dann als privat weiterlaufend).
     func setHeld(callId: String, held: Bool) {
-        guard let call = call(withId: callId) else { return }
-        do { if held { try call.pause() } else { try call.resume() } } catch { log("Halten: \(error)") }
+        guard let core, let call = call(withId: callId) else { return }
+        do {
+            let p = try core.createCallParams(call: call)
+            p.audioDirection = held ? .SendOnly : .SendRecv
+            if p.videoEnabled { p.videoDirection = held ? .SendOnly : .SendRecv }
+            p.addCustomHeader(headerName: "Call-Info",
+                              headerValue: held ? "<urn:x-cisco-remotecc:hold>" : "<urn:x-cisco-remotecc:resume>")
+            try call.update(params: p)
+            if held { heldCalls.insert(callId) } else { heldCalls.remove(callId) }
+            log(held ? "Gespräch gehalten" : "Gespräch fortgesetzt")
+            refreshCalls()
+        } catch { log("Halten: \(error)") }
     }
 
     func setMuted(_ muted: Bool) {
@@ -741,13 +758,14 @@ final class SIPManager: ObservableObject {
                 state: c.state,
                 isIncoming: c.dir == .Incoming,
                 hasVideo: params?.videoEnabled ?? false,
-                isPaused: c.state == .Paused || c.state == .Pausing,
+                isPaused: c.state == .Paused || c.state == .Pausing || heldCalls.contains(id),
                 audioCodec: params?.usedAudioPayloadType.map { "\($0.mimeType) \($0.clockRate / 1000) kHz" } ?? "–",
                 videoCodec: params?.usedVideoPayloadType?.mimeType ?? "–",
                 duration: c.duration,
                 isRecording: recordingCalls.contains(id))
         }
         recordingCalls.formIntersection(Set(calls.map(\.id)))
+        heldCalls.formIntersection(Set(calls.map(\.id)))
         if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
     }
 
