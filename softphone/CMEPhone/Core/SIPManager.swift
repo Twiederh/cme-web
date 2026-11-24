@@ -172,6 +172,7 @@ final class SIPManager: ObservableObject {
         // dann neu anmelden.
         lineEvent?.terminate()
         lineEvent = nil
+        lineAccount = nil
         let old = core.accountList
         let wasRegistered = old.contains { $0.state == .Ok || $0.state == .Progress }
         for acc in old { core.removeAccount(account: acc) }
@@ -298,6 +299,38 @@ final class SIPManager: ObservableObject {
         + "X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1,X-cisco-graceful-reg,X-cisco-duplicate-reg"
     private var lineEvent: Event?
     private var lineEventDelegate: EventDelegateStub?
+    /// Hilfskonto nur für das dialog-Abo (meldet sich nicht an): CME trägt einen Abonnenten unter dem From-URI
+    /// in die Shared Line ein ("+49…@192.168.11.46" beim 8845) und sucht den Dial-Peer über dessen Host.
+    /// Das 8845 schickt deshalb seine eigene IP im From – mit der CME-Adresse im From (wie beim REGISTER)
+    /// nimmt CME das Abo zwar an, führt das Gerät aber nicht als Teilnehmer und lässt es nicht mitklingeln.
+    private var lineAccount: Account?
+
+    private func lineProxy() -> ProxyConfig? {
+        guard let core, let main = core.defaultAccount,
+              let host = main.contactAddress?.domain, !host.isEmpty else { return nil }
+        if lineAccount == nil {
+            do {
+                let p = try core.createAccountParams()
+                try p.setIdentityaddress(newValue: try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(host)"))
+                let server = try Factory.Instance.createAddress(addr: "sip:\(settings.sipHost):5060")
+                try server.setTransport(newValue: .Udp)
+                try p.setServeraddress(newValue: server)
+                p.registerEnabled = false
+                p.pushNotificationAllowed = false
+                p.remotePushNotificationAllowed = false
+                p.contactParameters = main.params?.contactParameters
+                let acc = try core.createAccount(params: p)
+                try core.addAccount(account: acc)
+                core.defaultAccount = main
+                lineAccount = acc
+                log("Cisco-Leitungsmodus: Abo-Absender sip:\(settings.extensionNumber)@\(host)")
+            } catch {
+                log("Cisco-Leitungsmodus: Hilfskonto fehlgeschlagen: \(error)")
+                return nil
+            }
+        }
+        return core.proxyConfigList.first { $0.identityAddress?.domain == host }
+    }
 
     /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren.
     private func subscribeOwnLine() {
@@ -308,7 +341,9 @@ final class SIPManager: ObservableObject {
             // 401 mit den Zugangsdaten des Pools wiederholt – wie beim 8845. Nur dann führt CME das Gerät in
             // "show shared-line details" und lässt es bei einer Shared Line mitklingeln.
             let ev: Event
-            if let proxy = core.defaultProxyConfig {
+            if let proxy = lineProxy() {
+                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 7200)
+            } else if let proxy = core.defaultProxyConfig {
                 ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 7200)
             } else {
                 ev = try core.createSubscribe(resource: me, event: "dialog", expires: 7200)
@@ -591,6 +626,7 @@ final class SIPManager: ObservableObject {
     // MARK: - Delegates
 
     private func onRegistration(account: Account, state: RegistrationState, message: String) {
+        if let line = lineAccount, line.getCobject == account.getCobject { return }
         // Abmeldung eines entfernten Kontos nicht als Zustand des aktuellen Kontos anzeigen
         if let core, !core.accountList.contains(where: { $0.getCobject == account.getCobject }) {
             log("Alte Anmeldung: \(state) \(message)")
