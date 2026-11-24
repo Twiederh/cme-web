@@ -426,7 +426,7 @@ Eigene App für iPhone/iPad (nur über die Telefon-App und CallKit, Einstellunge
 Einstellungen-App) und Mac (Menüleiste, Call-Toast, wahlweise Softphone oder Steuerung eines
 Cisco-Tischtelefons). Im Tab **Softphone**: APNs-Schlüssel hochladen, Local Push, App-Schlüssel,
 Status. Am Router wird jede App als Telefon vom Typ **CME Phone** angelegt
-(`id device-id-name CMEP<Nebenstelle>`, `type Jabber-CSF-Client`).
+(`id device-id-name CSF<Nebenstelle>`, `type Jabber-CSF-Client`).
 Die Apps holen sich ihre Einstellungen über `/client/v1/…` (Anmeldung mit dem App-Schlüssel)
 und schalten darüber auch die Gesprächsaufzeichnung ein und aus.
 Anleitung: [softphone/README.md](softphone/README.md).

@@ -26,7 +26,7 @@ check(c.get("/client/v1/info?ext=21", headers={"Authorization": "Bearer falsch"}
 H = {"Authorization": f"Bearer {tok}"}
 i = c.get("/client/v1/info?ext=21", headers=H).get_json()
 print(json.dumps(i, indent=1))
-check(i["ok"] and i["device_name"] == "CMEP21" and i["localpush"]["secret"], "Info für die App")
+check(i["ok"] and i["device_name"] == "CSF21" and i["localpush"]["secret"], "Info für die App")
 check(c.get("/client/v1/info?ext=abc", headers=H).status_code == 400, "ungültige Nebenstelle")
 # Authentication URL der Tischtelefone
 pw = j["exec_password"]

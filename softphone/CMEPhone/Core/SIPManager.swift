@@ -203,7 +203,7 @@ final class SIPManager: ObservableObject {
             params.registerEnabled = true
             params.expires = settings.jabberMode ? 3600 : 600
             // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
-            // cme-web legt die App als Pool "id device-id-name CMEP<Nebenstelle>" an; den Namen schickt die App
+            // cme-web legt die App als Pool "id device-id-name CSF<Nebenstelle>" an; den Namen schickt die App
             // wie Jabber im Contact mit.
             params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
                 + (settings.ciscoLineMode ? ";+u.sip!model.ccm.cisco.com=\"503\"" : "")
@@ -225,7 +225,7 @@ final class SIPManager: ObservableObject {
             if !settings.password.isEmpty {
                 // CME (Soft-Client-Pool): username <nummer ohne +> password <…> – Realm/Domain offen lassen
                 // liblinphone sucht die Zugangsdaten über den Benutzer der Identität (+49…); der abweichende
-                // Anmeldename für CME (z.B. CMEP…-2) gehört in "userid".
+                // Anmeldename für CME (z.B. CSF…-2) gehört in "userid".
                 let authId = settings.authUser.isEmpty ? String(settings.extensionNumber.drop(while: { $0 == "+" })) : settings.authUser
                 let auth = try Factory.Instance.createAuthInfo(
                     username: settings.extensionNumber, userid: authId, passwd: settings.password,

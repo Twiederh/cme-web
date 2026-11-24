@@ -50,11 +50,11 @@ PHONE_TYPES = ["", "6901", "8811", "8841", "8845", "8851", "8861", "8865", "8945
 SOFT_CLIENT_PREFIX = "Jabber-"
 # CME Phone (eigenes Softphone, Ordner softphone/ in diesem Repo): CME nimmt im CME-Modus nur
 # MAC-Adressen oder - fuer Softclients - einen Geraetenamen an. Das Softphone meldet sich deshalb wie Jabber an:
-# Pool mit "id device-id-name CMEP..." und "type Jabber-CSF-Client"; die App schickt den Namen im Contact-Header
-# (+u.sip!devicename.ccm.cisco.com="CMEP..."). Am Praefix CMEP erkennt cme-web das Softphone wieder.
+# Pool mit "id device-id-name CSF..." und "type Jabber-CSF-Client"; die App schickt den Namen im Contact-Header
+# (+u.sip!devicename.ccm.cisco.com="CSF..."), wie Cisco Jabber. Am Praefix CSF erkennt cme-web das Softphone wieder.
 SOFTPHONE_TYPE = "CME-Softphone"
 SOFTPHONE_IOS_TYPE = "Jabber-CSF-Client"
-SOFTPHONE_PREFIX = "CMEP"
+SOFTPHONE_PREFIX = "CSF"
 
 
 def ios_type(ptype: str) -> str:
@@ -1196,7 +1196,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
             id_kind = "device"
             device_id = check(data.get("device_id"), RE_DEVICE, "Geraetename").upper()
         elif ptype == SOFTPHONE_TYPE:
-            # CME Phone: wie Jabber ueber den Geraetenamen, immer mit Praefix CMEP (z.B. CMEP21)
+            # CME Phone: wie Jabber ueber den Geraetenamen, immer mit Praefix CSF wie Jabber (z.B. CSF21)
             id_kind = "device"
             raw = str(data.get("device_id") or "").strip().upper()
             if raw and not raw.startswith(SOFTPHONE_PREFIX):
@@ -1296,7 +1296,7 @@ def create_app(router, web_user: str = "", web_pass: str = "") -> Flask:
         """CME Phone: Passwort fuer die App merken (der Router speichert es verschluesselt), phoneapp.py."""
         store = app.config.get("PHONEAPP_CREDS")
         if store and res.get("ok") and password and v.get("id_kind") == "device" \
-                and str(v.get("device_id", "")).upper().startswith("CMEP"):
+                and str(v.get("device_id", "")).upper().startswith(SOFTPHONE_PREFIX):
             try:
                 store(v["device_id"], username, password)
             except OSError:

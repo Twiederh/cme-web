@@ -1,6 +1,6 @@
 // Telefontyp "CME Softphone" (CME Phone, Ordner softphone/) im Formular
 // "Telefon anlegen". CME nimmt im CME-Modus nur MAC-Adressen oder - fuer Softclients - einen Geraetenamen an;
-// das Softphone meldet sich deshalb wie Jabber mit Geraetenamen (CMEP...) an.
+// das Softphone meldet sich deshalb wie Jabber mit Geraetenamen (CSF...) an.
 // Haengt sich in index.html ein (TYPE_LABEL, updateTypeHint, META).
 (() => {
   const f = document.getElementById("f-phone");
@@ -15,8 +15,8 @@
   hint.id = "softphone-hint";
   hint.hidden = true;
   hint.innerHTML = `<b>CME Phone</b> (eigenes Softphone für iPhone, iPad und Mac) meldet sich wie Jabber mit einem
-    <b>Gerätenamen</b> an – CME nimmt im CME-Modus nur MAC-Adressen oder Gerätenamen an. Der Name ist <span class="mono">CMEP</span> + Nebenstelle
-    (z. B. <span class="mono">CMEP21</span>) – genau so schickt ihn die App bei der Anmeldung mit. Am Router wird der Pool als <span class="mono">type Jabber-CSF-Client</span> mit
+    <b>Gerätenamen</b> an – CME nimmt im CME-Modus nur MAC-Adressen oder Gerätenamen an. Der Name ist <span class="mono">CSF</span> + Nebenstelle
+    (z. B. <span class="mono">CSF21</span>) – genau so schickt ihn die App bei der Anmeldung mit. Am Router wird der Pool als <span class="mono">type Jabber-CSF-Client</span> mit
     <span class="mono">id device-id-name</span> angelegt. In der App nur <b>Nebenstelle</b> (Rufnummer der ersten
     Leitung), <b>cme-web-Adresse</b> und <b>App-Schlüssel</b> eintragen – alles Weitere holt sie sich aus dem Tab <b>Softphone</b>.<br><b>Mehrere Geräte mit derselben Nummer</b> (iPhone, iPad, Mac): ein einziger CME-Phone-Pool je Rufnummer genügt –
     alle Apps melden sich mit demselben Gerätenamen an, Flexisip lässt sie gemeinsam klingeln. Zusammen mit einem
@@ -38,13 +38,13 @@
     document.getElementById("wrap-device").hidden = false;
     f.mac.required = false;
     devInput.required = true;
-    devInput.placeholder = "CMEP21";
+    devInput.placeholder = "CSF21";
     if (devLabel) devLabel.textContent = "Gerätename (wie in der App) *";
     if (!devInput.value) {
       // Vorschlag aus der ersten gewaehlten Rufnummer
       const first = f.querySelector("select[name=dn], [name^=dn]");
       const num = first && first.selectedOptions && first.selectedOptions[0] ? first.selectedOptions[0].textContent.match(/\+?\d+/) : null;
-      devInput.value = (META.softphone_prefix || "CMEP") + (num ? num[0].replace("+", "") : "");
+      devInput.value = (META.softphone_prefix || "CSF") + (num ? num[0].replace("+", "") : "");
     }
     document.getElementById("mobility-row").hidden = true;
     f.mobility_key.checked = false;

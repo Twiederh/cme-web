@@ -209,8 +209,8 @@ final class PhoneSettings: ObservableObject {
         #endif
     }
 
-    /// Gerätename am Router (Pool "CME Phone" in cme-web: id device-id-name CMEP<Nebenstelle>).
-    var deviceName: String { "CMEP" + extensionNumber.filter { $0.isNumber } }
+    /// Gerätename am Router (Pool "CME Phone" in cme-web: id device-id-name CSF<Nebenstelle>, wie Cisco Jabber).
+    var deviceName: String { "CSF" + extensionNumber.filter { $0.isNumber } }
 
     var hasCmeWeb: Bool { !cmeWebURL.trimmingCharacters(in: .whitespaces).isEmpty && !appToken.isEmpty }
 

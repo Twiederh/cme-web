@@ -29,7 +29,7 @@ Teil von cme-web. SIP/RTP über **liblinphone** (Linphone SDK), Server-Teil im g
 ```
 
 * Die App meldet sich über Flexisip bei CME an. CME kennt sie wie einen Jabber-Client am
-  **Gerätenamen** `CMEP<Nebenstelle>` (Contact-Parameter `+u.sip!devicename.ccm.cisco.com`).
+  **Gerätenamen** `CSF<Nebenstelle>` (Contact-Parameter `+u.sip!devicename.ccm.cisco.com`).
 * Schläft die App, ruft Flexisip den push-relay: im Heim-WLAN direkt über Local Push, sonst APNs.
 * Alles Weitere (Gateway, CME-Adresse, Local-Push-Secret, WLAN-Namen, Voicemail-Nummer) holt die App
   aus cme-web. In der App stehen nur **Nebenstelle**, **cme-web-Adresse** und **App-Schlüssel**.
@@ -71,7 +71,7 @@ und `cme-push-relay` belegen sonst dieselben Ports). Den APNs-Schlüssel einmal 
 2. **APNs**: Apple Developer → Keys → + → „Apple Push Notifications service (APNs)“, Environment
    *Sandbox & Production*, *Team Scoped* → `.p8` hochladen. Key-ID kommt aus dem Dateinamen.
 3. **App-Schlüssel** kopieren (für die Apps).
-4. Tab **Telefone**: je Gerät ein Telefon vom Typ **CME Phone** anlegen (Gerätename `CMEP21` usw.).
+4. Tab **Telefone**: je Gerät ein Telefon vom Typ **CME Phone** anlegen (Gerätename `CSF21` usw.).
 
 ### 3. Apple Developer Portal (einmalig)
 
@@ -141,7 +141,7 @@ testen. CSTA gibt es auf CME ab 12.6 nicht mehr und galt nur für SCCP-Telefone;
 | # | Test | Erwartung | Wenn nicht |
 |---|---|---|---|
 | 1 | Tab Softphone | push-relay „läuft“, APNs „eingerichtet“ | Container-Log cme-push-relay |
-| 2 | App: Einstellungen eingetragen | „Angemeldet“; cme-web zeigt den Pool CMEP21 registriert | Flexisip-Log; Gerätename/Typ im Pool |
+| 2 | App: Einstellungen eingetragen | „Angemeldet“; cme-web zeigt den Pool CSF21 registriert | Flexisip-Log; Gerätename/Typ im Pool |
 | 3 | 21 → 10 | Verbindung, G.722 | `debug ccsip messages` |
 | 4 | 10 → 21, App beendet, im WLAN | klingelt über Local Push | Tab Softphone: Gerät unter „Im WLAN verbunden“? |
 | 5 | wie 4, mobil + VPN | klingelt über APNs | Tab Softphone: „Letzter APNs-Versand“ |

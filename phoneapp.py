@@ -33,7 +33,7 @@ RE_EXT = re.compile(r"^\+?[0-9]{1,32}$")
 RE_HOST = re.compile(r"^[A-Za-z0-9.\-:\[\]]{1,253}$")
 RE_REC_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 ENVS = ("auto", "sandbox", "production")
-DEVICE_PREFIX = "CMEP"          # Geraetename der App am Router (wie cme_web.SOFTPHONE_PREFIX)
+DEVICE_PREFIX = "CSF"          # Geraetename der App am Router (wie cme_web.SOFTPHONE_PREFIX)
 
 
 class AppError(ValueError):
@@ -157,7 +157,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     app.config["PHONEAPP_CREDS"] = creds_store
 
     def app_pools() -> list[dict]:
-        """Pools mit Geraetename CMEP... aus der Router-Konfiguration."""
+        """Pools mit Geraetename CSF... aus der Router-Konfiguration."""
         try:
             out = router.show("show running-config | section voice register pool")
         except Exception:  # noqa: BLE001
@@ -425,7 +425,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         return None
 
     def pool_credentials(ext: str) -> dict:
-        """SIP-Zugangsdaten des Pools CMEP<ext>: aus cme-web (hier gesetzt) oder Klartext aus dem Router.
+        """SIP-Zugangsdaten des Pools CSF<ext>: aus cme-web (hier gesetzt) oder Klartext aus dem Router.
         Passt der gespeicherte Benutzer nicht mehr zum Pool, gilt er als veraltet."""
         want = (DEVICE_PREFIX + ext.lstrip("+")).upper()
         pool = next((p for p in app_pools() if p["device"] == want), None)
