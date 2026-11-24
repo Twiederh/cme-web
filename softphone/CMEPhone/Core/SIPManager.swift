@@ -254,7 +254,13 @@ final class SIPManager: ObservableObject {
             // Bei Gateway-Betrieb: alle Requests über Flexisip (Outbound-Proxy), Request-URI bleibt CME.
             params.outboundProxyEnabled = viaGateway
             params.registerEnabled = true
+            // iOS: Anmeldung über Flexisip mit Push – die App kann sie im Hintergrund nicht erneuern, sie muss bis
+            // zum nächsten Öffnen gelten (sonst 404 bei Flexisip, kein Push). 7 Tage wie die Linphone-App.
+            #if os(iOS)
+            params.expires = settings.jabberMode ? Self.jabberExpires : 7 * 24 * 3600
+            #else
             params.expires = settings.jabberMode ? Self.jabberExpires : 600
+            #endif
             // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
             // cme-web legt die App als Pool "id device-id-name CSF<Nebenstelle>" an; den Namen schickt die App
             // wie Jabber im Contact mit.

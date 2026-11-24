@@ -35,6 +35,9 @@ from pathlib import Path
 from flask import jsonify, request
 
 EXPIRES = 600
+# Anmeldungen der Apps (iPhone/iPad) bei Flexisip: im Hintergrund erneuert iOS sie nicht – sie müssen bis zum
+# nächsten Öffnen der App gelten, sonst antwortet Flexisip auf Anrufe mit 404 und es gibt keinen Push.
+APP_MAX_EXPIRES = 7 * 24 * 3600
 CHECK_EVERY = 60          # so oft wird die Router-Konfiguration verglichen
 MISSING_ROUNDS = 2        # erst abonnieren, wenn das Gerät so oft hintereinander als Teilnehmer fehlt
 # Diese Geräte abonnieren selbst (Cisco-Telefone; Jabber/CME Phone haben Gerätenamen CSF…)
@@ -231,7 +234,7 @@ class Agent:
                         [f'WWW-Authenticate: Digest realm="{self.realm}", nonce="{nonce}", algorithm=MD5, qop="auth"'])
             return
         try:
-            expires = min(int(_header(msg, "Expires") or 600), 600)
+            expires = min(int(_header(msg, "Expires") or 600), APP_MAX_EXPIRES)
         except ValueError:
             expires = 600
         contacts = _headers(msg, "Contact")

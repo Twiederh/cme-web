@@ -124,7 +124,7 @@ def test_app_register_checks_mobile_pool_password():
     good = sharedline.authorization(ch, "REGISTER", "sip:cme.local", "MOBIphone", "Geheim123")
     ok = reg(good)
     assert ok.startswith("SIP/2.0 200"), ok
-    assert "Expires: 600" in ok and "expires=600" in ok
+    assert "Expires: 3600" in ok and "expires=3600" in ok
 
 
 def test_app_register_unknown_device_is_forbidden():
