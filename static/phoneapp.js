@@ -41,17 +41,15 @@
       <div class="kv"><span class="muted">Letzter Anruf-Push</span><span>${lp}</span></div>
       <div class="kv"><span class="muted">Letzter APNs-Versand</span><span class="mono">${esc((r.apns || {}).last_result || "–")}</span></div>
 
-      <h3>Geräte (Pools vom Typ CME Phone)</h3>
-      <div class="hint">Der <b>Mac</b> meldet sich wie Cisco Jabber direkt an CME an – als Telefon vom Typ <b>CME Phone</b>
+      <h3>Geräte (Pools vom Typ Softphone)</h3>
+      <div class="hint">Der <b>Mac</b> meldet sich wie Cisco Jabber direkt an CME an – als Telefon vom Typ <b>Softphone</b>
         (Tab Telefone) mit frei wählbarem Gerätenamen, z. B. <span class="mono">SIPMacMini</span>; denselben Namen in der App eintragen.
-        Die Pools <span class="mono">MOB&lt;Nummer&gt;</span> legt cme-web selbst an: Sie stehen für CME stellvertretend für alle
-        Mobilgeräte einer Nummer (Ziel Push-Gateway). CME speichert Passwörter verschlüsselt, deshalb merkt cme-web sie sich;
-        fehlt eins, hier <b>Zugangsdaten setzen</b>.</div>
-      ${(d && d.devices && d.devices.length) ? d.devices.map(x => `
-        <div class="kv"><span><span class="mono">${esc(x.device)}</span> <span class="muted">Pool ${esc(x.tag)} · ${x.kind === "mobile" ? "iPhone/iPad" : "Mac/App"}</span></span>
+        CME speichert Passwörter verschlüsselt, deshalb merkt cme-web sie sich; fehlt eins, hier <b>Zugangsdaten setzen</b>.</div>
+      ${(d && d.devices && d.devices.some(x => x.kind !== "mobile")) ? d.devices.filter(x => x.kind !== "mobile").map(x => `
+        <div class="kv"><span><span class="mono">${esc(x.device)}</span> <span class="muted">Pool ${esc(x.tag)}</span></span>
           <span>${x.creds ? badge("ok", "Zugangsdaten hinterlegt") : badge("bad", "Zugangsdaten fehlen")}
             <button class="small" data-act="creds" data-tag="${esc(x.tag)}">${x.creds ? "Neu setzen" : "Zugangsdaten setzen"}</button></span></div>`).join("")
-        : '<div class="empty">Noch kein Telefon vom Typ CME Phone (Tab Telefone).</div>'}
+        : '<div class="empty">Noch kein Telefon vom Typ Softphone (Tab Telefone).</div>'}
 
       <h3>Mobilgeräte (iPhone, iPad, Vision Pro)</h3>
       <div class="hint">Mobilgeräte melden sich nur am Push-Gateway an, jedes mit eigenem Namen (z. B.
@@ -62,6 +60,11 @@
           <span><button class="small" data-act="mob-pw" data-name="${esc(m.name)}">Neues Passwort</button>
             <button class="small" data-act="mob-del" data-name="${esc(m.name)}">Entfernen</button></span></div>`).join("")
         || '<div class="empty">Noch kein Mobilgerät.</div>'}
+      ${((d && d.devices) || []).filter(x => x.kind === "mobile").map(x => `
+        <div class="kv"><span><span class="muted">Für CME: Pool ${esc(x.tag)}</span> <span class="mono">${esc(x.device)}</span>
+          <span class="muted">(steht für alle Mobilgeräte der Nummer, legt cme-web selbst an)</span></span>
+          <span>${x.creds ? badge("ok", "Zugangsdaten hinterlegt") : badge("bad", "Zugangsdaten fehlen")}
+            <button class="small" data-act="creds" data-tag="${esc(x.tag)}">${x.creds ? "Neu setzen" : "Zugangsdaten setzen"}</button></span></div>`).join("")}
       ${(d && d.numbers && d.numbers.length) ? `
         <div class="kv"><span class="muted">Mobilgerät hinzufügen</span><span>
           <input id="pa-mob-name" placeholder="MOBIphone" size="14">

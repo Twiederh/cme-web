@@ -193,7 +193,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         for line in out.splitlines():
             m = re.match(r"^voice register pool\s+(\d+)", line)
             if m:
-                cur = {"tag": m.group(1), "device": "", "username": "", "plain": "", "dns": [], "type": ""}
+                cur = {"tag": m.group(1), "device": "", "name": "", "username": "", "plain": "", "dns": [], "type": ""}
                 pools.append(cur)
                 continue
             if cur is None:
@@ -201,6 +201,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             parts = line.split()
             if parts[:2] == ["id", "device-id-name"] and len(parts) == 3:
                 cur["device"] = parts[2].upper()
+                cur["name"] = parts[2]          # Schreibweise wie am Router (z.B. SIPMacMini)
             elif parts[:1] == ["username"] and len(parts) >= 4 and parts[2] == "password":
                 cur["username"] = parts[1]
                 cur["plain"] = parts[3] if len(parts) == 4 else ""
@@ -352,7 +353,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         for p in app_pools():
             sv = saved.get(p["device"])
             ok = bool(sv and (not p["username"] or sv["username"] == p["username"])) or bool(p["plain"])
-            out.append({"tag": p["tag"], "device": p["device"], "username": p["username"], "dns": p["dns"],
+            out.append({"tag": p["tag"], "device": p["name"] or p["device"], "username": p["username"], "dns": p["dns"],
                         "creds": ok, "set": (sv or {}).get("set", ""),
                         "kind": "mobile" if p["device"].startswith(MOBILE_PREFIX) else "app"})
         # Rufnummern fuer "Mobilgeraete einrichten" (Pool MOB<Nummer>)
@@ -360,10 +361,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         try:
             from cme_web import parse_voice_register_config
             dns, _ = parse_voice_register_config(router.show("show running-config | section voice register"))
-            have = {p["device"] for p in out}
+            have = {p["device"].upper() for p in out}
             numbers = [{"tag": t, "number": d["number"], "shared": d["shared"],
                         "mobile": (MOBILE_PREFIX + d["number"].lstrip("+")).upper() in have}
-                       for t, d in sorted(dns.items(), key=lambda x: int(x[0])) if d.get("number")]
+                       for t, d in sorted(dns.items(), key=lambda x: (not x[1].get("shared"), int(x[0]))) if d.get("number")]
         except Exception:  # noqa: BLE001
             pass
         return jsonify(ok=True, devices=out, numbers=numbers)
@@ -603,7 +604,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         # SIP-Domain der Apps: ein Name (Flexisip nimmt Anmeldungen mit fremder IP-Domain nicht an),
         # Flexisip leitet ihn per Route an CME_HOST weiter
         device = pool_device(ext, DEVICE_PREFIX, "" if mob else name)
-        return jsonify(ok=True, ext=ext, device_name=name if mob else device,
+        device_raw = next((p["name"] for p in app_pools() if p["device"] == device and p["name"]), device)
+        return jsonify(ok=True, ext=ext, device_name=name if mob else device_raw,
                        cme_host=os.environ.get("SIP_DOMAIN", "").strip() or os.environ.get("CME_HOST", ""),
                        # direkte Anmeldung an CME (Mac, wie Jabber): Shared Line funktioniert nur ohne Flexisip
                        cme_ip=os.environ.get("CME_HOST", "").strip(),
