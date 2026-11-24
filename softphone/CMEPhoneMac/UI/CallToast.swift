@@ -127,6 +127,7 @@ final class ToastController: ObservableObject {
     private func show(_ t: Toast?) {
         let changedCall = t?.key != toast?.key
         toast = t
+        if changedCall, t?.phase == .held { Self.heldChime() }
         guard let t else { RecordingController.shared.stop(); panel?.orderOut(nil); return }
         if changedCall || lookupFor != t.number {
             lookupFor = t.number
@@ -145,6 +146,13 @@ final class ToastController: ObservableObject {
             }
         }
         presentPanel()
+    }
+
+    /// Zweimal kurz "Tink", wenn ein auf einem anderen Gerät gehaltenes Gespräch zum Übernehmen bereitsteht.
+    private static func heldChime() {
+        let name = NSSound.Name("Tink")
+        (NSSound(named: name)?.copy() as? NSSound)?.play()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { (NSSound(named: name)?.copy() as? NSSound)?.play() }
     }
 
     // MARK: Fenster
