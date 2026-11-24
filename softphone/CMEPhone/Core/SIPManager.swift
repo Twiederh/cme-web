@@ -342,11 +342,11 @@ final class SIPManager: ObservableObject {
             // "show shared-line details" und lässt es bei einer Shared Line mitklingeln.
             let ev: Event
             if let proxy = lineProxy() {
-                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 7200)
+                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
             } else if let proxy = core.defaultProxyConfig {
-                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 7200)
+                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
             } else {
-                ev = try core.createSubscribe(resource: me, event: "dialog", expires: 7200)
+                ev = try core.createSubscribe(resource: me, event: "dialog", expires: 600)
             }
             ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
             ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
