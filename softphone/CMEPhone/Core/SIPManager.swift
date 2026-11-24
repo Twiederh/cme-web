@@ -181,7 +181,10 @@ final class SIPManager: ObservableObject {
 
         do {
             let identity = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
-            if !settings.displayName.isEmpty { try identity.setDisplayname(newValue: settings.displayName) }
+            // Jabber schickt keinen Anzeigenamen in From/To (den Namen kennt CME aus "name" am dn)
+            if !settings.displayName.isEmpty && !settings.jabberMode { try identity.setDisplayname(newValue: settings.displayName) }
+            // Jabber meldet sich als "User-Agent: Cisco-CSF"
+            core.setUserAgent(name: settings.jabberMode ? "Cisco-CSF" : "CME Phone", version: nil)
 
             let params = try core.createAccountParams()
             try params.setIdentityaddress(newValue: identity)
