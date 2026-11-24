@@ -74,14 +74,15 @@ private struct AccountTab: View {
                     }
                 }
             } header: { Text("cme-web") } footer: {
-                Text("cme-web → Tab Softphone: Adresse und App-Schlüssel. In cme-web den Mac als Telefon vom Typ „CME Phone“ mit Gerätename \(settings.deviceName) anlegen. "
+                Text("cme-web → Tab Softphone: Adresse und App-Schlüssel. In cme-web den Mac als Telefon vom Typ „CME Phone“ anlegen (Gerätename frei, z. B. SIPMacMini) und den Namen hier eintragen. "
                      + "Gateway, Anlage und Voicemail-Nummer kommen dann automatisch. Auch bei Telefonsteuerung braucht der Mac eine eigene Nebenstelle – darüber läuft das Statusabo.")
             }
             Section("Status") {
                 HStack {
                     MacRegistrationBadge(status: sip.registration)
                     Spacer()
-                    Text(settings.useGateway ? "über \(settings.gatewayHost):\(String(settings.gatewayPort))" : "direkt an \(settings.cmeHost)")
+                    Text(settings.jabberMode ? "direkt an \(settings.cmeIP) (\(settings.transport == .tcp ? "TCP" : "UDP"), wie Jabber)"
+                         : settings.useGateway ? "über \(settings.gatewayHost):\(String(settings.gatewayPort))" : "direkt an \(settings.cmeHost)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !settings.voicemailNumber.isEmpty {
