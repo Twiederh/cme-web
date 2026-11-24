@@ -297,17 +297,36 @@ final class SIPManager: ObservableObject {
         + "X-cisco-callinfo,X-cisco-serviceuri,X-cisco-escapecodes,X-cisco-service-control,X-cisco-srtp-fallback,"
         + "X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1,X-cisco-graceful-reg,X-cisco-duplicate-reg"
     private var lineEvent: Event?
+    private var lineEventDelegate: EventDelegateStub?
 
     /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren.
     private func subscribeOwnLine() {
         guard settings.ciscoLineMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
         do {
             let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
-            let ev = try core.createSubscribe(resource: me, event: "dialog", expires: 7200)
+            // Über das Konto abonnieren: dann trägt das SUBSCRIBE dessen Contact (mit Gerätename) und wird bei
+            // 401 mit den Zugangsdaten des Pools wiederholt – wie beim 8845. Nur dann führt CME das Gerät in
+            // "show shared-line details" und lässt es bei einer Shared Line mitklingeln.
+            let ev: Event
+            if let proxy = core.defaultProxyConfig {
+                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 7200)
+            } else {
+                ev = try core.createSubscribe(resource: me, event: "dialog", expires: 7200)
+            }
             ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
+            ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
+            let d = EventDelegateStub(
+                onSubscribeStateChanged: { [weak self] ev, state in
+                    MainActor.assumeIsolated {
+                        let code = ev.errorInfo?.protocolCode ?? 0
+                        self?.log("Cisco-Leitungsmodus: Abo \(state)" + (code > 0 ? " (\(code))" : ""))
+                    }
+                })
+            ev.addDelegate(delegate: d)
+            lineEventDelegate = d
             try ev.sendSubscribe(body: nil)
             lineEvent = ev
-            log("Cisco-Leitungsmodus: Abo dialog auf \(settings.extensionNumber)")
+            log("Cisco-Leitungsmodus: Abo dialog auf \(settings.extensionNumber), über das Konto")
         } catch {
             log("Cisco-Leitungsmodus: Abo fehlgeschlagen: \(error)")
         }
