@@ -56,11 +56,19 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     /// Verhindert App Nap: Ohne sichtbares Fenster drosselt macOS die App nach kurzer Zeit, dann laufen
     /// SIP-Timer und Keepalives nicht mehr und die Anmeldung geht verloren.
     private var activity: NSObjectProtocol?
+    /// SIGTERM (pkill, Abmelden/Neustart des Macs, Build-Skript) beendet die App sonst ohne
+    /// applicationWillTerminate – dann bliebe die Anmeldung am CME hängen.
+    private var sigterm: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
             reason: "CME Phone hält die Anmeldung an der Telefonanlage")
+        signal(SIGTERM, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        src.setEventHandler { NSApp.terminate(nil) }
+        src.resume()
+        sigterm = src
         MainActor.assumeIsolated {
             let settings = PhoneSettings.shared
             SIPManager.shared.addCallStateHandler { call, state in
