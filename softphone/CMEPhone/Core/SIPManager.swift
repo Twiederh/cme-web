@@ -350,6 +350,14 @@ final class SIPManager: ObservableObject {
             }
             ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
             ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
+            // Wie 8845/Jabber den Gerätenamen auch im Contact des SUBSCRIBE (liblinphone setzt die Contact-Parameter
+            // des Kontos nur beim REGISTER). CME ordnet das Abo darüber dem Pool zu.
+            if let c = core.defaultAccount?.contactAddress, let host = c.domain, !host.isEmpty {
+                let port = c.port > 0 ? ":\(c.port)" : ""
+                ev.addCustomHeader(name: "Contact",
+                                   value: "<sip:\(settings.extensionNumber)@\(host)\(port);transport=udp>;"
+                                   + "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\";+u.sip!model.ccm.cisco.com=\"503\"")
+            }
             let d = EventDelegateStub(
                 onSubscribeStateChanged: { [weak self] ev, state in
                     MainActor.assumeIsolated {
