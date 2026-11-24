@@ -26,6 +26,8 @@ final class ToastController: ObservableObject {
         var video = false
         /// Telefonsteuerung: eingehender Anruf auf der Shared Line des Macs – Annehmen am Tischtelefon
         var viaDesk = false
+        /// Softphone-Gespräch auf Halten (Shared Line: an einem anderen Gerät übernehmbar)
+        var held = false
         var key: String { switch source { case .softphone(let id): return id; case .deskPhone: return "desk" } }
     }
 
@@ -68,7 +70,7 @@ final class ToastController: ObservableObject {
             let since = phase == .active ? Date().addingTimeInterval(-TimeInterval(c.duration)) : nil
             t = Toast(source: .softphone(c.id), phase: phase, number: c.remote, name: c.displayName,
                       since: toast?.key == c.id && toast?.phase == phase ? toast?.since : since,
-                      video: phase == .active && c.hasVideo)
+                      video: phase == .active && c.hasVideo, held: c.isPaused)
         } else if mode == .deskPhone, settings.deskPhoneNotify || dialed != nil {
             switch status.state {
             case .ringing:
@@ -186,6 +188,16 @@ final class ToastController: ObservableObject {
         switch t.source {
         case .softphone(let id): sip.terminate(callId: id)
         case .deskPhone: desk.hangup()
+        }
+    }
+
+    /// Halten / Fortsetzen. Auf der Shared Line kann ein gehaltenes Gespräch an einem anderen Gerät
+    /// (Tischtelefon, Gigaset, iPhone) mit „Fortsetzen“ übernommen werden.
+    func toggleHold() {
+        guard let t = toast else { return }
+        switch t.source {
+        case .softphone(let id): CallCenter.shared.requestHold(callId: id, held: !t.held)
+        case .deskPhone: desk.hold()
         }
     }
 
@@ -307,6 +319,7 @@ struct CallToastView: View {
         case .active:
             let secs = Int(now.timeIntervalSince(t.since ?? now))
             parts.append(String(format: "%d:%02d", secs / 60, secs % 60))
+            if t.held { parts.append("Gehalten") }
             if rec.isOn { parts.append("● Aufnahme") }
         }
         if t.source == .deskPhone || t.viaDesk { parts.append("Tischtelefon") }
@@ -332,6 +345,11 @@ struct CallToastView: View {
                 RoundKey(symbol: rec.isOn ? "stop.fill" : "record.circle",
                          color: rec.isOn ? .red.opacity(0.85) : Color(white: 0.5),
                          help: rec.help, enabled: rec.available && !rec.busy) { rec.toggle() }
+                RoundKey(symbol: t.held ? "play.fill" : "pause.fill",
+                         color: t.held ? .orange : Color(white: 0.5),
+                         help: t.held ? "Fortsetzen" : "Halten – auf der Shared Line an einem anderen Gerät übernehmbar") {
+                    model.toggleHold()
+                }
                 RoundKey(symbol: "phone.down.fill", color: .red, help: "Auflegen") { model.hangup() }
             }
         }

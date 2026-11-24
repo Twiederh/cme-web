@@ -31,10 +31,19 @@ struct ContentView: View {
                 if let call = sip.calls.first {
                     VStack(spacing: 14) {
                         Text(call.displayName.isEmpty ? call.remote : call.displayName).font(.headline)
+                        if call.isPaused {
+                            Text("Gehalten – an einem anderen Gerät mit „Fortsetzen“ übernehmen")
+                                .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
+                        }
                         HStack(spacing: 28) {
                             RoundButton(symbol: rec.isOn ? "record.circle.fill" : "record.circle",
                                         color: rec.isOn ? .red : .gray, label: rec.isOn ? "Aufnahme läuft" : "Aufnehmen",
                                         enabled: rec.available && !rec.busy) { rec.toggle() }
+                            RoundButton(symbol: call.isPaused ? "play.fill" : "pause.fill",
+                                        color: call.isPaused ? .orange : .gray,
+                                        label: call.isPaused ? "Fortsetzen" : "Halten", enabled: true) {
+                                CallKitProvider.shared.requestHold(callId: call.id, held: !call.isPaused)
+                            }
                             RoundButton(symbol: "phone.down.fill", color: .red, label: "Auflegen", enabled: true) {
                                 CallKitProvider.shared.requestEnd(callId: call.id)
                             }
