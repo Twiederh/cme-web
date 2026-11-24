@@ -29,6 +29,13 @@ fi
 say "$(xcodebuild -version | head -1)"
 
 
+# Build-Nummer aus Git: Anzahl Commits (steigt mit jedem Commit), Hash, "+" bei uncommitteten Änderungen, Zeit
+BUILD_NO=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+BUILD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
+git diff --quiet HEAD -- . 2>/dev/null || BUILD_HASH="$BUILD_HASH+"
+BUILD_INFO="Build $BUILD_NO · $BUILD_HASH · $(date '+%d.%m. %H:%M')"
+say "$BUILD_INFO"
+
 say "--- Projekte erzeugen"
 # iOS-Spec ohne bzw. mit Local Push (Blöcke "# >>> LOCALPUSH" … "# <<< LOCALPUSH" in project.yml):
 # ohne Freigabe von Apple muss die Local-Push-Extension ganz raus, sonst lehnt TestFlight den Upload ab.
@@ -37,6 +44,8 @@ if [ "${LOCALPUSH:-0}" = "1" ]; then
 else
   awk '/# >>> LOCALPUSH/{skip=1;next} /# <<< LOCALPUSH/{skip=0;next} !skip' project.yml > project.gen.yml
 fi
+# TestFlight-Build-Nummer = Build-Nummer aus Git (steigt mit jedem Commit) – gilt auch fürs Archivieren in Xcode
+sed -i '' -E "s/^( *CURRENT_PROJECT_VERSION: ).*/\1\"$BUILD_NO\"/" project.gen.yml
 xcodegen generate --spec project.gen.yml > build-logs/xcodegen-ios.log 2>&1 && say "iOS-Projekt OK"  || say "iOS-Projekt FEHLER (siehe xcodegen-ios.log)"
 xcodegen generate --spec project-mac.yml > build-logs/xcodegen-mac.log 2>&1 && say "Mac-Projekt OK"  || say "Mac-Projekt FEHLER (siehe xcodegen-mac.log)"
 
@@ -56,12 +65,6 @@ fi
 
 DD="$PWD/build/DerivedData"
 
-# Build-Nummer aus Git: Anzahl Commits (steigt mit jedem Commit), Hash, "+" bei uncommitteten Änderungen, Zeit
-BUILD_NO=$(git rev-list --count HEAD 2>/dev/null || echo 0)
-BUILD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
-git diff --quiet HEAD -- . 2>/dev/null || BUILD_HASH="$BUILD_HASH+"
-BUILD_INFO="Build $BUILD_NO · $BUILD_HASH · $(date '+%d.%m. %H:%M')"
-say "$BUILD_INFO"
 
 # Standard: ohne Signierung kompilieren (prüft den Code, braucht keinen Apple-Account in Xcode).
 # Signiert bauen (Profile automatisch anlegen):  SIGN=1 zsh build.command
