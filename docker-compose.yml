@@ -2,6 +2,7 @@ services:
   cme-web:
     build: .
     image: cme-web:latest
+    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
     container_name: cme-web
     restart: unless-stopped
     ports:
@@ -62,6 +63,7 @@ services:
   asterisk:
     build: ./asterisk
     image: cme-voicemail:latest
+    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
     container_name: cme-voicemail
     restart: unless-stopped
     ulimits:
@@ -92,6 +94,7 @@ services:
   recorder:
     build: ./recorder
     image: cme-recorder:latest
+    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
     container_name: cme-recorder
     restart: unless-stopped
     environment:
@@ -137,6 +140,7 @@ services:
         LINPHONESDK_VERSION: "5.5.16"
         NJOBS: "4"
     image: flexisip:local
+    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
     container_name: cme-flexisip
     network_mode: host
     restart: unless-stopped
@@ -158,6 +162,7 @@ services:
   push-relay:
     build: ./push-relay
     image: cme-push-relay:latest
+    pull_policy: build   # bei jedem Deploy neu bauen (Portainer/compose up)
     container_name: cme-push-relay
     network_mode: host
     restart: unless-stopped

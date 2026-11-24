@@ -108,9 +108,19 @@ final class SIPManager: ObservableObject {
         iterateTimer = t
         #endif
         #if os(macOS)
-        // Eigene, zufällige SIP-Ports: CME schickt Anrufe an den Contact; 5060 belegt evtl. Cisco Jabber.
+        // Wie Jabber: gleichbleibender Contact (feste UDP-Adresse + feste +sip.instance). CME lehnt eine
+        // Anmeldung mit 403 "Registration is active for another client" ab, solange die vorige Anmeldung
+        // desselben Pools von einem anderen Contact noch gilt – wechselnde Ports/IDs würden das bei jedem
+        // Neustart auslösen. 5060 bleibt frei (Cisco Jabber).
+        let uuidKey = "sipInstanceUUID"
+        let uuid = UserDefaults.standard.string(forKey: uuidKey) ?? {
+            let u = UUID().uuidString.lowercased()
+            UserDefaults.standard.set(u, forKey: uuidKey)
+            return u
+        }()
+        core.config?.setString(section: "misc", key: "uuid", value: uuid)
         if let t = core.transports {
-            t.udpPort = -1
+            t.udpPort = settings.jabberMode ? 5065 : -1
             t.tcpPort = -1
             try? core.setTransports(newValue: t)
         }
