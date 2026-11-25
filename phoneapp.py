@@ -34,6 +34,8 @@ RE_KEYID = re.compile(r"^[A-Z0-9]{10}$")
 RE_EXT = re.compile(r"^\+?[0-9]{1,32}$")
 RE_HOST = re.compile(r"^[A-Za-z0-9.\-:\[\]]{1,253}$")
 RE_REC_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
+# Passwörter/Namen in der Flexisip-Passwortdatei (Grammatik "token" ohne Leerzeichen und ";")
+RE_PW_TOKEN = re.compile(r"^[A-Za-z0-9._!%*+~-]{1,64}$")
 ENVS = ("auto", "sandbox", "production")
 DEVICE_PREFIX = "CSF"          # Geraetename der App am Router (wie cme_web.SOFTPHONE_PREFIX)
 # Mobilgeraete (iPhone/iPad) einer Rufnummer: EIN Pool "MOB<Nummer>", den cme-web (sharedline.py) mit Ziel
@@ -182,6 +184,28 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
 
     def mobile_save(m: dict) -> None:
         _write(mobile_path, json.dumps(m, indent=1), 0o600)
+        write_flexisip_passwd(m)
+
+    # Passwortdatei für Flexisip (module::Authentication, db-implementation=file): Flexisip prüft damit die
+    # Anfragen der Apps (INVITE, re-INVITE ...) per Digest. Gesucht wird nach User und Host des From und dem
+    # Anmeldenamen der App; der From-Host ist je nach Gespräch die SIP-Domain (abgehend), die CME-IP
+    # (Übernehmen) oder die IP von Flexisip (eingehend, To der CME). Volume softphone-data, in Flexisip nur lesbar.
+    flexisip_passwd = data / "flexisip-passwd"
+
+    def write_flexisip_passwd(m: dict | None = None) -> None:
+        m = mobiles() if m is None else m
+        domains = [d for d in dict.fromkeys([os.environ.get("SIP_DOMAIN", "").strip(), os.environ.get("CME_HOST", "").strip(),
+                                             os.environ.get("VM_HOST_IP", "").strip()]) if d]
+        # ohne Kommentarzeile: Flexisip bricht schon an "(" in einem Kommentar ab (Grammatik authdb-file)
+        lines = ["version:1"]
+        for name, v in sorted(m.items()):
+            num, pw = v.get("number", ""), v.get("password", "")
+            if num and RE_PW_TOKEN.match(pw) and RE_PW_TOKEN.match(name):
+                lines += [f"{num}@{d} clrtxt:{pw} ; {name}" for d in domains]
+        try:
+            _write(flexisip_passwd, "\n".join(lines) + "\n", 0o600)
+        except OSError as e:
+            print(f"Softphone: {flexisip_passwd} nicht beschreibbar ({e})", flush=True)
 
     def mobile_account(name: str) -> dict:
         """{"number", "password"} des Mobilgeraets (Gross-/Kleinschreibung egal) oder {}"""
@@ -354,11 +378,18 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     def admin_devices():
         saved = creds_all()
         out = []
+        # Anmeldung an CME (Mac direkt, MOB-Pool über cme-web): show voice register pool all brief
+        try:
+            from cme_web import parse_pool_brief
+            brief = parse_pool_brief(router.show("show voice register pool all brief"))
+        except Exception:  # noqa: BLE001
+            brief = {}
         for p in app_pools():
             sv = saved.get(p["device"])
             ok = bool(sv and (not p["username"] or sv["username"] == p["username"])) or bool(p["plain"])
+            b = brief.get(p["tag"]) or {}
             out.append({"tag": p["tag"], "device": p["name"] or p["device"], "username": p["username"], "dns": p["dns"],
-                        "creds": ok, "set": (sv or {}).get("set", ""),
+                        "creds": ok, "set": (sv or {}).get("set", ""), "state": b.get("state", ""), "ip": b.get("ip", ""),
                         "kind": "mobile" if p["device"].startswith(MOBILE_PREFIX) else "app"})
         # Rufnummern fuer "Mobilgeraete einrichten" (Pool MOB<Nummer>)
         numbers = []
@@ -754,6 +785,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                                      "account": mobile_account, "notify_held": notify_held}
 
     if not demo:
+        write_flexisip_passwd()
         try:
             ensure()
         except OSError as e:

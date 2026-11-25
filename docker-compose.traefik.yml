@@ -190,6 +190,8 @@ services:
       TZ: Europe/Berlin
     volumes:
       - flexisip-conf:/etc/flexisip
+      # Passwoerter der Apps (cme-web schreibt flexisip-passwd), nur lesbar
+      - softphone-data:/data/push:ro
       - flexisip-log:/var/opt/belledonne-communications/log/flexisip
 
   # Weckt schlafende Apps: im Heim-WLAN per Local Push (TCP RELAY_LOCALPUSH_PORT, 5072), sonst per APNs.

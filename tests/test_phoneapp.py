@@ -110,4 +110,16 @@ check(c.post("/client/v1/held", json={**held, "remote_uri": "sip:a b", "held": T
       "ungültige Angaben -> 400")
 c.post("/client/v1/held", json={**held, "held": False}, headers=H)
 check(c.get("/client/v1/held?ext=+4961874191283", headers=H).get_json()["held"] == [], "fortgesetzt -> weg")
+
+# Passwortdatei für Flexisip (Digest der App-Anfragen): je Mobilgerät eine Zeile pro From-Domain
+os.environ.update(SIP_DOMAIN="cme.local", CME_HOST="192.168.11.4", VM_HOST_IP="192.168.1.110")
+r = c.post("/api/phoneapp/mobiles/MOBIphone/password", json={})
+check(r.get_json().get("ok"), "neues Passwort für MOBIphone")
+pw = json.load(open(tempfile.gettempdir() + "/cme-web-demo-vm/config/cme-phoneapp-mobile.json"))["MOBIphone"]["password"]
+pf = [open(p + "/flexisip-passwd").read() for p in (d + "/push", P) if os.path.exists(p + "/flexisip-passwd")]
+check(len(pf) == 1, "flexisip-passwd geschrieben")
+lines = pf[0].splitlines()
+check(lines[0] == "version:1" and f"+4961874191283@cme.local clrtxt:{pw} ; MOBIphone" in lines
+      and f"+4961874191283@192.168.11.4 clrtxt:{pw} ; MOBIphone" in lines
+      and f"+4961874191283@192.168.1.110 clrtxt:{pw} ; MOBIphone" in lines, "Zeilen für SIP-Domain, CME-IP, Flexisip-IP")
 print("ALLE PHONEAPP-TESTS OK")

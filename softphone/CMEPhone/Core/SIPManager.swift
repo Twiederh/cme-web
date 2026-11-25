@@ -251,7 +251,10 @@ final class SIPManager: ObservableObject {
             // Jabber schickt keinen Anzeigenamen in From/To (den Namen kennt CME aus "name" am dn)
             if !settings.displayName.isEmpty && !settings.jabberMode { try identity.setDisplayname(newValue: settings.displayName) }
             // Jabber meldet sich als "User-Agent: Cisco-CSF"
-            core.setUserAgent(name: settings.jabberMode ? "Cisco-CSF" : "CME Phone", version: nil)
+            // sonst "CME Phone/<Build>" – cme-web zeigt den Build der Mobilgeräte an (Tab Softphone)
+            core.setUserAgent(name: settings.jabberMode ? "Cisco-CSF" : "CME Phone",
+                              version: settings.jabberMode ? nil
+                                  : Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
 
             let params = try core.createAccountParams()
             try params.setIdentityaddress(newValue: identity)

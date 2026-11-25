@@ -125,6 +125,9 @@ def test_app_register_checks_mobile_pool_password():
     ok = reg(good)
     assert ok.startswith("SIP/2.0 200"), ok
     assert "Expires: 3600" in ok and "expires=3600" in ok
+    st = agent.app_status()
+    assert len(st) == 1 and st[0]["name"] == "MOBIphone" and st[0]["state"] == "angemeldet" \
+        and st[0]["ip"] == "10.0.0.5" and st[0]["number"] == "+4961874191283", st
 
 
 def test_app_register_unknown_device_is_forbidden():

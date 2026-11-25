@@ -175,6 +175,8 @@ class Agent:
         self.regs: dict[str, Reg] = {}
         self.nonces: dict[str, float] = {}
         self.app_regs: dict[str, float] = {}          # Nummer -> letzte erfolgreiche App-Anmeldung
+        # Mobilgerät (Anmeldename, klein) -> {name, number, time, expires, ip, ua}; für die Anzeige in cme-web
+        self.app_devices: dict[str, dict] = {}
         self.subs: dict[tuple[str, str], Sub] = {}
         self.missing: dict[tuple[str, str], int] = {}
         self.lock = threading.Lock()
@@ -311,7 +313,21 @@ class Agent:
         extra.append(f"Expires: {expires}")
         if expires:
             self.app_regs[number] = now
+        name = p.get("username", "")
+        m = re.search(r"<sip:[^@>]+@([^:;>]+)", contacts[0]) if contacts else None
+        self.app_devices[name.lower()] = {"name": name, "number": number, "time": now, "expires": expires,
+                                          "ip": m.group(1) if m else "", "ua": _header(msg, "User-Agent")[:60]}
         self._reply(msg, addr, "200 OK", extra)
+
+    def app_status(self) -> list[dict]:
+        """Anmeldungen der Mobilgeräte bei Flexisip: angemeldet (gültig), abgelaufen oder abgemeldet."""
+        now = time.time()
+        out = []
+        for d in self.app_devices.values():
+            until = d["time"] + d["expires"]
+            state = "abgemeldet" if not d["expires"] else ("angemeldet" if until > now else "abgelaufen")
+            out.append({**d, "time": int(d["time"]), "until": int(until), "state": state})
+        return sorted(out, key=lambda d: d["name"].lower())
 
     # ---------- Anmeldung der Mobilgeräte-Pools an CME ----------
 
@@ -493,6 +509,9 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
     from cme_web import parse_pool_brief, parse_voice_register_config
 
     store = cfgdir / "cme-sharedline.json"
+    # Anmeldungen der Mobilgeräte: gelten bis zu 7 Tage, die App erneuert sie im Hintergrund nicht - nach einem
+    # Neustart von cme-web sonst bis zum nächsten Öffnen der App unbekannt
+    apps_store = cfgdir / "cme-sharedline-apps.json"
     cme = os.environ.get("CME_HOST", "").strip()
     host = os.environ.get("SHARED_LINE_HOST", "").strip() or os.environ.get("VM_HOST_IP", "").strip()
     port = int(os.environ.get("SHARED_LINE_PORT", "5074") or 5074)
@@ -557,10 +576,18 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
             try:
                 if info["agent"] is None and cme and host:
                     a = Agent(cme, host, port, flexisip, credentials, realm)
+                    try:
+                        a.app_devices = json.loads(apps_store.read_text())
+                    except (FileNotFoundError, ValueError):
+                        pass
                     a.on_held = lambda number, d, holder: notify("held", number, d, holder)
                     a.on_held_end = lambda number, call_id: notify("held_end", number, {"call_id": call_id}, "")
                     info["agent"] = a
                 check()
+                a = info["agent"]
+                if a and a.app_devices != info.get("apps_saved"):
+                    info["apps_saved"] = json.loads(json.dumps(a.app_devices))
+                    apps_store.write_text(json.dumps(a.app_devices))
                 info["error"] = ""
             except Exception as e:  # noqa: BLE001
                 info["error"] = str(e)[:300]
@@ -574,7 +601,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
         return jsonify(ok=True, enabled=settings()["enabled"], host=host, port=port, running=a is not None,
                        error=missing or info["error"], last=int(info["last"]),
                        subs=a.status() if a else [], candidates=info["candidates"],
-                       mobile=a.reg_status() if a else [], flexisip=flexisip)
+                       mobile=a.reg_status() if a else [], apps=a.app_status() if a else [], flexisip=flexisip)
 
     @app.post("/api/sharedline")
     def sharedline_set():

@@ -46,8 +46,21 @@ enabled=false
 enabled=false
 
 [module::Authentication]
-# CME authentifiziert selbst (bzw. gar nicht – Zuordnung über "id network" im Pool).
-enabled=false
+# Digest für alle Anfragen der Apps (INVITE, re-INVITE, OPTIONS …): CME prüft Anrufe über Flexisip nicht, ohne
+# diese Prüfung könnte jeder, der Flexisip erreicht, über die CME telefonieren. ACK/CANCEL/BYE prüft Flexisip nie.
+# REGISTER prüft cme-web (sharedline.py) – hier ausgenommen. Anfragen der CME und von cme-web (127.0.0.1) sind
+# vertrauenswürdig. Passwörter: cme-web schreibt sie ins Volume softphone-data, entrypoint.sh kopiert sie nach
+# /run (Flexisip bricht ab, wenn die Datei fehlt oder nicht lesbar ist).
+enabled=true
+filter=is_request && request.method != 'REGISTER'
+trusted-hosts=${CME_IP} 127.0.0.1
+# From-Domain der Apps: SIP-Domain, CME-IP (Übernehmen) oder Flexisip-IP (eingehend) – Realm immer die SIP-Domain
+auth-domains=*
+realm=${SIP_DOMAIN}
+db-implementation=file
+file-path=/run/flexisip-passwd
+# Datei alle 60 s neu lesen (neue Geräte, neue Passwörter aus cme-web)
+cache-expire=60
 
 [module::Authorization]
 # Flexisip 2.6: Standardwert "legacy" ist veraltet und erzeugt eine Warnung.

@@ -19,7 +19,22 @@
   const secretTxt = (v) => reveal ? esc(v) : (v ? "•".repeat(12) : '<span class="muted">–</span>');
 
   async function load() {
-    const [j, d, mob] = await Promise.all([api("/api/phoneapp"), api("/api/phoneapp/devices"), api("/api/phoneapp/mobiles")]);
+    const [j, d, mob, sl] = await Promise.all([api("/api/phoneapp"), api("/api/phoneapp/devices"), api("/api/phoneapp/mobiles"),
+      api("/api/sharedline").catch(() => ({}))]);
+    // Anmeldung der Mobilgeräte bei Flexisip (cme-web prüft das Passwort): Name (klein) -> Status
+    const appReg = Object.fromEntries(((sl && sl.apps) || []).map(a => [a.name.toLowerCase(), a]));
+    const cmeState = (x) => x.state === "REGISTERED"
+      ? badge("ok", "an CME angemeldet") + (x.ip ? ` <span class="mono muted">${esc(x.ip)}</span>` : "")
+      : badge("bad", x.state ? `an CME: ${x.state.toLowerCase()}` : "an CME nicht angemeldet");
+    const until = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const appState = (name) => {
+      const a = appReg[name.toLowerCase()];
+      if (!a) return badge("warn", "noch nie angemeldet");
+      const info = ` <span class="muted">${esc(ago(a.time))}${a.ip ? ` · <span class="mono">${esc(a.ip)}</span>` : ""}${
+        a.ua ? ` · ${esc(a.ua)}` : ""}</span>`;
+      if (a.state === "angemeldet") return badge("ok", `angemeldet bis ${until(a.until)}`) + info;
+      return badge("bad", a.state === "abgemeldet" ? "abgemeldet" : `abgelaufen seit ${until(a.until)}`) + info;
+    };
     const b = $("#pa-body");
     if (!j.ok) { b.innerHTML = `<div class="msg bad" style="display:block">${esc(j.error || "Fehler")}</div>`; return; }
     const r = j.relay || {}, a = j.apns || {}, devs = (r.localpush || {}).devices || [];
@@ -46,7 +61,8 @@
         (Tab Telefone) mit frei wählbarem Gerätenamen, z. B. <span class="mono">SIPMacMini</span>; denselben Namen in der App eintragen.
         CME speichert Passwörter verschlüsselt, deshalb merkt cme-web sie sich; fehlt eins, hier <b>Zugangsdaten setzen</b>.</div>
       ${(d && d.devices && d.devices.some(x => x.kind !== "mobile")) ? d.devices.filter(x => x.kind !== "mobile").map(x => `
-        <div class="kv"><span><span class="mono">${esc(x.device)}</span> <span class="muted">Pool ${esc(x.tag)}</span></span>
+        <div class="kv"><span><span class="mono">${esc(x.device)}</span> <span class="muted">Pool ${esc(x.tag)}</span>
+          <br>${cmeState(x)}</span>
           <span>${x.creds ? badge("ok", "Zugangsdaten hinterlegt") : badge("bad", "Zugangsdaten fehlen")}
             <button class="small" data-act="creds" data-tag="${esc(x.tag)}">${x.creds ? "Neu setzen" : "Zugangsdaten setzen"}</button></span></div>`).join("")
         : '<div class="empty">Noch kein Telefon vom Typ Softphone (Tab Telefone).</div>'}
@@ -56,13 +72,15 @@
         <span class="mono">MOBIphone</span>) – denselben Namen in der App unter <b>Gerätename</b> eintragen; das Passwort holt
         sie sich hier ab. Alle Mobilgeräte einer Nummer klingeln zusammen mit Tischtelefon und Mac (Shared Line).</div>
       ${((mob && mob.devices) || []).map(m => `
-        <div class="kv"><span><span class="mono">${esc(m.name)}</span> <span class="muted">${esc(m.number)}${m.push ? " · Mitteilungen an" : ""}</span></span>
+        <div class="kv"><span><span class="mono">${esc(m.name)}</span> <span class="muted">${esc(m.number)}${m.push ? " · Mitteilungen an" : ""}</span>
+          <br>${appState(m.name)}</span>
           <span><button class="small" data-act="mob-pw" data-name="${esc(m.name)}">Neues Passwort</button>
             <button class="small" data-act="mob-del" data-name="${esc(m.name)}">Entfernen</button></span></div>`).join("")
         || '<div class="empty">Noch kein Mobilgerät.</div>'}
       ${((d && d.devices) || []).filter(x => x.kind === "mobile").map(x => `
         <div class="kv"><span><span class="muted">Für CME: Pool ${esc(x.tag)}</span> <span class="mono">${esc(x.device)}</span>
-          <span class="muted">(steht für alle Mobilgeräte der Nummer, legt cme-web selbst an)</span></span>
+          <span class="muted">(steht für alle Mobilgeräte der Nummer, legt cme-web selbst an)</span>
+          <br>${cmeState(x)}</span>
           <span>${x.creds ? badge("ok", "Zugangsdaten hinterlegt") : badge("bad", "Zugangsdaten fehlen")}
             <button class="small" data-act="creds" data-tag="${esc(x.tag)}">${x.creds ? "Neu setzen" : "Zugangsdaten setzen"}</button></span></div>`).join("")}
       ${(d && d.numbers && d.numbers.length) ? `
