@@ -23,7 +23,9 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 **Deployment:**
 - GitHub Actions bauen die Images nach `ghcr.io/twiederh/...`.
 - Auf docker01 (192.168.1.110) wird per Portainer gepullt und neu gestartet.
-- Watchtower ist für alle Stack-Dienste per Label `com.centurylinklabs.watchtower.enable=false` ausgeschlossen. Grund: Watchtower hat den Stack sonst unkontrolliert neu gestartet.
+- Watchtower ist für alle Stack-Dienste per Label `com.centurylinklabs.watchtower.enable=false` ausgeschlossen (inzwischen ganz gelöscht).
+- Portainer-GitOps für Stack `cmeconfig`: „Force redeployment“ muss aus sein. Sonst baut Portainer den Stack alle 5 min neu auf, Flexisip verliert jedes Mal alle Anmeldungen (iPhone: „io-Error“).
+- Die CME ist für `show`-Befehle per `ssh thomas@192.168.1.4` erreichbar.
 
 **Kommunikation cme-web → push-relay:**
 - Beide nutzen das gemeinsame Volume `softphone-data` (in cme-web unter `/data/push`, im Relay unter `/data`).
@@ -44,7 +46,9 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 
 **Codecs**
 - Die CME hat keinen Transcoder. Wenn das übernehmende Gerät einen anderen Codec spricht als der Trunk (sipgate), meldet die CME `%VOICE_IEC-3-GW: CCAPI: Internal Error` und legt auf.
-- Das 8845 bevorzugt immer PCMU, auch wenn in der cnf g722-64 als preferredCodec steht.
+- Beim Übernehmen per `Replaces` antwortet die CME dem Gerät in der Reihenfolge **seines** Angebots, nicht nach ihrer Codec-Liste. Das übernehmende Gerät muss also den Codec des Trunks zuerst anbieten.
+- Die CME schreibt in die cnf `<preferredCodec>g722-64</preferredCodec>` (ihr Codec-Name). Die 8845-Firmware (CUCM-Stand) versteht nur `g722` und setzt sonst PCMU an die erste Stelle. Deshalb überschreibt eine phonecfg-Regel in cme-web den Wert in `SEP5006AB818C20.cnf.xml` mit `g722`. Seitdem klappt die Übernahme Mac → 8845 (getestet 25.11.).
+- Getestet und verworfen: `voice-class sip midcall-signaling passthru media-change` auf dial-peer 1/2. Die CME schickt das re-INVITE zum Trunk, wartet die Antwort aber nicht ab. `codec g722-64` direkt im Pool 4 funktioniert, ist aber für Anrufe nach draußen zu riskant (nur ein Codec).
 - Ein Pool ohne Codec-Angabe bekommt G.729 angeboten. liblinphone kann kein G.729, die Folge ist 488. Deshalb setzt cme-web für MOB-Pools `voice-class codec 3` (G.722 + G.711), siehe `MOBILE_CODEC` in `phoneapp.py`.
 
 **Halten auf der Shared Line**
@@ -91,7 +95,8 @@ python3 tests/test_relay.py
 
 **Apps:** `softphone/build.command`
 - `ONLY=ios` oder `ONLY=mac` baut nur eine Plattform.
-- iOS geht zu TestFlight.
+- iOS wird dabei nur kompiliert (ohne `SIGN=1` unsigniert). Aufs Gerät per Xcode (⌘R) oder Product → Archive → TestFlight.
+- Build-Nummer = Anzahl der Commits. Uncommittete Builds tragen dieselbe Nummer mit `+` am Hash, also vor dem Testen committen. Die App zeigt sie an (iOS: Startbildschirm unten).
 - Der Mac-Build wird immer signiert (`MACSIGN=1`). Unsigniert fehlt die Sandbox, dann sind die Einstellungen in `~/Library/Containers/de.wiederhol.cmephone.mac` nicht sichtbar.
 - Das Skript beendet die laufende Mac-App, installiert sie nach `/Applications/CMEPhone.app` und startet sie neu. Ein Bundle im laufenden Betrieb zu ersetzen bringt die App zum Absturz.
 
@@ -99,9 +104,8 @@ python3 tests/test_relay.py
 
 ## Offene Punkte
 
-- [ ] Testen: iPhone hält → 8845/Mac sehen das Gespräch und können übernehmen. Commit 7bf92fe setzt dafür den From auf die CME-IP; noch ungetestet.
-- [ ] Wenn der Test klappt: denselben From-Fix auch für normale abgehende Anrufe vom iPhone (dort steht noch `cme.local`).
-- [ ] CME: `voice class codec 4` (nur g711ulaw) auf die Pools 4, 6, 1, den MOB-Pool und dial-peer voice 2 (sipgate). Danach eventuell `MOBILE_CODEC` in cme-web anpassen.
+- [ ] iPhone hält → 8845/Mac sehen nichts. Ursache: CME ordnet INVITEs über die IP im Contact einem Pool zu, über Flexisip ist das die iPhone-IP statt der angemeldeten (Flexisip) → kein Pool, keine Shared Line, `Replaces` reicht die CME dann an den Trunk weiter (Rückruf aufs Handy). `masquerade-contacts-for-invites` getestet: Zuordnung klappt (pid 40002), aber Flexisip verwirft danach ACK/re-INVITE/BYE (482 Loop Detected). Plan: Flexisip als B2BUA (Build mit B2BUA, Patch für `Call-Info` im re-INVITE).
+- [ ] iPhone klingelt nach Annahme am Mac noch ~10 s weiter (SIP-CANCEL kommt sofort an, Ursache in der App; Protokoll des iPhones auswerten).
 - [ ] Optional: Flexisip-Registrierungen in Redis speichern.
 - [ ] Aufräumen: Testkonfiguration auf der CME, veraltete Swift-APIs, Passwörter erneuern, die im Chat standen.
 - [ ] Entscheidung App Store / Android / Windows. liblinphone ist GPLv3 bzw. proprietär lizenziert, was für den App Store ein Problem ist. Optionen: Lizenzpreis bei Belledonne anfragen oder auf baresip (BSD) wechseln.
