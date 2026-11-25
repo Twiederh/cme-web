@@ -74,6 +74,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 - `max-expires=604800` (7 Tage). Die App registriert auf iOS mit 7 Tagen, auf macOS mit 600 s. `sharedline.APP_MAX_EXPIRES` ist entsprechend gesetzt.
 - **Digest für App-Anfragen:** REGISTER prüft cme-web (`sharedline._app_register`), alle anderen Anfragen der Apps prüft Flexisip (`module::Authentication`, trusted: CME, 127.0.0.1).
   - Die Passwörter schreibt cme-web nach `/data/push/flexisip-passwd` (`phoneapp.write_flexisip_passwd`), mit einer Zeile je Gerät und From-Domain (SIP-Domain, CME-IP, Flexisip-IP).
+  - In der Datei steht der fertige MD5-HA1 aus Anmeldename, Realm und Passwort, nicht `clrtxt`. Aus `clrtxt` bildet Flexisip den Hash mit der Rufnummer statt mit dem Anmeldenamen, die App bekommt dann `403 Forbidden`.
   - `entrypoint.sh` prüft die Zeilen und kopiert die Datei nach `/run/flexisip-passwd`.
   - Flexisip bricht ab, wenn die Datei fehlt oder eine Zeile nicht der Grammatik entspricht. Schon `(` in einem Kommentar reicht.
 

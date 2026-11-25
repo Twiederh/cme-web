@@ -19,6 +19,7 @@ Client-Schnittstelle fuer die Apps (/client/v1/..., Anmeldung mit "Authorization
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -196,12 +197,17 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         m = mobiles() if m is None else m
         domains = [d for d in dict.fromkeys([os.environ.get("SIP_DOMAIN", "").strip(), os.environ.get("CME_HOST", "").strip(),
                                              os.environ.get("VM_HOST_IP", "").strip()]) if d]
+        # Realm des Digest: immer die SIP-Domain (flexisip.conf.template: realm=${SIP_DOMAIN})
+        realm = os.environ.get("SIP_DOMAIN", "").strip() or "cme-web"
         # ohne Kommentarzeile: Flexisip bricht schon an "(" in einem Kommentar ab (Grammatik authdb-file)
         lines = ["version:1"]
         for name, v in sorted(m.items()):
             num, pw = v.get("number", ""), v.get("password", "")
             if num and RE_PW_TOKEN.match(pw) and RE_PW_TOKEN.match(name):
-                lines += [f"{num}@{d} clrtxt:{pw} ; {name}" for d in domains]
+                # Fertiger HA1 statt clrtxt: aus clrtxt rechnet Flexisip den Hash mit der Rufnummer (User des From),
+                # die App aber mit ihrem Anmeldenamen -> "Passwords did not match", 403
+                ha1 = hashlib.md5(f"{name}:{realm}:{pw}".encode()).hexdigest()
+                lines += [f"{num}@{d} md5:{ha1} ; {name}" for d in domains]
         try:
             _write(flexisip_passwd, "\n".join(lines) + "\n", 0o600)
         except OSError as e:

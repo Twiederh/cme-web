@@ -41,8 +41,8 @@ PASSWD_SRC="${FLEXISIP_PASSWD:-/data/push/flexisip-passwd}"
 [ -f /run/flexisip-passwd ] || printf 'version:1\n' > /run/flexisip-passwd
 sync_passwd() {
   [ -f "$PASSWD_SRC" ] && [ "$(head -n 1 "$PASSWD_SRC")" = "version:1" ] || return 0
-  # jede weitere Zeile: <user>@<domain> clrtxt:<passwort> ; <anmeldename> (sonst bricht Flexisip ab)
-  if tail -n +2 "$PASSWD_SRC" | grep -qvE '^[A-Za-z0-9._!%*+~-]+@[A-Za-z0-9.-]+ clrtxt:[A-Za-z0-9._!%*+~-]+ ; [A-Za-z0-9._!%*+~-]+$'; then
+  # jede weitere Zeile: <user>@<domain> md5:<HA1> ; <anmeldename> (sonst bricht Flexisip ab)
+  if tail -n +2 "$PASSWD_SRC" | grep -qvE '^[A-Za-z0-9._!%*+~-]+@[A-Za-z0-9.-]+ md5:[0-9a-f]{32} ; [A-Za-z0-9._!%*+~-]+$'; then
     echo "flexisip: $PASSWD_SRC hat ungueltige Zeilen - nicht uebernommen"
     return 0
   fi

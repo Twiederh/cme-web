@@ -119,7 +119,10 @@ pw = json.load(open(tempfile.gettempdir() + "/cme-web-demo-vm/config/cme-phoneap
 pf = [open(p + "/flexisip-passwd").read() for p in (d + "/push", P) if os.path.exists(p + "/flexisip-passwd")]
 check(len(pf) == 1, "flexisip-passwd geschrieben")
 lines = pf[0].splitlines()
-check(lines[0] == "version:1" and f"+4961874191283@cme.local clrtxt:{pw} ; MOBIphone" in lines
-      and f"+4961874191283@192.168.11.4 clrtxt:{pw} ; MOBIphone" in lines
-      and f"+4961874191283@192.168.1.110 clrtxt:{pw} ; MOBIphone" in lines, "Zeilen für SIP-Domain, CME-IP, Flexisip-IP")
+import hashlib
+ha1 = hashlib.md5(f"MOBIphone:cme.local:{pw}".encode()).hexdigest()    # HA1 mit dem Anmeldenamen der App
+check(lines[0] == "version:1" and f"+4961874191283@cme.local md5:{ha1} ; MOBIphone" in lines
+      and f"+4961874191283@192.168.11.4 md5:{ha1} ; MOBIphone" in lines
+      and f"+4961874191283@192.168.1.110 md5:{ha1} ; MOBIphone" in lines, "Zeilen für SIP-Domain, CME-IP, Flexisip-IP")
+check(pw not in pf[0], "kein Passwort im Klartext")
 print("ALLE PHONEAPP-TESTS OK")
