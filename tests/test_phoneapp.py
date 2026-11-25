@@ -97,4 +97,17 @@ jobs = [json.load(open(f)) for p in (d + "/push", tempfile.gettempdir() + "/cme-
         for f in glob.glob(p + "/outbox/*.json")]
 check(len(jobs) == 1 and jobs[0]["token"] == "ab" * 32 and jobs[0]["payload"]["aps"]["category"] == "HELD_CALL"
       and jobs[0]["payload"]["held"]["localTag"] == "5006ab", "Mitteilung „gehalten“ für den Relay")
+
+# Von der App gehaltenes Gespräch (iPhone -> Mac)
+held = {"ext": "+4961874191283", "device": "MOBIphone", "call_id": "ulKoXa7IXS", "local_tag": "rGLIVk9hD",
+        "remote_tag": "57D2090-914", "remote_uri": "sip:001796907106@192.168.11.4", "remote_name": "Thomas Handy"}
+check(c.post("/client/v1/held", json={**held, "held": True}, headers=H).get_json().get("ok"), "App meldet: gehalten")
+lst = c.get("/client/v1/held?ext=4961874191283", headers=H).get_json()["held"]
+check(len(lst) == 1 and lst[0]["local_tag"] == "rGLIVk9hD" and lst[0]["holder"] == "MOBIphone",
+      "Mac sieht das gehaltene Gespräch")
+check(c.get("/client/v1/held?ext=21", headers=H).get_json()["held"] == [], "andere Nummer: nichts")
+check(c.post("/client/v1/held", json={**held, "remote_uri": "sip:a b", "held": True}, headers=H).status_code == 400,
+      "ungültige Angaben -> 400")
+c.post("/client/v1/held", json={**held, "held": False}, headers=H)
+check(c.get("/client/v1/held?ext=+4961874191283", headers=H).get_json()["held"] == [], "fortgesetzt -> weg")
 print("ALLE PHONEAPP-TESTS OK")

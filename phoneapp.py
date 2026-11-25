@@ -13,6 +13,8 @@ Client-Schnittstelle fuer die Apps (/client/v1/..., Anmeldung mit "Authorization
                                          Aufzeichnung verfuegbar?) - die App braucht nur URL, Schluessel und Nebenstelle
   GET  /client/v1/calls?ext=21           laufende Gespraeche der Nebenstelle beim cme-recorder (extern, SIPREC)
   POST /client/v1/calls/<id>             {"ext": "21", "on": true|false}  Aufnahme ein/aus
+  POST /client/v1/held                   iPhone/iPad: eigenes Gespräch gehalten / fortgesetzt / beendet
+  GET  /client/v1/held?ext=21            Mac: von den Apps gehaltene Gespräche (zum Übernehmen per Replaces)
 """
 
 from __future__ import annotations
@@ -703,6 +705,49 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             payload = {"aps": {"content-available": 1}, "heldEnd": {"callId": call_id}}
             for t in targets:
                 queue_push(t["token"], t.get("env", "prod"), payload, "", alert=False)
+
+    # ---------------- Von den Apps gehaltene Gespräche (iPhone -> Mac) ----------------
+    # Ein Anruf vom iPhone über Flexisip gehört für CME zu keinem Pool der Shared Line (CME ordnet über die IP im
+    # Contact zu, die ist die des iPhones) - CME meldet ihn nicht per dialog-NOTIFY. Deshalb meldet die App ihr
+    # gehaltenes Gespräch selbst; der Mac fragt hier ab und übernimmt per INVITE/Replaces.
+
+    APP_HELD_TTL = 2 * 3600
+    app_held: dict[str, dict[str, dict]] = {}    # tail(Nummer) -> {call_id: {...}}
+    RE_SIP_TOKEN = re.compile(r"^[\w.!%*+~'`@:;=<>\"/?&$-]{1,200}$")
+
+    @app.post("/client/v1/held")
+    def client_held_set():
+        """{"ext": "+49…", "device": "MOBIphone", "call_id": …, "local_tag": <Tag der App>, "remote_tag": <Tag der CME>,
+        "remote_uri": "sip:0179…@192.168.11.4", "remote_name": "…", "held": true|false}"""
+        d = request.get_json(force=True) or {}
+        ext = ext_arg(d)
+        call_id = str(d.get("call_id", "")).strip()
+        if not RE_SIP_TOKEN.match(call_id):
+            raise AppError("Ungültige Call-ID.")
+        with lock:
+            calls = app_held.setdefault(tail(ext), {})
+            if d.get("held"):
+                fields = {k: str(d.get(k, "")).strip()[:200] for k in ("local_tag", "remote_tag", "remote_uri")}
+                if not all(RE_SIP_TOKEN.match(v) for v in fields.values()):
+                    raise AppError("Gespräch unvollständig.")
+                calls[call_id] = {"call_id": call_id, **fields, "remote_name": str(d.get("remote_name", ""))[:80],
+                                  "holder": str(d.get("device", ""))[:40] or "App", "time": time.time()}
+            else:
+                calls.pop(call_id, None)
+        print(f"Softphone: {'gehalten' if d.get('held') else 'nicht mehr gehalten'} auf "
+              f"{d.get('device') or 'App'} ({ext}) {call_id[:12]}", flush=True)
+        return jsonify(ok=True)
+
+    @app.get("/client/v1/held")
+    def client_held_list():
+        ext = ext_arg()
+        now = time.time()
+        with lock:
+            calls = app_held.get(tail(ext), {})
+            for k in [k for k, v in calls.items() if now - v["time"] > APP_HELD_TTL]:
+                calls.pop(k)
+            out = [{k: v for k, v in c.items() if k != "time"} for c in calls.values()]
+        return jsonify(ok=True, held=out)
 
     # fuer sharedline.py: Mobilgeraete-Pools anmelden, Passwoerter der Apps pruefen, gehaltene Gespräche melden
     app.config["PHONEAPP_MOBILE"] = {"prefix": MOBILE_PREFIX, "pools": app_pools, "credentials": device_credentials,

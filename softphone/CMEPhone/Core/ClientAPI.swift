@@ -114,6 +114,28 @@ enum ClientAPI {
                            as: ErrorResponse.self)
     }
 
+    /// Von einer App (iPhone/iPad) gehaltenes Gespräch – CME meldet es nicht auf der Shared Line, der Mac holt es
+    /// hier ab und übernimmt es per Replaces.
+    struct AppHeldCall: Decodable {
+        var callId: String, localTag: String, remoteTag: String, remoteURI: String, remoteName: String, holder: String
+        enum CodingKeys: String, CodingKey {
+            case callId = "call_id", localTag = "local_tag", remoteTag = "remote_tag", remoteURI = "remote_uri"
+            case remoteName = "remote_name", holder
+        }
+    }
+    private struct HeldResponse: Decodable { var held: [AppHeldCall] }
+
+    static func setHeld(ext: String, device: String, call: AppHeldCall, held: Bool) async throws {
+        _ = try await load(try request("/client/v1/held", method: "POST", body: [
+            "ext": ext, "device": device, "call_id": call.callId, "local_tag": call.localTag,
+            "remote_tag": call.remoteTag, "remote_uri": call.remoteURI, "remote_name": call.remoteName, "held": held,
+        ]), as: ErrorResponse.self)
+    }
+
+    static func appHeld(ext: String) async throws -> [AppHeldCall] {
+        try await load(try request("/client/v1/held", query: ["ext": ext]), as: HeldResponse.self).held
+    }
+
     static func setRecording(id: String, ext: String, on: Bool) async throws {
         _ = try await load(try request("/client/v1/calls/\(id)", method: "POST", body: ["ext": ext, "on": on]),
                            as: ErrorResponse.self)
