@@ -26,6 +26,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 - Watchtower ist für alle Stack-Dienste per Label `com.centurylinklabs.watchtower.enable=false` ausgeschlossen (inzwischen ganz gelöscht).
 - Portainer-GitOps für Stack `cmeconfig`: „Force redeployment“ muss aus sein. Sonst baut Portainer den Stack alle 5 min neu auf, Flexisip verliert jedes Mal alle Anmeldungen (iPhone: „io-Error“).
 - Die CME ist für `show`-Befehle per `ssh thomas@192.168.1.4` erreichbar.
+- Voicemail-Ansagen: deutscher 16-kHz-Satz von asterisksounds.org (2.11.19, CC BY-SA 3.0). `asterisk/Dockerfile` lädt ihn aus dem Internet Archive und prüft per SHA-256. Die alten GSM-Ansagen aus `asterisk-prompt-de` waren übersteuert und klangen mit G.722 nach periodischem Knacksen. Die Domain asterisksounds.org leitet inzwischen auf eine Casino-Seite um, also nicht von dort laden.
 - CPU-Vorrang in den Compose-Dateien: Asterisk und Recorder `cpu_shares: 4096`, Flexisip 2048, whisper 128 mit `cpus: 2`. Grund: whisper belegt beim Transkribieren alle 4 Kerne, die Ansagen stocken dann.
 
 **Kommunikation cme-web → push-relay:**
