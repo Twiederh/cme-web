@@ -284,6 +284,16 @@ final class SIPManager: ObservableObject {
                 params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
                     + ";+u.sip!model.ccm.cisco.com=\"503\""
             }
+            #if os(iOS)
+            // Über Flexisip: CME ordnet INVITEs dem Pool über den Gerätenamen im Contact zu. Ohne ihn gehört ein
+            // Anruf vom iPhone (auch das Übernehmen) zu keinem Pool der Shared Line – CME schickt dann keine
+            // dialog-NOTIFYs, und Halten am iPhone sehen die anderen Geräte nicht. Den Pool MOB<Nummer> meldet
+            // cme-web (sharedline.py) mit demselben Namen an.
+            if viaGateway {
+                params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.mobilePoolName)\""
+                    + ";+u.sip!model.ccm.cisco.com=\"503\""
+            }
+            #endif
 
             #if os(iOS)
             // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.

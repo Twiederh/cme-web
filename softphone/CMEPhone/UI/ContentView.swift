@@ -65,6 +65,8 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 Spacer()
+                // Build-Nummer, Git-Hash ("+" = mit uncommitteten Änderungen) und Bauzeit, z.B. für Tests
+                Text(BuildInfo.text).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
             }
             .padding(24)
             .toolbar {

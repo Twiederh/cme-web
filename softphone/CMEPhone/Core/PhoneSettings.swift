@@ -219,6 +219,9 @@ final class PhoneSettings: ObservableObject {
     /// Gerätename am Router (Pool "CME Phone" in cme-web: id device-id-name CSF<Nebenstelle>, wie Cisco Jabber).
     var deviceName: String { poolDeviceName.isEmpty ? "CSF" + extensionNumber.filter { $0.isNumber } : poolDeviceName }
 
+    /// Pool der Mobilgeräte am Router (cme-web, phoneapp.py: "MOB" + Nummer ohne "+"), z. B. MOB4961874191283.
+    var mobilePoolName: String { "MOB" + extensionNumber.filter { $0.isNumber } }
+
     var hasCmeWeb: Bool { !cmeWebURL.trimmingCharacters(in: .whitespaces).isEmpty && !appToken.isEmpty }
 
     #if os(iOS)
