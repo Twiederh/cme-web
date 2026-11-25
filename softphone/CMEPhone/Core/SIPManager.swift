@@ -473,7 +473,14 @@ final class SIPManager: ObservableObject {
     private func reportHeld(_ call: Call, held: Bool) {
         guard settings.useGateway, settings.hasCmeWeb, let callId = call.callLog?.callId,
               let remote = call.remoteAddress else { return }
-        let h = ClientAPI.AppHeldCall(callId: callId, localTag: call.localTag, remoteTag: call.remoteTag,
+        // CME liest "Replaces: …;to-tag=…;from-tag=…" wörtlich als Tag aus To bzw. From des Dialogs (nicht aus
+        // Sicht der CME wie in RFC 3891). takeOver() setzt to-tag=localTag, from-tag=remoteTag – das passt zu
+        // Gesprächen, die CME zum Gerät aufgebaut hat (To = Gerät). Hat das iPhone das Gespräch aufgebaut
+        // (Übernehmen, abgehender Anruf), steht es im From: Tags tauschen. Sonst findet CME den Dialog nicht und
+        // der Mac baut einen neuen Anruf auf.
+        let outgoing = call.dir == .Outgoing
+        let h = ClientAPI.AppHeldCall(callId: callId, localTag: outgoing ? call.remoteTag : call.localTag,
+                                      remoteTag: outgoing ? call.localTag : call.remoteTag,
                                       remoteURI: remote.asStringUriOnly(), remoteName: remote.displayName ?? "",
                                       holder: settings.deviceLabel)
         let ext = settings.extensionNumber, device = settings.deviceLabel
@@ -770,6 +777,10 @@ final class SIPManager: ObservableObject {
 
     /// Gespräche, die die App auf Halten gesetzt hat (Re-INVITE sendonly – liblinphone-Zustand bleibt StreamsRunning).
     private var heldCalls = Set<String>()
+    #if os(iOS)
+    /// Kürzlich beendete Anrufe (Call-ID -> Zeit): ein verspäteter VoIP-Push dafür darf nicht mehr klingeln.
+    private var recentlyEnded: [String: Date] = [:]
+    #endif
 
     /// Halten / Fortsetzen wie ein Cisco-Telefon: Re-INVITE mit a=sendonly bzw. a=sendrecv und dem Header
     /// "Call-Info: <urn:x-cisco-remotecc:hold|resume>". Nur daran erkennt CME ein auf der Shared Line gehaltenes
@@ -935,6 +946,17 @@ final class SIPManager: ObservableObject {
                                    handle: call.remoteAddress?.username ?? "Unbekannt",
                                    displayName: call.remoteAddress?.displayName,
                                    hasVideo: call.remoteParams?.videoEnabled ?? false)
+            #if os(iOS)
+            // VoIP-Push kommt erst, nachdem der Anruf schon beendet ist (z.B. am Mac angenommen, CANCEL kam per
+            // SIP schneller als der Push über APNs): liblinphone legt dann einen neuen Push-Anruf an und wartet
+            // vergeblich auf das INVITE – CallKit klingelt so lange weiter. Melden muss die App ihn trotzdem
+            // (PushKit-Pflicht), dann sofort beenden.
+            if state == .PushIncomingReceived, let ended = recentlyEnded[callId], Date().timeIntervalSince(ended) < 120 {
+                log("Push für bereits beendeten Anruf \(callId.prefix(8)) – beende sofort")
+                callKit.reportEnded(callId: callId, failed: false)
+                try? call.terminate()
+            }
+            #endif
         case .OutgoingProgress:
             callKit.reportOutgoingStarted(callId: callId, call: call)
         case .Connected:
@@ -945,6 +967,10 @@ final class SIPManager: ObservableObject {
             #if os(iOS)
             // gehalten beendet (z.B. am Mac übernommen): bei cme-web austragen
             if heldCalls.contains(callId) { reportHeld(call, held: false) }
+            if !callId.isEmpty {
+                recentlyEnded[callId] = Date()
+                recentlyEnded = recentlyEnded.filter { Date().timeIntervalSince($0.value) < 120 }
+            }
             #endif
         case .Released:
             callKit.forget(callId: callId)
