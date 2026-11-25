@@ -7,8 +7,11 @@ import UserNotifications
 /// "Übernehmen" startet über CallKit ein INVITE mit "Replaces" – CME verbindet den Anrufer mit dem iPhone.
 /// Wird das Gespräch dort fortgesetzt oder beendet, kommt ein stiller Push ("heldEnd") und die Mitteilung verschwindet.
 @MainActor
-final class HeldCallNotifications: NSObject {
+final class HeldCallNotifications: NSObject, ObservableObject {
     static let shared = HeldCallNotifications()
+    /// Gehaltene Gespräche anderer Geräte, zu denen eine Mitteilung vorliegt – die App zeigt sie mit „Übernehmen“
+    /// an (wie der Toast auf dem Mac)
+    @Published private(set) var held: [SIPManager.HeldLineCall] = []
     nonisolated static let category = "HELD_CALL"
     nonisolated static let takeOverAction = "TAKEOVER"
 
@@ -62,7 +65,36 @@ final class HeldCallNotifications: NSObject {
     func handleBackground(_ userInfo: [AnyHashable: Any]) -> Bool {
         guard let end = userInfo["heldEnd"] as? [String: Any], let callId = end["callId"] as? String else { return false }
         removeNotifications(callId: callId)
+        held.removeAll { $0.callId == callId }
         return true
+    }
+
+    /// Gehaltenes Gespräch übernehmen (aus der App oder der Mitteilung)
+    func takeOver(_ h: SIPManager.HeldLineCall) {
+        held.removeAll { $0.callId == h.callId }
+        removeNotifications(callId: h.callId)
+        SIPManager.shared.start()
+        CallKitProvider.shared.startTakeover(h)
+    }
+
+    /// In der App ausblenden (die Mitteilung verschwindet mit)
+    func dismiss(_ h: SIPManager.HeldLineCall) {
+        held.removeAll { $0.callId == h.callId }
+        removeNotifications(callId: h.callId)
+    }
+
+    /// Beim Öffnen der App: noch zugestellte Mitteilungen übernehmen
+    func reloadDelivered() {
+        UNUserNotificationCenter.current().getDeliveredNotifications { list in
+            let calls = list.filter { $0.request.content.categoryIdentifier == Self.category }
+                .compactMap { Self.held(from: $0.request.content.userInfo) }
+            Task { @MainActor in self.held = calls }
+        }
+    }
+
+    private func remember(_ h: SIPManager.HeldLineCall) {
+        held.removeAll { $0.callId == h.callId }
+        held.insert(h, at: 0)
     }
 
     private func removeNotifications(callId: String) {
@@ -88,6 +120,9 @@ extension HeldCallNotifications: UNUserNotificationCenterDelegate {
     /// Auch bei geöffneter App als Banner zeigen.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        if let h = Self.held(from: notification.request.content.userInfo) {
+            Task { @MainActor in HeldCallNotifications.shared.remember(h) }
+        }
         completionHandler([.banner, .sound, .list])
     }
 
@@ -98,10 +133,7 @@ extension HeldCallNotifications: UNUserNotificationCenterDelegate {
         let take = action == HeldCallNotifications.takeOverAction || action == UNNotificationDefaultActionIdentifier
         if content.categoryIdentifier == HeldCallNotifications.category, take,
            let h = Self.held(from: content.userInfo) {
-            Task { @MainActor in
-                SIPManager.shared.start()
-                CallKitProvider.shared.startTakeover(h)
-            }
+            Task { @MainActor in HeldCallNotifications.shared.takeOver(h) }
         }
         completionHandler()
     }

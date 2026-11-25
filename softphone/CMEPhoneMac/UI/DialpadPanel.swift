@@ -6,18 +6,10 @@ import AppKit
 struct DialpadView: View {
     @EnvironmentObject private var settings: PhoneSettings
     @EnvironmentObject private var history: CallHistory
-    @Environment(\.colorScheme) private var scheme
     @State private var number: String
     @FocusState private var focused: Bool
 
     init(initial: String = "") { _number = State(initialValue: initial) }
-
-    private static let keys: [(String, String)] = [
-        ("1", ""), ("2", "ABC"), ("3", "DEF"),
-        ("4", "GHI"), ("5", "JKL"), ("6", "MNO"),
-        ("7", "PQRS"), ("8", "TUV"), ("9", "WXYZ"),
-        ("*", ""), ("0", "+"), ("#", ""),
-    ]
 
     var body: some View {
         VStack(spacing: 14) {
@@ -42,13 +34,9 @@ struct DialpadView: View {
 
             Text(modeLabel).font(.caption).foregroundStyle(.secondary)
 
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(80), spacing: 12), count: 3), spacing: 12) {
-                ForEach(Self.keys, id: \.0) { key in
-                    PillKey(digit: key.0, letters: key.1, outlined: settings.dialpadOutlined, dark: scheme == .dark) {
-                        number.append(key.0)
-                    }
-                    .onLongPressGesture(minimumDuration: 0.5) { if key.0 == "0" { number.append("+") } }
-                }
+            // Langes Drücken der 0 gibt "+" (DialKeypad, gemeinsam mit iOS)
+            DialKeypad(shape: .pill, keySize: CGSize(width: 80, height: 50), outlined: settings.dialpadOutlined) {
+                number.append($0)
             }
 
             Button(action: call) {
@@ -87,47 +75,6 @@ struct DialpadView: View {
         URLRouter.dial(number)
         number = ""
         StatusBarController.shared.close()
-    }
-}
-
-private struct PillKey: View {
-    let digit: String
-    let letters: String
-    let outlined: Bool
-    let dark: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: -1) {
-                Text(digit).font(.system(size: digit == "*" ? 30 : 24, weight: .semibold))
-                    .offset(y: digit == "*" ? 5 : 0)
-                if !letters.isEmpty {
-                    Text(letters).font(.system(size: 7, weight: .semibold)).tracking(0.5)
-                }
-            }
-            .foregroundStyle(fg)
-            .frame(width: 80, height: 50)
-            .background(Capsule().fill(fill))
-            .overlay(Capsule().strokeBorder(outlined ? (dark ? Color.white.opacity(0.6) : Color.black.opacity(0.75)) : .clear,
-                                            lineWidth: 1.2))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(PressStyle())
-    }
-
-    private var fill: Color {
-        if outlined { return dark ? .black : .white }
-        return dark ? Color(white: 0.2) : Color(white: 0.76)
-    }
-    private var fg: Color { dark ? .white : .black }
-}
-
-private struct PressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .brightness(configuration.isPressed ? 0.12 : 0)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
     }
 }
 
