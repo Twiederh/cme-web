@@ -9,6 +9,7 @@ struct ContentView: View {
     @EnvironmentObject private var sip: SIPManager
     @EnvironmentObject private var settings: PhoneSettings
     @ObservedObject private var rec = RecordingController.shared
+    @ObservedObject private var media = MediaLibrary.shared
     @State private var showLog = false
 
     var body: some View {
@@ -39,10 +40,12 @@ struct ContentView: View {
                             RoundButton(symbol: rec.isOn ? "record.circle.fill" : "record.circle",
                                         color: rec.isOn ? .red : .gray, label: rec.isOn ? "Aufnahme läuft" : "Aufnehmen",
                                         enabled: rec.available && !rec.busy) { rec.toggle() }
-                            RoundButton(symbol: call.isPaused ? "play.fill" : "pause.fill",
-                                        color: call.isPaused ? .orange : .gray,
-                                        label: call.isPaused ? "Fortsetzen" : "Halten", enabled: true) {
-                                CallKitProvider.shared.requestHold(callId: call.id, held: !call.isPaused)
+                            if call.isEstablished {
+                                RoundButton(symbol: call.isPaused ? "play.fill" : "pause.fill",
+                                            color: call.isPaused ? .orange : .gray,
+                                            label: call.isPaused ? "Fortsetzen" : "Halten", enabled: true) {
+                                    CallKitProvider.shared.requestHold(callId: call.id, held: !call.isPaused)
+                                }
                             }
                             RoundButton(symbol: "phone.down.fill", color: .red, label: "Auflegen", enabled: true) {
                                 CallKitProvider.shared.requestEnd(callId: call.id)
@@ -57,6 +60,22 @@ struct ContentView: View {
                          + "Eingehende Anrufe klingeln wie normale Anrufe.")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
+
+                // Voicemail und Gesprächsaufnahmen der Nebenstelle (cme-web) und dieses Geräts
+                HStack(spacing: 12) {
+                    NavigationLink {
+                        MediaListView(source: .voicemail, onCall: call).navigationTitle("Voicemail")
+                    } label: {
+                        Label(media.newVoicemails > 0 ? "Voicemail (\(media.newVoicemails) neu)" : "Voicemail",
+                              systemImage: media.newVoicemails > 0 ? "recordingtape.circle.fill" : "recordingtape")
+                    }
+                    NavigationLink {
+                        MediaListView(source: .recordings, onCall: call).navigationTitle("Aufnahmen")
+                    } label: {
+                        Label("Aufnahmen", systemImage: "waveform")
+                    }
+                }
+                .buttonStyle(.bordered)
 
                 Button {
                     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -78,7 +97,14 @@ struct ContentView: View {
         }
         .onChange(of: sip.calls.first?.id) { _, id in
             if let id { rec.track(ext: settings.extensionNumber, localCallId: id) } else { rec.stop() }
+            // nach dem Gespräch: neue Voicemail oder Aufnahme
+            if id == nil { media.refresh(force: true) }
         }
+        .onAppear { media.refresh() }
+    }
+
+    private func call(_ number: String) {
+        CallKitProvider.shared.startOutgoing(number: number, video: false)
     }
 }
 

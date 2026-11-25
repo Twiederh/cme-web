@@ -111,6 +111,28 @@ check(c.post("/client/v1/held", json={**held, "remote_uri": "sip:a b", "held": T
 c.post("/client/v1/held", json={**held, "held": False}, headers=H)
 check(c.get("/client/v1/held?ext=+4961874191283", headers=H).get_json()["held"] == [], "fortgesetzt -> weg")
 
+# Voicemail in der App (Demo-Postfach 101) und Gesprächsaufnahmen der Nebenstelle
+vmj = c.get("/client/v1/voicemail?ext=101", headers=H).get_json()
+check(vmj["ok"] and vmj["box"] == "101" and len(vmj["messages"]) == 2 and vmj["messages"][0]["new"], "Voicemail-Liste der App")
+m0 = vmj["messages"][0]
+r = c.get(f"/client/v1/voicemail/101/{m0['folder']}/{m0['file']}/audio?ext=101", headers=H)
+check(r.status_code == 200 and r.data[:4] == b"RIFF", "Voicemail abspielen (WAV)")
+check(c.get(f"/client/v1/voicemail/101/{m0['folder']}/{m0['file']}/audio?ext=21", headers=H).status_code == 400,
+      "fremde Nebenstelle: kein Zugriff aufs Postfach")
+check(c.get("/client/v1/voicemail?ext=21", headers=H).get_json()["messages"] == [], "Nebenstelle ohne Postfach: leer")
+for p in [d+"/rec", tempfile.gettempdir() + "/cme-web-demo-rec"]:
+    json.dump({"start": time.time() - 60, "duration": 12, "direction": "in", "internal": "21", "external": "+4971112345678",
+               "file": "20261122-150000-abc123.mp3"}, open(p + "/20261122-150000-abc123.json", "w"))
+    open(p + "/20261122-150000-abc123.mp3", "wb").write(b"ID3fake")
+rl = c.get("/client/v1/recordings?ext=21", headers=H).get_json()
+check(rl["ok"] and [x["id"] for x in rl["recordings"]] == ["20261122-150000-abc123"], "Aufnahmen der Nebenstelle")
+check(c.get("/client/v1/recordings?ext=22", headers=H).get_json()["recordings"] == [], "fremde Nebenstelle: keine Aufnahmen")
+r = c.get("/client/v1/recordings/20261122-150000-abc123/audio?ext=21", headers=H)
+check(r.status_code == 200 and r.data == b"ID3fake" and r.mimetype == "audio/mpeg", "Aufnahme abspielen")
+check(c.delete("/client/v1/recordings/20261122-150000-abc123?ext=22", headers=H).status_code == 400, "fremde Nebenstelle darf nicht löschen")
+check(c.delete("/client/v1/recordings/20261122-150000-abc123?ext=21", headers=H).get_json()["ok"]
+      and c.get("/client/v1/recordings?ext=21", headers=H).get_json()["recordings"] == [], "Aufnahme gelöscht")
+
 # Passwortdatei für Flexisip (Digest der App-Anfragen): je Mobilgerät eine Zeile pro From-Domain
 os.environ.update(SIP_DOMAIN="cme.local", CME_HOST="192.168.11.4", VM_HOST_IP="192.168.1.110")
 r = c.post("/api/phoneapp/mobiles/MOBIphone/password", json={})

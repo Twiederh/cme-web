@@ -812,9 +812,20 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             return False
         return matches(m, nums)
 
+    def audio_path(rid: str) -> Path | None:
+        base = rec_file(rid)
+        return next((base.with_suffix(x) for x in (".mp3", ".wav") if base.with_suffix(x).exists()), None)
+
+    def delete_rec(rid: str) -> None:
+        base = rec_file(rid)
+        for x in (".mp3", ".wav", ".json", ".txt"):
+            base.with_suffix(x).unlink(missing_ok=True)
+
     app.config["RECORDING"] = {"enabled": lambda: bool(ctx["enabled"]), "list": user_recordings, "may": user_may,
-                               # fuer die Apps (phoneapp.py): laufende Gespraeche, Aufnahme ein/aus, Einstellungen
-                               "active": active_calls, "set": set_control, "settings": settings}
+                               # fuer die Apps (phoneapp.py): laufende Gespraeche, Aufnahme ein/aus, Einstellungen,
+                               # Aufnahmen anhoeren und loeschen
+                               "active": active_calls, "set": set_control, "settings": settings,
+                               "audio": audio_path, "delete": delete_rec}
 
     # Asterisk-Datei beim Start neu schreiben (z. B. nach einem Update)
     if ctx["enabled"]:

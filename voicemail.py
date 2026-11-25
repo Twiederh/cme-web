@@ -692,7 +692,9 @@ def register(app, router, apply, demo: bool) -> None:
 
     # fuer die Benutzerseite (portal.py)
     app.config["VOICEMAIL"] = {"settings": settings, "numbers": numbers, "mbid": mbid, "enabled": enabled,
-                               "messages": lambda box: named(list_messages(spool, box))}
+                               "messages": lambda box: named(list_messages(spool, box)),
+                               # fuer die Apps (phoneapp.py, /client/v1/voicemail): Datei, Loeschen, Verschieben
+                               "msg_path": msg_path, "msg_action": msg_action}
 
     # Fax-Empfang und Sprachmenues (vmapps.py) nutzen denselben Asterisk
     import vmapps

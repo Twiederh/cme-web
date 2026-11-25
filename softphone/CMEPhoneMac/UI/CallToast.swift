@@ -118,7 +118,9 @@ final class ToastController: ObservableObject {
 
     private static func isRinging(_ s: linphonesw.Call.State) -> Bool {
         switch s {
-        case .IncomingReceived, .PushIncomingReceived, .IncomingEarlyMedia,
+        // EarlyUpdating/EarlyUpdatedByRemote: CME schickt schon beim Klingeln ein UPDATE – der Anruf ist noch nicht
+        // angenommen (sonst zeigte der Toast "Halten" und eine laufende Gesprächsdauer, bevor jemand abgenommen hat)
+        case .Idle, .IncomingReceived, .PushIncomingReceived, .IncomingEarlyMedia, .EarlyUpdating, .EarlyUpdatedByRemote,
              .OutgoingInit, .OutgoingProgress, .OutgoingRinging, .OutgoingEarlyMedia: return true
         default: return false
         }

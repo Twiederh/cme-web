@@ -42,6 +42,14 @@ final class SIPManager: ObservableObject {
         var duration: Int
         /// Lokale Aufnahme läuft (nur Softphone, interne Gespräche)
         var isRecording: Bool
+        /// Angenommen (läuft, gehalten oder wird gerade geändert) – erst dann sind Halten usw. sinnvoll
+        var isEstablished: Bool {
+            switch state {
+            case .Connected, .StreamsRunning, .Pausing, .Paused, .PausedByRemote, .Resuming, .Updating, .UpdatedByRemote:
+                return true
+            default: return false
+            }
+        }
     }
 
     @Published private(set) var registration: RegistrationStatus = .none

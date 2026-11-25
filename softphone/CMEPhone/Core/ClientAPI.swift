@@ -136,6 +136,81 @@ enum ClientAPI {
         try await load(try request("/client/v1/held", query: ["ext": ext]), as: HeldResponse.self).held
     }
 
+    // MARK: Voicemail und Gesprächsaufnahmen (cme-web: Postfach bzw. Aufnahmen der Nebenstelle)
+
+    struct VoicemailMessage: Decodable {
+        var box: String, folder: String, file: String, time: Int, duration: Int
+        var caller: String, callerName: String, isNew: Bool
+        enum CodingKeys: String, CodingKey {
+            case box, folder, file, time, duration, caller, callerName = "caller_name", isNew = "new"
+        }
+    }
+    private struct VoicemailResponse: Decodable { var messages: [VoicemailMessage] }
+
+    struct ServerRecording: Decodable {
+        var id: String, start: Double, duration: Double, direction: String, external: String
+        var transcript: String, name: String
+        private struct Party: Decodable { var number: String?; var name: String? }
+        enum CodingKeys: String, CodingKey { case id, start, duration, direction, external, transcript, parties }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            start = (try? c.decode(Double.self, forKey: .start)) ?? 0
+            duration = (try? c.decode(Double.self, forKey: .duration)) ?? 0
+            direction = (try? c.decode(String.self, forKey: .direction)) ?? ""
+            external = (try? c.decode(String.self, forKey: .external)) ?? ""
+            transcript = (try? c.decode(String.self, forKey: .transcript)) ?? ""
+            let parties = (try? c.decode([Party].self, forKey: .parties)) ?? []
+            let ext = external
+            name = parties.first { $0.number == ext }?.name ?? ""
+        }
+    }
+    private struct RecordingsResponse: Decodable { var recordings: [ServerRecording] }
+
+    static func voicemail(ext: String) async throws -> [VoicemailMessage] {
+        try await load(try request("/client/v1/voicemail", query: ["ext": ext]), as: VoicemailResponse.self).messages
+    }
+
+    static func voicemailAudio(ext: String, _ m: VoicemailMessage) async throws -> Data {
+        try await raw(try request("/client/v1/voicemail/\(m.box)/\(m.folder)/\(m.file)/audio", query: ["ext": ext]))
+    }
+
+    static func setVoicemailHeard(ext: String, _ m: VoicemailMessage, heard: Bool) async throws {
+        _ = try await load(try request("/client/v1/voicemail/\(m.box)/\(m.folder)/\(m.file)", method: "POST",
+                                       body: ["ext": ext, "heard": heard]), as: ErrorResponse.self)
+    }
+
+    static func deleteVoicemail(ext: String, _ m: VoicemailMessage) async throws {
+        _ = try await load(try request("/client/v1/voicemail/\(m.box)/\(m.folder)/\(m.file)", query: ["ext": ext],
+                                       method: "DELETE"), as: ErrorResponse.self)
+    }
+
+    static func recordings(ext: String) async throws -> [ServerRecording] {
+        try await load(try request("/client/v1/recordings", query: ["ext": ext]), as: RecordingsResponse.self).recordings
+    }
+
+    static func recordingAudio(ext: String, id: String) async throws -> Data {
+        try await raw(try request("/client/v1/recordings/\(id)/audio", query: ["ext": ext]))
+    }
+
+    static func deleteRecording(ext: String, id: String) async throws {
+        _ = try await load(try request("/client/v1/recordings/\(id)", query: ["ext": ext], method: "DELETE"),
+                           as: ErrorResponse.self)
+    }
+
+    /// Audiodatei laden (längere Zeit als die übrigen Anfragen erlaubt)
+    private static func raw(_ req: URLRequest) async throws -> Data {
+        var r = req
+        r.timeoutInterval = 60
+        let (data, resp) = try await session.data(for: r)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            let msg = (try? JSONDecoder().decode(ErrorResponse.self, from: data))?.error ?? ""
+            throw APIError.http(code, msg)
+        }
+        return data
+    }
+
     static func setRecording(id: String, ext: String, on: Bool) async throws {
         _ = try await load(try request("/client/v1/calls/\(id)", method: "POST", body: ["ext": ext, "on": on]),
                            as: ErrorResponse.self)

@@ -15,6 +15,9 @@ Client-Schnittstelle fuer die Apps (/client/v1/..., Anmeldung mit "Authorization
   POST /client/v1/calls/<id>             {"ext": "21", "on": true|false}  Aufnahme ein/aus
   POST /client/v1/held                   iPhone/iPad: eigenes Gespräch gehalten / fortgesetzt / beendet
   GET  /client/v1/held?ext=21            Mac: von den Apps gehaltene Gespräche (zum Übernehmen per Replaces)
+  GET  /client/v1/voicemail?ext=21       Nachrichten im Postfach der Nebenstelle; .../<box>/<folder>/<file>/audio (WAV),
+                                         POST {"ext", "heard"} gehört/neu, DELETE löschen
+  GET  /client/v1/recordings?ext=21      Gesprächsaufnahmen der Nebenstelle; .../<id>/audio (MP3/WAV), DELETE löschen
 """
 
 from __future__ import annotations
@@ -686,6 +689,90 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         on = bool(d.get("on"))
         rec()["set"](rid, on)
         return jsonify(ok=True, on=on)
+
+    # ---------------- Voicemail und Gesprächsaufnahmen in den Apps ----------------
+    # Wie Visual Voicemail am 8845 (vvm.py) und die Benutzerseite (portal.py), aber mit dem App-Schlüssel: nur
+    # das Postfach bzw. die Aufnahmen der Nebenstelle der App.
+
+    RE_VM_FOLDER = re.compile(r"^(INBOX|Old)$")
+    RE_VM_FILE = re.compile(r"^msg\d{4}$")
+
+    def vm() -> dict:
+        v = app.config.get("VOICEMAIL") or {}
+        return v if v.get("enabled") and "msg_path" in v else {}    # enabled ist hier ein Wert (voicemail.py)
+
+    def my_box(ext: str) -> str:
+        """Postfach (mbid) der Nebenstelle oder "" """
+        v = vm()
+        if not v:
+            return ""
+        box = next((n for n in v["settings"]()["mailboxes"] if tail(n) == tail(ext)), None)
+        return v["mbid"](box) if box else ""
+
+    def vm_check(ext: str, box: str, folder: str, file: str) -> dict:
+        if not (box and box == my_box(ext) and RE_VM_FOLDER.match(folder) and RE_VM_FILE.match(file)):
+            raise AppError("Nachricht nicht gefunden.")
+        return vm()
+
+    @app.get("/client/v1/voicemail")
+    def client_voicemail():
+        ext = ext_arg()
+        box = my_box(ext)
+        msgs = vm()["messages"](box) if box else []
+        return jsonify(ok=True, box=box, messages=[{**m, "box": box, "new": m["folder"] == "INBOX"} for m in msgs])
+
+    @app.get("/client/v1/voicemail/<box>/<folder>/<file>/audio")
+    def client_voicemail_audio(box, folder, file):
+        p = vm_check(ext_arg(), box, folder, file)["msg_path"](box, folder, file).with_suffix(".wav")
+        if not p.exists():
+            return jsonify(ok=False, error="Aufnahme nicht gefunden"), 404
+        return send_file(p, mimetype="audio/wav", max_age=0, conditional=True)
+
+    @app.post("/client/v1/voicemail/<box>/<folder>/<file>")
+    def client_voicemail_set(box, folder, file):
+        """{"ext": …, "heard": true|false} – gehört (Old) bzw. neu (INBOX)"""
+        d = request.get_json(force=True) or {}
+        v = vm_check(ext_arg(d), box, folder, file)
+        to = "Old" if d.get("heard") else "INBOX"
+        if to != folder:
+            v["msg_action"](box, folder, file, {"Action": "VoicemailMove", "ToFolder": to})
+        return jsonify(ok=True)
+
+    @app.delete("/client/v1/voicemail/<box>/<folder>/<file>")
+    def client_voicemail_delete(box, folder, file):
+        vm_check(ext_arg(), box, folder, file)["msg_action"](box, folder, file, {"Action": "VoicemailRemove"})
+        return jsonify(ok=True)
+
+    def rec_files() -> dict:
+        r = app.config.get("RECORDING") or {}
+        try:
+            return r if r and r["enabled"]() and "audio" in r else {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def rec_check(ext: str, rid: str) -> dict:
+        r = rec_files()
+        if not (r and RE_REC_ID.match(rid) and r["may"](rid, [ext])):
+            raise AppError("Aufnahme nicht gefunden.")
+        return r
+
+    @app.get("/client/v1/recordings")
+    def client_recordings():
+        ext = ext_arg()
+        r = rec_files()
+        return jsonify(ok=True, enabled=bool(r), recordings=r["list"]([ext]) if r else [])
+
+    @app.get("/client/v1/recordings/<rid>/audio")
+    def client_recording_audio(rid):
+        p = rec_check(ext_arg(), rid)["audio"](rid)
+        if not p:
+            return jsonify(ok=False, error="Aufnahme nicht gefunden"), 404
+        return send_file(p, mimetype="audio/mpeg" if p.suffix == ".mp3" else "audio/wav", max_age=0, conditional=True)
+
+    @app.delete("/client/v1/recordings/<rid>")
+    def client_recording_delete(rid):
+        rec_check(ext_arg(), rid)["delete"](rid)
+        return jsonify(ok=True)
 
     # ---------------- Mitteilungen an die Mobilgeräte (gehaltene Gespräche) ----------------
 

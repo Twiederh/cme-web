@@ -81,7 +81,10 @@ struct MenuPanel: View {
     @EnvironmentObject private var settings: PhoneSettings
     @EnvironmentObject private var desk: DeskPhoneController
     @EnvironmentObject private var history: CallHistory
+    @ObservedObject private var media = MediaLibrary.shared
     @State private var showLog = false
+    /// unterer Bereich: Anrufliste, Voicemail oder Aufnahmen (cme-web)
+    @AppStorage("menuPanelList") private var list = "history"
 
     var body: some View {
         VStack(spacing: 10) {
@@ -113,14 +116,24 @@ struct MenuPanel: View {
 
             Divider()
 
-            // Anrufliste
-            HStack {
-                Text("Anrufliste").font(.headline)
-                Spacer()
+            Picker("", selection: $list) {
+                Text("Anrufe").tag("history")
+                Text(media.newVoicemails > 0 ? "Voicemail (\(media.newVoicemails))" : "Voicemail").tag("voicemail")
+                Text("Aufnahmen").tag("recordings")
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             .padding(.horizontal, 14)
+            .onAppear { media.refresh() }
 
-            if history.entries.isEmpty {
+            if list != "history" {
+                MediaListView(source: list == "voicemail" ? .voicemail : .recordings) { number in
+                    StatusBarController.shared.close()
+                    URLRouter.dial(number)
+                }
+                .frame(height: 220)
+                .padding(.bottom, 8)
+            } else if history.entries.isEmpty {
                 Text("Keine Anrufe").font(.callout).foregroundStyle(.secondary).padding(.bottom, 12)
             } else {
                 ScrollView {
