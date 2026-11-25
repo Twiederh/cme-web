@@ -428,6 +428,12 @@ final class SIPManager: ObservableObject {
             params.mediaEncryption = settings.mediaEncryption == .srtp ? .SRTP : .None
             params.addCustomHeader(headerName: "Replaces",
                                    headerValue: "\(h.callId);to-tag=\(h.localTag);from-tag=\(h.remoteTag)")
+            // Über Flexisip (iPhone/iPad): From mit der CME-IP wie beim Mac und den Cisco-Telefonen. Mit der
+            // SIP-Domain (cme.local) ordnet CME das Gespräch keinem Pool der Shared Line zu – Halten am iPhone
+            // sähen die anderen Geräte dann nicht.
+            if !settings.jabberMode, !settings.cmeIP.isEmpty {
+                params.fromHeader = "<sip:\(settings.extensionNumber)@\(settings.cmeIP)>"
+            }
             params.recordFile = Self.recordingPath(remote: addr.username ?? "unbekannt")
             #if os(iOS)
             core.configureAudioSession()
