@@ -99,6 +99,8 @@ services:
       # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
       - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-voicemail
+    # Audio in Echtzeit (Ansagen, Voicemail, Konferenz): bei knapper CPU zuerst bedienen
+    cpu_shares: 4096
     restart: unless-stopped
     ulimits:
       nofile:
@@ -131,6 +133,8 @@ services:
       # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
       - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-recorder
+    # Gespraechsaufzeichnung (RTP in Echtzeit): bei knapper CPU zuerst bedienen
+    cpu_shares: 4096
     restart: unless-stopped
     environment:
       HOST_IP: ${VM_HOST_IP:-}
@@ -157,6 +161,10 @@ services:
       # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
       - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-whisper
+    # Abschrift ist nicht eilig: niedrige Prioritaet und hoechstens 2 der 4 Kerne, damit Asterisk und der
+    # Recorder beim Transkribieren nicht ins Stocken geraten
+    cpu_shares: 128
+    cpus: "2.0"
     restart: unless-stopped
     environment:
       ASR_ENGINE: faster_whisper
@@ -175,6 +183,8 @@ services:
       # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
       - "com.centurylinklabs.watchtower.enable=false"
     container_name: cme-flexisip
+    # SIP-Signalisierung der Apps: vor den uebrigen Diensten, hinter Asterisk/Recorder
+    cpu_shares: 2048
     network_mode: host
     restart: unless-stopped
     environment:
