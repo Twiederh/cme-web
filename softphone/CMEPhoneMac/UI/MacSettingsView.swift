@@ -154,6 +154,7 @@ private struct MediaTab: View {
     @EnvironmentObject private var settings: PhoneSettings
     @EnvironmentObject private var sip: SIPManager
     @State private var devices: [(id: String, name: String, record: Bool, play: Bool)] = []
+    @State private var cameras: [String] = []
 
     var body: some View {
         Form {
@@ -170,8 +171,16 @@ private struct MediaTab: View {
             } header: { Text("Audiogeräte") } footer: {
                 Text("Die Auswahl gilt sofort und bleibt gespeichert. Klingelton und Gespräch laufen über das gewählte Ausgabegerät.")
             }
-            Section("Video") {
-                Toggle("Video (Kamera und Bild im Call-Toast)", isOn: $settings.videoEnabled)
+            Section {
+                Toggle("Video", isOn: $settings.videoEnabled)
+                Picker("Kamera", selection: $settings.videoDeviceId) {
+                    Text("Standard").tag("")
+                    ForEach(cameras, id: \.self) { Text(Self.cameraName($0)).tag($0) }
+                }
+                .disabled(!settings.videoEnabled)
+            } header: { Text("Video") } footer: {
+                Text("Das Bild erscheint in einem eigenen Fenster: verschieben am Bild, Größe an den Rändern ändern. "
+                     + "Position und Größe bleiben für das nächste Gespräch gespeichert.")
             }
             Section("Audio-Codecs (ziehen = Priorität)") {
                 List {
@@ -187,6 +196,7 @@ private struct MediaTab: View {
         .onChange(of: settings.audioInputId) { _, _ in sip.applySavedAudioDevices() }
         .onChange(of: settings.audioOutputId) { _, _ in sip.applySavedAudioDevices() }
         .onChange(of: settings.videoEnabled) { _, _ in sip.applyMediaSettings() }
+        .onChange(of: settings.videoDeviceId) { _, _ in sip.applySavedVideoDevice() }
     }
 
     /// "Studio Display Microphone (AppleUSBAudioEngine:…)" -> "Studio Display Microphone",
@@ -209,6 +219,13 @@ private struct MediaTab: View {
             return (d.id, Self.cleanName(d.deviceName), d.hasCapability(capability: .CapabilityRecord),
                     d.hasCapability(capability: .CapabilityPlay))
         }
+        cameras = sip.videoDevices
+    }
+
+    /// "AVFoundation: FaceTime HD-Kamera" -> "FaceTime HD-Kamera"
+    static func cameraName(_ id: String) -> String {
+        guard let r = id.range(of: ": ") else { return id }
+        return String(id[r.upperBound...])
     }
 }
 

@@ -34,7 +34,13 @@ final class ToastController: ObservableObject {
         }
     }
 
-    @Published private(set) var toast: Toast?
+    @Published private(set) var toast: Toast? {
+        didSet {
+            // Videobild im eigenen Fenster (VideoWindow.swift), solange das Softphone-Gespräch Video hat
+            if let t = toast, t.video, case .softphone(let id) = t.source { VideoWindowController.shared.show(callId: id) }
+            else if oldValue?.video == true { VideoWindowController.shared.hide() }
+        }
+    }
     @Published private(set) var contact: ContactLookup.Match?
     @Published var dismissed = Set<String>()
 
@@ -161,7 +167,6 @@ final class ToastController: ObservableObject {
 
     static let width: CGFloat = 380
     static let toastHeight: CGFloat = 84
-    static let videoHeight: CGFloat = 214      // 380 × 214 ≈ 16:9
 
     private func presentPanel() {
         if panel == nil {
@@ -183,7 +188,7 @@ final class ToastController: ObservableObject {
             panel = p
         }
         guard let panel, let screen = NSScreen.main else { return }
-        let height = Self.toastHeight + (toast?.video == true ? Self.videoHeight + 8 : 0)
+        let height = Self.toastHeight
         if !panel.isVisible {
             let f = screen.visibleFrame
             panel.setFrame(NSRect(x: f.maxX - Self.width - 16, y: f.minY + 16, width: Self.width, height: height), display: true)
@@ -285,7 +290,6 @@ struct CallToastView: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             if let t = model.toast {
               VStack(spacing: 8) {
-                if t.video { VideoAttachment() }
                 HStack(spacing: 12) {
                     Avatar(image: model.contact?.image, name: title(t))
                     VStack(alignment: .leading, spacing: 2) {
@@ -392,26 +396,8 @@ struct CallToastView: View {
     }
 }
 
-/// Videobild über dem Toast: Gegenstelle groß, eigene Kamera klein unten rechts.
-private struct VideoAttachment: View {
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            NativeVideoView(role: .remote)
-            NativeVideoView(role: .preview)
-                .frame(width: 96, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.3)))
-                .padding(8)
-        }
-        .frame(width: ToastController.width, height: ToastController.videoHeight)
-        .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.12)))
-    }
-}
-
-/// NSView, in die liblinphone das Video zeichnet (SIPManager.setVideoViews).
-private struct NativeVideoView: NSViewRepresentable {
+/// Natives Videobild (liblinphone zeichnet in die NSView): Gegenstelle oder eigene Kamera
+struct NativeVideoView: NSViewRepresentable {
     enum Role { case remote, preview }
     let role: Role
 

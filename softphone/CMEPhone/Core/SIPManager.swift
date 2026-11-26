@@ -809,6 +809,20 @@ final class SIPManager: ObservableObject {
         if let o = devs.first(where: { $0.id == settings.audioOutputId && $0.hasCapability(capability: .CapabilityPlay) }) {
             core.defaultOutputAudioDevice = o; core.outputAudioDevice = o
         }
+        applySavedVideoDevice()
+    }
+
+    /// Kameras (ohne liblinphones Standbild-Quelle), z.B. "AVFoundation: FaceTime HD-Kamera"
+    var videoDevices: [String] {
+        core?.reloadVideoDevices()
+        return (core?.videoDevicesList ?? []).filter { !$0.hasPrefix("StaticImage") }
+    }
+
+    /// Gespeicherte Kamera setzen (gilt auch im laufenden Gespräch); leer = Standard von liblinphone
+    func applySavedVideoDevice() {
+        guard let core, !settings.videoDeviceId.isEmpty, videoDevices.contains(settings.videoDeviceId),
+              core.videoDevice != settings.videoDeviceId else { return }
+        do { try core.setVideodevice(newValue: settings.videoDeviceId) } catch { log("Kamera: \(error)") }
     }
 
     func selectAudio(input: AudioDevice?, output: AudioDevice?) {

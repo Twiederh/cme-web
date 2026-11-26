@@ -145,6 +145,8 @@ final class PhoneSettings: ObservableObject {
     @Published var dialpadOutlined: Bool { didSet { save() } }
     /// Gewählte Audiogeräte (Mac), leer = Systemstandard
     @Published var audioInputId: String { didSet { save() } }
+    /// Kamera (liblinphone-Gerätename, z.B. "AVFoundation: FaceTime HD-Kamera"); leer = Standard
+    @Published var videoDeviceId: String { didSet { save() } }
     @Published var audioOutputId: String { didSet { save() } }
 
     static let defaultAudio: [CodecEntry] = [
@@ -208,6 +210,7 @@ final class PhoneSettings: ObservableObject {
         ciscoLineMode = d.object(forKey: "ciscoLineMode") as? Bool ?? true
         dialpadOutlined = d.object(forKey: "dialpadOutlined") as? Bool ?? false
         audioInputId = d.string(forKey: "audioInputId") ?? ""
+        videoDeviceId = d.string(forKey: "videoDeviceId") ?? ""
         audioOutputId = d.string(forKey: "audioOutputId") ?? ""
         loading = false
         #if os(iOS)
@@ -385,6 +388,7 @@ final class PhoneSettings: ObservableObject {
         d.set(ciscoLineMode, forKey: "ciscoLineMode")
         d.set(dialpadOutlined, forKey: "dialpadOutlined")
         d.set(audioInputId, forKey: "audioInputId")
+        d.set(videoDeviceId, forKey: "videoDeviceId")
         d.set(audioOutputId, forKey: "audioOutputId")
         #if os(iOS)
         // Codec-Schalter der Einstellungen-App mitführen
