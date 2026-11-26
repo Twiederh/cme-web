@@ -37,6 +37,8 @@ transports=sip:${HOST_IP}:${SIP_PORT};transport=tcp sip:${HOST_IP}:${SIP_PORT};t
 # Keepalive für TCP-Verbindungen der Telefone
 keepalive-interval=30
 idle-timeout=3600
+# Proxy und B2BUA in einem Prozess (der B2BUA ist mit liblinphone gebaut, siehe Dockerfile)
+default-servers=proxy b2bua
 
 [stun-server]
 # Eingebauter STUN-Server (UDP 3478) wird nicht gebraucht – RTP läuft direkt im LAN/VPN.
@@ -53,7 +55,8 @@ enabled=false
 # /run (Flexisip bricht ab, wenn die Datei fehlt oder nicht lesbar ist).
 enabled=true
 filter=is_request && request.method != 'REGISTER'
-trusted-hosts=${CME_IP} 127.0.0.1
+# ${HOST_IP}: der B2BUA (gleicher Rechner) schickt seine Seite zur CME über den Proxy
+trusted-hosts=${CME_IP} 127.0.0.1 ${HOST_IP}
 # From-Domain der Apps: SIP-Domain, CME-IP (Übernehmen) oder Flexisip-IP (eingehend) – Realm immer die SIP-Domain
 auth-domains=*
 realm=${SIP_DOMAIN}
@@ -69,6 +72,8 @@ auth-domains-mode=static
 
 [module::NatHelper]
 enabled=true
+# Den Contact des B2BUA nicht anfassen: CME ordnet über ihn (IP:Port) den Pool MOB<Nummer> zu
+filter=!(user-agent contains 'Flexisip-B2BUA')
 
 [module::ContactRouteInserter]
 enabled=true
@@ -129,3 +134,31 @@ enabled=false
 enabled=true
 # REGISTER und Anrufe der Apps (Domain ${SIP_DOMAIN}) per Route an CME – entrypoint.sh schreibt die Datei.
 routes-config-path=/run/flexisip-routes.conf
+
+## ---------------- B2BUA zwischen Apps und CME ----------------
+## CME ordnet Anrufe über die IP:Port im Contact einem Pool zu. Über den reinen Proxy ist das die Adresse des
+## iPhones - CME kennt sie nicht, das Gespräch gehört zu keinem Pool und nicht zur Shared Line (Halten unsichtbar,
+## Übernehmen per Replaces lehnt CME ab bzw. leitet um). Der B2BUA führt jedes Gespräch der Apps als eigenes
+## Gespräch mit CME, mit seiner Adresse im Contact. cme-web meldet den Pool MOB<Nummer> mit genau dieser Adresse an.
+##   App -> CME:  App -INVITE-> Proxy -(module::B2bua)-> B2BUA -> Proxy -> CME
+##   CME -> App:  CME -INVITE-> B2BUA (Contact des Pools) -> Proxy -> Push/Router -> Apps
+## Die Sprache läuft über den B2BUA (RTP-Ports B2BUA_RTP_PORTS auf dem Docker-Host).
+
+[module::B2bua]
+enabled=true
+b2bua-server=sip:${HOST_IP}:${B2BUA_PORT};transport=udp
+# nur Anrufe der Apps Richtung CME (Anrufe an die Apps schickt CME direkt an den B2BUA; dessen eigene
+# Anfragen erkennt das Modul am User-Agent)
+filter=is_request && request.method == 'INVITE' && request.uri.domain != '${HOST_IP}'
+
+[b2bua-server]
+application=trenscrypter
+# UDP: CME schickt an den Contact per UDP, und der Proxy sieht dieselbe Absenderadresse (kein NAT-Umschreiben)
+transport=sip:${HOST_IP}:${B2BUA_PORT};transport=udp
+outbound-proxy=sip:${HOST_IP}:${SIP_PORT};transport=udp
+audio-port=${B2BUA_RTP_PORTS}
+video-port=${B2BUA_VIDEO_PORTS}
+# alles im LAN/VPN: kein ICE (sonst stehen fremde Kandidaten im SDP für CME)
+enable-ice=false
+# Lässt sich nicht abschalten. Beim Halten kommt keine Sprache - 30 s (Standard) würden gehaltene Gespräche beenden.
+no-rtp-timeout=21600

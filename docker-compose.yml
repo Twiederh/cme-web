@@ -53,6 +53,8 @@ services:
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_GW_PORT: ${SIP_GW_PORT:-5062}
+      # B2BUA in Flexisip: Ziel des Pools MOB<Nummer> bei CME (sharedline.py)
+      B2BUA_PORT: ${B2BUA_PORT:-5064}
       RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5072}
       APNS_TEAM_ID: ${APNS_TEAM_ID:-}
       APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-de.wiederhol.cmephone}
@@ -165,6 +167,9 @@ services:
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_PORT: ${SIP_GW_PORT:-5062}
+      # B2BUA zwischen Apps und CME (UDP, Host-Netz) und seine RTP-Ports
+      B2BUA_PORT: ${B2BUA_PORT:-5064}
+      B2BUA_RTP_PORTS: ${B2BUA_RTP_PORTS:-40000-40199}
       RELAY_PORT: ${RELAY_HTTP_PORT:-8092}
       # cme-web prueft die Anmeldungen der Apps (sharedline.py)
       SHARED_LINE_PORT: ${SHARED_LINE_PORT:-5074}

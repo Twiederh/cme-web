@@ -7,6 +7,10 @@ CME_PORT="${CME_PORT:-5060}"
 SIP_DOMAIN="${SIP_DOMAIN:-cme.local}"
 SIP_GW_NAME="${SIP_GW_NAME:-}"
 SIP_PORT="${SIP_PORT:-5062}"
+# B2BUA zwischen Apps und CME: SIP-Port (UDP, Contact des Pools MOB<Nummer>) und RTP-Ports
+B2BUA_PORT="${B2BUA_PORT:-5064}"
+B2BUA_RTP_PORTS="${B2BUA_RTP_PORTS:-40000-40199}"
+B2BUA_VIDEO_PORTS="${B2BUA_VIDEO_PORTS:-40200-40299}"
 RELAY_PORT="${RELAY_PORT:-8092}"
 # cme-web (sharedline.py): prueft die Anmeldungen der Apps und bestaetigt Anfragen der CME an Flexisip
 SHARED_LINE_PORT="${SHARED_LINE_PORT:-5074}"
@@ -19,7 +23,8 @@ src=/usr/local/share/flexisip/flexisip.conf.template
 [ -f /etc/flexisip/flexisip.local.conf ] && src=/etc/flexisip/flexisip.local.conf
 # Nur die eigenen Platzhalter ersetzen ($type, $token ... in external-push-uri gehören Flexisip)
 sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${CME_IP}|${CME_IP}|g" -e "s|\${SIP_GW_NAME}|${SIP_GW_NAME}|g" \
-    -e "s|\${SIP_PORT}|${SIP_PORT}|g" -e "s|\${RELAY_PORT}|${RELAY_PORT}|g" -e "s|\${LOG_LEVEL}|${LOG_LEVEL}|g" -e "s|\${SIP_DOMAIN}|${SIP_DOMAIN}|g" \
+    -e "s|\${SIP_PORT}|${SIP_PORT}|g" -e "s|\${B2BUA_PORT}|${B2BUA_PORT}|g" \
+    -e "s|\${B2BUA_RTP_PORTS}|${B2BUA_RTP_PORTS}|g" -e "s|\${B2BUA_VIDEO_PORTS}|${B2BUA_VIDEO_PORTS}|g" -e "s|\${RELAY_PORT}|${RELAY_PORT}|g" -e "s|\${LOG_LEVEL}|${LOG_LEVEL}|g" -e "s|\${SIP_DOMAIN}|${SIP_DOMAIN}|g" \
     "$src" > /run/flexisip.conf
 # Routen (die erste passende gilt):
 #  * REGISTER der Apps -> cme-web: prueft das Passwort des Mobilgeraete-Pools; Flexisip ist Registrar fuer
@@ -53,4 +58,5 @@ sync_passwd() {
 }
 sync_passwd
 ( while sleep 20; do sync_passwd; done ) &
-exec flexisip --server proxy -c /run/flexisip.conf "$@"
+# Proxy und B2BUA: default-servers in der Konfiguration
+exec flexisip -c /run/flexisip.conf "$@"

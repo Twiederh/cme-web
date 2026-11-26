@@ -186,9 +186,6 @@ final class SIPManager: ObservableObject {
         }
         if settings.jabberMode { d.set(true, forKey: Self.runningKey) }
         applyAccount()
-        #if os(macOS)
-        startAppHeldPolling()
-        #endif
     }
 
     // MARK: - Konto
@@ -390,7 +387,6 @@ final class SIPManager: ObservableObject {
         let remoteURI: String    // Gegenstelle, z.B. sip:0179…@192.168.11.4
         let remoteName: String
         let holder: String       // Gerät, das hält (entity, z.B. sip:+49…@192.168.11.46)
-        var viaApp = false       // von der App über cme-web gemeldet (iPhone/iPad), nicht per dialog-NOTIFY
     }
     @Published private(set) var heldOnLine: [HeldLineCall] = []
 
@@ -471,63 +467,6 @@ final class SIPManager: ObservableObject {
             return nil
         }
     }
-
-    // MARK: - Gehaltene Gespräche zwischen den Apps (über cme-web)
-
-    // Ein Gespräch des iPhones über Flexisip ordnet CME keinem Pool der Shared Line zu (Zuordnung über die IP im
-    // Contact, das ist die des iPhones, angemeldet ist Flexisip). Halten am iPhone sieht deshalb kein anderes
-    // Gerät. Die App meldet ihr gehaltenes Gespräch selbst an cme-web; der Mac fragt dort ab und übernimmt per
-    // INVITE/Replaces wie bei der Shared Line.
-
-    #if os(iOS)
-    /// Gehalten, fortgesetzt oder beendet an cme-web melden (nur über das Push-Gateway, also iPhone/iPad).
-    private func reportHeld(_ call: Call, held: Bool) {
-        guard settings.useGateway, settings.hasCmeWeb, let callId = call.callLog?.callId,
-              let remote = call.remoteAddress else { return }
-        // CME liest "Replaces: …;to-tag=…;from-tag=…" wörtlich als Tag aus To bzw. From des Dialogs (nicht aus
-        // Sicht der CME wie in RFC 3891). takeOver() setzt to-tag=localTag, from-tag=remoteTag – das passt zu
-        // Gesprächen, die CME zum Gerät aufgebaut hat (To = Gerät). Hat das iPhone das Gespräch aufgebaut
-        // (Übernehmen, abgehender Anruf), steht es im From: Tags tauschen. Sonst findet CME den Dialog nicht und
-        // der Mac baut einen neuen Anruf auf.
-        let outgoing = call.dir == .Outgoing
-        let h = ClientAPI.AppHeldCall(callId: callId, localTag: outgoing ? call.remoteTag : call.localTag,
-                                      remoteTag: outgoing ? call.localTag : call.remoteTag,
-                                      remoteURI: remote.asStringUriOnly(), remoteName: remote.displayName ?? "",
-                                      holder: settings.deviceLabel)
-        let ext = settings.extensionNumber, device = settings.deviceLabel
-        Task { @MainActor in
-            do { try await ClientAPI.setHeld(ext: ext, device: device, call: h, held: held) }
-            catch { self.log("cme-web (gehalten melden): \(error)") }
-        }
-    }
-    #endif
-
-    #if os(macOS)
-    private var appHeldTimer: Timer?
-
-    /// Alle 3 s bei cme-web nachsehen, ob ein iPhone/iPad ein Gespräch hält.
-    private func startAppHeldPolling() {
-        guard appHeldTimer == nil else { return }
-        appHeldTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.pollAppHeld() }
-        }
-    }
-
-    private func pollAppHeld() async {
-        guard settings.hasCmeWeb, !settings.extensionNumber.isEmpty,
-              let list = try? await ClientAPI.appHeld(ext: settings.extensionNumber) else { return }
-        let ownIds = Set(core?.calls.compactMap { $0.callLog?.callId } ?? [])
-        let fromApps = list.filter { !ownIds.contains($0.callId) }.map {
-            HeldLineCall(callId: $0.callId, localTag: $0.localTag, remoteTag: $0.remoteTag, remoteURI: $0.remoteURI,
-                         remoteName: $0.remoteName, holder: $0.holder, viaApp: true)
-        }
-        let merged = heldOnLine.filter { !$0.viaApp } + fromApps.filter { a in !heldOnLine.contains { !$0.viaApp && $0.callId == a.callId } }
-        if merged != heldOnLine {
-            heldOnLine = merged
-            log("Gehalten in der App: \(fromApps.map { "\($0.remoteURI) (\($0.holder))" }.joined(separator: ", "))")
-        }
-    }
-    #endif
 
     // MARK: - Cisco-Leitungsmodus (experimentell)
 
@@ -830,9 +769,6 @@ final class SIPManager: ObservableObject {
                               headerValue: held ? "<urn:x-cisco-remotecc:hold>" : "<urn:x-cisco-remotecc:resume>")
             try call.update(params: p)
             if held { heldCalls.insert(callId) } else { heldCalls.remove(callId) }
-            #if os(iOS)
-            reportHeld(call, held: held)
-            #endif
             log(held ? "Gespräch gehalten" : "Gespräch fortgesetzt")
             refreshCalls()
         } catch { log("Halten: \(error)") }
@@ -1001,8 +937,6 @@ final class SIPManager: ObservableObject {
         case .End, .Error:
             callKit.reportEnded(callId: callId, failed: state == .Error)
             #if os(iOS)
-            // gehalten beendet (z.B. am Mac übernommen): bei cme-web austragen
-            if heldCalls.contains(callId) { reportHeld(call, held: false) }
             if !callId.isEmpty {
                 recentlyEnded[callId] = Date()
                 recentlyEnded = recentlyEnded.filter { Date().timeIntervalSince($0.value) < 120 }

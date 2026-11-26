@@ -515,8 +515,11 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:
     cme = os.environ.get("CME_HOST", "").strip()
     host = os.environ.get("SHARED_LINE_HOST", "").strip() or os.environ.get("VM_HOST_IP", "").strip()
     port = int(os.environ.get("SHARED_LINE_PORT", "5074") or 5074)
-    flexisip = f"{os.environ.get('VM_HOST_IP', '').strip()}:{os.environ.get('SIP_GW_PORT', '5062') or 5062}" \
-        if os.environ.get("VM_HOST_IP", "").strip() else ""
+    # Ziel der Mobilgeraete-Pools (Contact beim REGISTER an CME): der B2BUA in Flexisip (B2BUA_PORT). CME ordnet
+    # Anrufe ueber IP:Port im Contact dem Pool zu - der B2BUA fuehrt die Gespraeche der Apps mit genau dieser
+    # Adresse. Ohne B2BUA_PORT (alter Aufbau): der Flexisip-Proxy (SIP_GW_PORT).
+    mob_port = os.environ.get("B2BUA_PORT", "").strip() or os.environ.get("SIP_GW_PORT", "5062") or "5062"
+    flexisip = f"{os.environ.get('VM_HOST_IP', '').strip()}:{mob_port}" if os.environ.get("VM_HOST_IP", "").strip() else ""
     realm = os.environ.get("SIP_DOMAIN", "").strip() or "cme-web"
     info = {"agent": None, "error": "", "last": 0.0, "candidates": []}
 

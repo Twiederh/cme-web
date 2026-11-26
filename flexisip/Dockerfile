@@ -5,8 +5,11 @@
 #   docker build -t flexisip:local server/flexisip
 # oder automatisch beim ersten Deploy des Portainer-Stacks.
 #
-# Nur der Proxy wird gebraucht. Presence, B2BUA, Konferenz, Voicemail, Transcoder,
-# SNMP, Redis und Datenbank-Backends sind abgeschaltet – das spart Bauzeit und Größe.
+# Proxy und B2BUA. Der B2BUA (liblinphone) steht zwischen den Apps und CME: CME sieht ihn als angemeldetes
+# Telefon (Contact = seine Adresse = Contact des Pools MOB<Nummer>) - nur so gehoeren Anrufe der iPhones zur
+# Shared Line (Halten sichtbar, Uebernehmen in beide Richtungen). Der B2BUA braucht SOCI (ohne Datenbank-Backends).
+# RegEvent bleibt an: nur dann baut Flexisip 2.6.2 belle-sip mit, das liblinphone braucht (cmake/LinphoneSDK.cmake).
+# Presence, Konferenz, Voicemail, Transcoder und SNMP sind abgeschaltet (Redis gebaut, aber nicht genutzt).
 
 FROM debian:trixie
 
@@ -25,12 +28,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libcpp-jwt-dev libjansson-dev libjsoncpp-dev libnghttp2-dev libsqlite3-dev \
       libxerces-c-dev libsrtp2-dev libgsm1-dev libopus-dev libmbedtls-dev \
       libspeex-dev libspeexdsp-dev libxml2-dev libhiredis-dev libsystemd-dev libvpx-dev \
+      zlib1g-dev default-libmysqlclient-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 RUN git clone --depth 1 --branch "${FLEXISIP_VERSION}" \
       --recurse-submodules --shallow-submodules -j 8 \
       https://gitlab.linphone.org/BC/public/flexisip.git flexisip
+
+# Cisco-CME-Anpassung des B2BUA (Halten mit Call-Info, re-INVITE ohne Replaces), siehe Skript
+COPY patch-b2bua-cisco.py /src/patch-b2bua-cisco.py
+RUN python3 /src/patch-b2bua-cisco.py /src/flexisip
 
 RUN cmake -S flexisip -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -44,9 +52,13 @@ RUN cmake -S flexisip -B build -G Ninja \
       -DENABLE_SANITIZERS=OFF \
       -DENABLE_SYSTEMD=OFF \
       -DENABLE_PRESENCE=OFF \
-      -DENABLE_REDIS=OFF \
+      # Redis an: der RegEvent-Code verweist auf die Redis-Client-Klassen (ohne: Linkfehler in bin/flexisip)
+      -DENABLE_REDIS=ON \
       -DENABLE_SNMP=OFF \
-      -DENABLE_SOCI=OFF \
+      -DENABLE_SOCI=ON \
+      -DENABLE_SOCI_POSTGRESQL_BACKEND=OFF \
+      -DENABLE_REGEVENT=ON \
+      -DENABLE_B2BUA=ON \
       -DENABLE_TRANSCODER=OFF \
       -DENABLE_VOICEMAIL=OFF \
       -DENABLE_OPENID_CONNECT=OFF \

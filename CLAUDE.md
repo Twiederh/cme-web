@@ -15,7 +15,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 | Teil | Ort | Zweck |
 |---|---|---|
 | cme-web (Flask) | `cme_web.py`, `phoneapp.py`, `sharedline.py`, … | Weboberfläche, Provisionierung der Apps (`/client/v1/...`), Shared-Line-Agent |
-| Flexisip | `flexisip/` (Template `flexisip.conf.template` → `/run/flexisip.conf`) | SIP-Proxy für die Apps, Push-Gateway |
+| Flexisip | `flexisip/` (Template `flexisip.conf.template` → `/run/flexisip.conf`) | SIP-Proxy für die Apps, Push-Gateway, B2BUA zur CME |
 | push-relay | `push-relay/relay.py` | APNs-Versand; läuft mit Host-Netz auf 127.0.0.1:8092 |
 | asterisk, recorder, whisper | jeweilige Ordner | Voicemail/Aufnahme/Transkription |
 | Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | liblinphone-basiert, CallKit auf iOS |
@@ -111,7 +111,11 @@ python3 tests/test_relay.py
 
 ## Offene Punkte
 
-- [ ] iPhone hält → 8845/Mac sehen nichts. Ursache: CME ordnet INVITEs über die IP im Contact einem Pool zu, über Flexisip ist das die iPhone-IP statt der angemeldeten (Flexisip) → kein Pool, keine Shared Line, `Replaces` reicht die CME dann an den Trunk weiter (Rückruf aufs Handy). `masquerade-contacts-for-invites` getestet: Zuordnung klappt (pid 40002), aber Flexisip verwirft danach ACK/re-INVITE/BYE (482 Loop Detected). Plan: Flexisip als B2BUA (Build mit B2BUA, Patch für `Call-Info` im re-INVITE).
+- [ ] **B2BUA testen** (noch ungetestet). Hintergrund: Die CME ordnet INVITEs über IP:Port im Contact einem Pool zu. Über den reinen Proxy stand dort die iPhone-Adresse. Die CME führte iPhone-Gespräche deshalb nicht auf der Shared Line: Halten war unsichtbar, und ein `Replaces` vom Mac reichte sie an den Trunk weiter oder leitete per 302 auf die -283 um.
+  - Jetzt läuft jedes Gespräch der Apps über den B2BUA in Flexisip (`[b2bua-server]`, UDP 5064, RTP 40000–40199). cme-web meldet den MOB-Pool mit dieser Adresse an (`B2BUA_PORT`).
+  - `flexisip/patch-b2bua-cisco.py` sorgt dafür, dass re-INVITEs frische Parameter bekommen (kein `Replaces` aus dem ersten INVITE) und `Call-Info: remotecc` übernehmen.
+  - `no-rtp-timeout` steht auf 6 h, sonst würde der B2BUA gehaltene Gespräche nach 30 s beenden.
+  - Der Umweg `/client/v1/held` (iPhone meldet Halten an cme-web) ist entfernt.
 - [ ] Testen nach Deploy des push-relay: Annehmen am iPhone und kein Weiterklingeln nach Annahme am Mac. Ursache war, dass der Relay die Call-ID im VoIP-Push auf die oberste Ebene legte. liblinphone sucht sie wie bei Flexisip in `aps` (`relay.voip_payload`). Ohne sie legt liblinphone einen zweiten Anruf an. Annehmen beendete dann den echten (603 Decline), der Push-Anruf klingelte ~10 s nach.
 - [ ] Optional: Flexisip-Registrierungen in Redis speichern.
 - [ ] Aufräumen: Testkonfiguration auf der CME, veraltete Swift-APIs, Passwörter erneuern, die im Chat standen.
