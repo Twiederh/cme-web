@@ -84,8 +84,21 @@ if s.count("const auto callee = Match(") != 1:
     sys.exit("patch-b2bua-cisco: callee-Definition nicht gefunden")
 s = s.replace("const auto callee = Match(", "auto callee = Match(", 1)
 
+# UPDATE ohne SDP: CME schickt nach dem Annehmen/Uebernehmen ein UPDATE nur mit Remote-Party-ID/Call-Info. Ohne SDP
+# meldet liblinphone Audio und Video der Gegenseite als "aus"; der B2BUA schaltete daraufhin das Audio der anderen
+# Seite ab (re-INVITE mit m=audio 0). Das naechste Halten scheiterte dann mit 488 (kein Audio-Stream mehr).
+# Deshalb Audio/Video nur umschalten, wenn die Anfrage ueberhaupt Medien beschreibt.
+s = replace_once(s, """	if (remoteCallParams->videoEnabled() != callParams->videoEnabled()) {""",
+                 """	// CME: UPDATE/re-INVITE ohne SDP aendert keine Medien
+	const bool cmeRemoteHasMedia = remoteCallParams->audioEnabled() || remoteCallParams->videoEnabled();
+	if (cmeRemoteHasMedia && remoteCallParams->videoEnabled() != callParams->videoEnabled()) {""",
+                 "Video-Umschaltung bei UPDATE")
+s = replace_once(s, """	if (remoteCallParams->audioEnabled() != callParams->audioEnabled()) {""",
+                 """	if (cmeRemoteHasMedia && remoteCallParams->audioEnabled() != callParams->audioEnabled()) {""",
+                 "Audio-Umschaltung bei UPDATE")
+
 src.write_text(s)
-print(f"patch-b2bua-cisco: {src} angepasst ({n} re-INVITE-Stellen, Video, Apps-Domain)")
+print(f"patch-b2bua-cisco: {src} angepasst ({n} re-INVITE-Stellen, Video, Apps-Domain, UPDATE ohne SDP)")
 
 # liblinphone: CallSessionParams::removeCustomHeader() gibt es nur intern - als C-Funktion fuer den B2BUA freigeben
 cp_src = Path(sys.argv[1]) / "linphone-sdk/liblinphone/src/c-wrapper/api/c-call-params.cpp"
