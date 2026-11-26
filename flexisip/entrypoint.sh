@@ -35,11 +35,16 @@ sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${CME_IP}|${CME_IP}|g" -e "s|\${SIP_G
 #    alle iPhones/iPads, CME sieht nur EINE Anmeldung je Nummer (die macht cme-web, Ziel = Flexisip)
 #  * NOTIFY/REFER/OPTIONS der CME an Flexisip (service-control, Rufumleitung, Keepalive) -> cme-web bestaetigt
 #  * Anrufe der Apps (SIP-Domain) und alles an die CME-IP -> CME (lr = Request-URI bleibt sip:...@<Domain>)
+#    INVITEs der Apps aber NICHT: die gehen ueber den B2BUA (module::B2bua setzt dessen Route). Diese Route kaeme
+#    sonst davor, das INVITE ginge direkt an die CME (Uebernehmen vom Mac aufs iPhone: CME sieht die iPhone-Adresse
+#    statt des MOB-Pools, das folgende re-INVITE landet beim B2BUA -> 481, Gespraech weg). Erst das INVITE des
+#    B2BUA selbst (User-Agent Flexisip-B2BUA) bekommt die Route zur CME.
+app_invite="(request.method != 'INVITE' || user-agent contains 'Flexisip-B2BUA')"
 {
   echo "<sip:${SHARED_LINE_HOST}:${SHARED_LINE_PORT};transport=udp;lr>   request.method == 'REGISTER'"
   echo "<sip:${SHARED_LINE_HOST}:${SHARED_LINE_PORT};transport=udp;lr>   (request.method == 'NOTIFY' || request.method == 'REFER' || request.method == 'OPTIONS') && request.uri.domain == '${HOST_IP}'"
-  echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${SIP_DOMAIN}'"
-  echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${CME_IP}'"
+  echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${SIP_DOMAIN}' && ${app_invite}"
+  echo "<sip:${CME_IP}:${CME_PORT};transport=udp;lr>   request.uri.domain == '${CME_IP}' && ${app_invite}"
 } > /run/flexisip-routes.conf
 echo "flexisip: $src -> /run/flexisip.conf (SIP ${HOST_IP}:${SIP_PORT}, Gateway '${SIP_GW_NAME}', Domain ${SIP_DOMAIN} -> CME ${CME_IP}:${CME_PORT}, Relay 127.0.0.1:${RELAY_PORT})"
 # Passwoerter der Apps (module::Authentication): cme-web schreibt sie nach /data/push/flexisip-passwd (Volume
