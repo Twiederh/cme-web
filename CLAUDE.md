@@ -112,7 +112,7 @@ python3 tests/test_relay.py
 ## Offene Punkte
 
 - [ ] iPhone hält → 8845/Mac sehen nichts. Ursache: CME ordnet INVITEs über die IP im Contact einem Pool zu, über Flexisip ist das die iPhone-IP statt der angemeldeten (Flexisip) → kein Pool, keine Shared Line, `Replaces` reicht die CME dann an den Trunk weiter (Rückruf aufs Handy). `masquerade-contacts-for-invites` getestet: Zuordnung klappt (pid 40002), aber Flexisip verwirft danach ACK/re-INVITE/BYE (482 Loop Detected). Plan: Flexisip als B2BUA (Build mit B2BUA, Patch für `Call-Info` im re-INVITE).
-- [ ] iPhone klingelt nach Annahme am Mac noch ~10 s weiter (SIP-CANCEL kommt sofort an, Ursache in der App; Protokoll des iPhones auswerten).
+- [ ] Testen nach Deploy des push-relay: Annehmen am iPhone und kein Weiterklingeln nach Annahme am Mac. Ursache war, dass der Relay die Call-ID im VoIP-Push auf die oberste Ebene legte. liblinphone sucht sie wie bei Flexisip in `aps` (`relay.voip_payload`). Ohne sie legt liblinphone einen zweiten Anruf an. Annehmen beendete dann den echten (603 Decline), der Push-Anruf klingelte ~10 s nach.
 - [ ] Optional: Flexisip-Registrierungen in Redis speichern.
 - [ ] Aufräumen: Testkonfiguration auf der CME, veraltete Swift-APIs, Passwörter erneuern, die im Chat standen.
 - [ ] Entscheidung App Store / Android / Windows. liblinphone ist GPLv3 bzw. proprietär lizenziert, was für den App Store ein Problem ist. Optionen: Lizenzpreis bei Belledonne anfragen oder auf baresip (BSD) wechseln.

@@ -193,6 +193,31 @@ class KeyStore:
 HEX_RE = re.compile(r"[0-9a-fA-F]{32,}")
 
 
+def voip_payload(call: dict) -> dict:
+    """VoIP-Push genau wie Flexisip ihn baut (pushnotification/apple/apple-request.cc, PushType::VoIP): liblinphone
+    liest "call-id" und "uuid" aus "aps". Liegt die Call-ID nur auf oberster Ebene, legt liblinphone einen Anruf
+    ohne Call-ID an und das INVITE wird ein zweiter Anruf - CallKit zeigt dann einen Anruf, der beim Annehmen den
+    echten beendet (603 Decline) bzw. nach der Annahme an einem anderen Gerät noch ~10 s weiterklingelt."""
+    # Flexisip uebernimmt +sip.instance samt Anfuehrungszeichen ("<urn:uuid:...>") - im JSON ohne
+    uid = call.get("uuid", "").strip().strip('"')
+    return {
+        "aps": {
+            "sound": "",
+            "loc-key": "IC_MSG",
+            "loc-args": [call.get("display-name") or call.get("from-uri", "")],
+            "call-id": call["call-id"],
+            "uuid": uid,
+            "send-time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        },
+        "from-uri": call.get("from-uri", ""),
+        "display-name": call.get("display-name", ""),
+        "pn_ttl": 30,
+        "customPayload": {},
+        # zusaetzlich oben (aeltere Auswertungen)
+        "call-id": call["call-id"],
+    }
+
+
 def voip_token(raw: str) -> str | None:
     """Extrahiert den VoIP-Token (hex) aus den verschiedenen Formaten.
 
@@ -347,17 +372,7 @@ class APNs:
 
     async def send_voip(self, token: str, call: dict, sandbox: bool) -> tuple[int, str]:
         host = "api.sandbox.push.apple.com" if sandbox else "api.push.apple.com"
-        # Payload im Format, das liblinphone erwartet (wie Flexisip es selbst sendet):
-        # "call-id" auf oberster Ebene -> Core.processPushNotification.
-        payload = {
-            "aps": {"sound": "", "loc-key": "IC_MSG", "loc-args": [call.get("display-name") or call.get("from-uri", "")]},
-            "call-id": call["call-id"],
-            "from-uri": call.get("from-uri", ""),
-            "display-name": call.get("display-name", ""),
-            "pn_ttl": 30,
-            "uuid": call.get("uuid", ""),
-            "send-time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
+        payload = voip_payload(call)
         r = await self.client.post(
             f"https://{host}/3/device/{token}",
             json=payload,

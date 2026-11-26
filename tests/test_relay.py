@@ -40,3 +40,10 @@ async def main():
         print("health ->", (await c.get("http://127.0.0.1:18090/health")).json())
     await runner.cleanup(); srv.close()
 asyncio.run(main())
+
+# VoIP-Push wie Flexisip: liblinphone sucht "call-id" und "uuid" in "aps"
+pl = relay.voip_payload({"call-id": "92BB@192.168.11.4", "from-uri": "sip:0179@192.168.11.4", "display-name": "Thomas",
+                         "uuid": '"<urn:uuid:5b007447>"'})
+assert pl["aps"]["call-id"] == "92BB@192.168.11.4" and pl["aps"]["uuid"] == "<urn:uuid:5b007447>", pl
+assert pl["aps"]["loc-key"] == "IC_MSG" and pl["aps"]["loc-args"] == ["Thomas"] and pl["from-uri"] == "sip:0179@192.168.11.4"
+print("voip_payload ok")
