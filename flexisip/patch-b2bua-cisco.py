@@ -101,10 +101,35 @@ extern "C" LINPHONE_PUBLIC void cme_linphone_call_params_remove_custom_header(vo
 cp_src.write_text(cp)
 print(f"patch-b2bua-cisco: {cp_src} angepasst (removeCustomHeader)")
 
-# Nur IPv4: sonst traegt liblinphone eine IPv6-Adresse als Contact ein (CME spricht nur IPv4)
+# Nur IPv4: sonst traegt liblinphone eine IPv6-Adresse als Contact ein (CME spricht nur IPv4).
+# Audio-Codecs: G.722 ist in liblinphone standardmaessig aus. CME bietet G.722 zuerst an, der B2BUA nahm dann PCMA.
+# Uebernimmt danach Mac oder 8845 mit G.722, kann CME ohne Transcoder nicht umsetzen und legt auf. Deshalb
+# G.722 einschalten und vorn einreihen (danach PCMA, PCMU, Rest wie gehabt). Eine Option "audio-codec" wuerde
+# nur genau einen Codec zulassen - fuer Anrufe nach draussen zu riskant.
 core_src = Path(sys.argv[1]) / "src/b2bua/b2bua-core.cc"
 c = core_src.read_text()
 c = replace_once(c, '	core->setLabel("Flexisip B2BUA");\n',
-                 '	core->setLabel("Flexisip B2BUA");\n	core->enableIpv6(false);\n', "IPv6 abschalten")
+                 '''	core->setLabel("Flexisip B2BUA");
+	core->enableIpv6(false);
+	{
+		std::list<std::shared_ptr<linphone::PayloadType>> first, rest;
+		for (const auto& mime : {"G722", "PCMA", "PCMU"}) {
+			for (const auto& pt : core->getAudioPayloadTypes()) {
+				if (string_utils::iequals(pt->getMimeType(), mime)) {
+					pt->enable(true);
+					first.push_back(pt);
+				}
+			}
+		}
+		for (const auto& pt : core->getAudioPayloadTypes()) {
+			const auto m = pt->getMimeType();
+			if (!string_utils::iequals(m, "G722") && !string_utils::iequals(m, "PCMA") &&
+			    !string_utils::iequals(m, "PCMU"))
+				rest.push_back(pt);
+		}
+		first.splice(first.end(), rest);
+		core->setAudioPayloadTypes(first);
+	}
+''', "IPv6 abschalten, G.722 vorn")
 core_src.write_text(c)
-print(f"patch-b2bua-cisco: {core_src} angepasst (nur IPv4)")
+print(f"patch-b2bua-cisco: {core_src} angepasst (nur IPv4, G.722 vorn)")
