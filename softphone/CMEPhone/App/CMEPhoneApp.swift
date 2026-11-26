@@ -73,6 +73,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Reihenfolge wichtig: CallKit-Provider und Local-Push-Delegate müssen stehen,
         // bevor iOS einen per Push gestarteten Anruf zustellt.
         _ = CallKitProvider.shared
+        // Anrufliste der App (iPad/Vision Pro haben keine Telefon-App mit „Zuletzt“)
+        SIPManager.shared.addCallStateHandler { call, state in
+            MainActor.assumeIsolated { CallHistory.shared.softphone(call: call, state: state) }
+        }
         SIPManager.shared.start()
         LocalPushController.shared.load()
         MainActor.assumeIsolated {

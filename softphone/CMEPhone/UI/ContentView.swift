@@ -42,6 +42,11 @@ struct ContentView: View {
                     // Voicemail und Gesprächsaufnahmen der Nebenstelle (cme-web) und dieses Geräts
                     HStack(spacing: 10) {
                         NavigationLink {
+                            CallHistoryView(onCall: dial).navigationTitle("Anrufe")
+                        } label: {
+                            Label("Anrufe", systemImage: "clock")
+                        }
+                        NavigationLink {
                             MediaListView(source: .voicemail, onCall: dial).navigationTitle("Voicemail")
                         } label: {
                             Label(media.newVoicemails > 0 ? "Voicemail (\(media.newVoicemails))" : "Voicemail",

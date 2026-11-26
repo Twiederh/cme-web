@@ -2,7 +2,8 @@ import Foundation
 import Combine
 import linphonesw
 
-/// Anrufliste der Mac-App (Softphone und Tischtelefon) – für Wahlwiederholung und Rückruf aus dem Menü.
+/// Anrufliste der Apps: Softphone-Gespräche (iOS, iPadOS, visionOS, Mac), auf dem Mac zusätzlich das Tischtelefon.
+/// Für Rückruf, Wahlwiederholung und – auf iPad/Vision Pro ohne Telefon-App – als einzige Anrufliste.
 @MainActor
 final class CallHistory: ObservableObject {
     static let shared = CallHistory()
@@ -28,7 +29,7 @@ final class CallHistory: ObservableObject {
     }
 
     @Published private(set) var entries: [Entry] = []
-    private let maxEntries = 40
+    private let maxEntries = 100
     private let url: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CME Phone", isDirectory: true)
@@ -38,6 +39,7 @@ final class CallHistory: ObservableObject {
 
     // Zustand für die Auswertung
     private var connected = Set<String>()
+    #if os(macOS)
     private var deskDialog: (id: String, number: String, name: String, incoming: Bool, answered: Bool, start: Date)?
     /// Vom Mac aus am Tischtelefon gewählt: Eintrag sofort, Dauer kommt mit dem Statusabo nach
     private var deskDialEntry: (id: UUID, date: Date)?
@@ -47,6 +49,7 @@ final class CallHistory: ObservableObject {
         add(e)
         deskDialEntry = (e.id, e.date)
     }
+    #endif
 
     private init() {
         if let data = try? Data(contentsOf: url),
@@ -57,6 +60,11 @@ final class CallHistory: ObservableObject {
     var lastDialed: Entry? { entries.first { $0.direction == .outgoing } }
 
     func clear() { entries = []; persist() }
+
+    func remove(_ e: Entry) {
+        entries.removeAll { $0.id == e.id }
+        persist()
+    }
 
     func add(_ e: Entry) {
         guard !e.number.isEmpty else { return }
@@ -88,6 +96,7 @@ final class CallHistory: ObservableObject {
         }
     }
 
+    #if os(macOS)
     // MARK: Tischtelefon (Statusabo)
 
     func deskPhone(old: LineStatus, new: LineStatus) {
@@ -128,4 +137,5 @@ final class CallHistory: ObservableObject {
         }
         add(Entry(date: d.start, number: d.number, name: d.name, direction: dir, viaDeskPhone: true, duration: duration))
     }
+    #endif
 }
