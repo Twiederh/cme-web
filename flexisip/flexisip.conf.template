@@ -72,8 +72,9 @@ auth-domains-mode=static
 
 [module::NatHelper]
 enabled=true
-# Den Contact des B2BUA nicht anfassen: CME ordnet über ihn (IP:Port) den Pool MOB<Nummer> zu
-filter=!(user-agent contains 'Flexisip-B2BUA')
+# KEIN Filter für den B2BUA: der NatHelper setzt auch das Record-Route. Ohne das schickt der B2BUA Anfragen im
+# Gespräch direkt per TCP ans iPhone (Connection refused) - Gespräch bricht nach ~30 s ab. Seinen Contact ändert der
+# NatHelper nicht: der B2BUA sendet per UDP von seinem eigenen Port (Contact = Absenderadresse).
 
 [module::ContactRouteInserter]
 enabled=true
