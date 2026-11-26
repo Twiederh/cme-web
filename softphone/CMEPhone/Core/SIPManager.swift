@@ -788,6 +788,29 @@ final class SIPManager: ObservableObject {
 
     /// Gespräche, die die App auf Halten gesetzt hat (Re-INVITE sendonly – liblinphone-Zustand bleibt StreamsRunning).
     private var heldCalls = Set<String>()
+
+    /// Übernommene Gespräche (INVITE mit "Replaces"): liblinphone schickt bei späteren re-INVITEs die Parameter
+    /// des ersten INVITE samt "Replaces" mit – auch bei der automatischen Reparatur nach einem Netzwechsel
+    /// (WLAN -> LTE). CME verwirft solche re-INVITEs ("invalid IE content"), die Sprache bleibt weg und nach 30 s
+    /// legt liblinphone auf. Deshalb nach dem Verbinden einmal ein re-INVITE mit frischen Parametern: danach
+    /// gelten die für das Gespräch. (Call.params lässt sich nach dem Verbinden nicht mehr setzen.)
+    private var replacesDropped = Set<String>()
+
+    private func dropReplaces(_ call: Call) {
+        guard let id = call.callLog?.callId, !replacesDropped.contains(id),
+              !(call.params?.getCustomHeader(headerName: "Replaces") ?? "").isEmpty else { return }
+        replacesDropped.insert(id)
+        // kurz warten: CME schickt direkt nach dem Verbinden selbst ein UPDATE (sonst 491 Request Pending)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let call = self.call(withId: id), call.state == .StreamsRunning else { return }
+                do {
+                    try call.update(params: try self.updateParams(for: call))
+                    self.log("Übernommenes Gespräch: Parameter ohne Replaces gesetzt")
+                } catch { self.log("Replaces entfernen: \(error)") }
+            }
+        }
+    }
     #if os(iOS)
     /// Kürzlich beendete Anrufe (Call-ID -> Zeit): ein verspäteter VoIP-Push dafür darf nicht mehr klingeln.
     private var recentlyEnded: [String: Date] = [:]
@@ -973,6 +996,8 @@ final class SIPManager: ObservableObject {
         case .Connected:
             if call.dir == .Outgoing { callKit.reportOutgoingConnected(callId: callId) }
             startDurationTimer()
+        case .StreamsRunning:
+            dropReplaces(call)
         case .End, .Error:
             callKit.reportEnded(callId: callId, failed: state == .Error)
             #if os(iOS)
@@ -1010,6 +1035,7 @@ final class SIPManager: ObservableObject {
                 isRecording: recordingCalls.contains(id))
         }
         recordingCalls.formIntersection(Set(calls.map(\.id)))
+        replacesDropped.formIntersection(Set(calls.map(\.id)))
         heldCalls.formIntersection(Set(calls.map(\.id)))
         if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
     }
