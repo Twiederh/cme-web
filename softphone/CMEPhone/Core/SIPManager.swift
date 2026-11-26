@@ -350,6 +350,13 @@ final class SIPManager: ObservableObject {
 
     func refreshRegistration() { core?.refreshRegisters() }
 
+    /// "Neu anmelden" (Knopf in der App): Konto neu anlegen – hilft auch nach "io error" (Verbindung zu Flexisip
+    /// abgerissen, z.B. nach einem Neustart des Stacks, der die Anmeldungen vergessen hat)
+    func reRegister() {
+        log("Neu anmelden (von Hand)")
+        if core == nil { start() } else { applyAccount() }
+    }
+
     /// Abmelden und kurz warten, bis CME es bestätigt (beim Beenden der App).
     func unregisterBlocking(timeout: TimeInterval) {
         guard let core else { return }

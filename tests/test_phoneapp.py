@@ -121,7 +121,7 @@ check(c.delete("/client/v1/recordings/20261122-150000-abc123?ext=21", headers=H)
       and c.get("/client/v1/recordings?ext=21", headers=H).get_json()["recordings"] == [], "Aufnahme gelöscht")
 
 # Passwortdatei für Flexisip (Digest der App-Anfragen): je Mobilgerät eine Zeile pro From-Domain
-os.environ.update(SIP_DOMAIN="cme.local", CME_HOST="192.168.11.4", VM_HOST_IP="192.168.1.110")
+os.environ.update(SIP_DOMAIN="cme.local", CME_HOST="192.168.11.4", VM_HOST_IP="192.168.1.110", SIP_GW_NAME="sip-gw.example.de")
 r = c.post("/api/phoneapp/mobiles/MOBIphone/password", json={})
 check(r.get_json().get("ok"), "neues Passwort für MOBIphone")
 pw = json.load(open(tempfile.gettempdir() + "/cme-web-demo-vm/config/cme-phoneapp-mobile.json"))["MOBIphone"]["password"]
@@ -132,6 +132,7 @@ import hashlib
 ha1 = hashlib.md5(f"MOBIphone:cme.local:{pw}".encode()).hexdigest()    # HA1 mit dem Anmeldenamen der App
 check(lines[0] == "version:1" and f"+4961874191283@cme.local md5:{ha1} ; MOBIphone" in lines
       and f"+4961874191283@192.168.11.4 md5:{ha1} ; MOBIphone" in lines
-      and f"+4961874191283@192.168.1.110 md5:{ha1} ; MOBIphone" in lines, "Zeilen für SIP-Domain, CME-IP, Flexisip-IP")
+      and f"+4961874191283@192.168.1.110 md5:{ha1} ; MOBIphone" in lines
+      and f"+4961874191283@sip-gw.example.de md5:{ha1} ; MOBIphone" in lines, "Zeilen für SIP-Domain, CME-IP, Flexisip-IP, Apps-Domain")
 check(pw not in pf[0], "kein Passwort im Klartext")
 print("ALLE PHONEAPP-TESTS OK")

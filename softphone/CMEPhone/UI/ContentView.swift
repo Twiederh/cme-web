@@ -69,7 +69,13 @@ struct ContentView: View {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     } label: { Image(systemName: "gearshape") }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Neu anmelden: Einstellungen von cme-web holen und Konto neu anmelden
+                    Button {
+                        Provisioning.refresh()
+                        sip.reRegister()
+                    } label: { Image(systemName: "arrow.triangle.2.circlepath") }
+                    .accessibilityLabel("Neu anmelden")
                     Button { showLog = true } label: { Image(systemName: "text.alignleft") }
                 }
             }

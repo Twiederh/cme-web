@@ -196,8 +196,12 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
 
     def write_flexisip_passwd(m: dict | None = None) -> None:
         m = mobiles() if m is None else m
+        # Apps-Domain des B2BUA (flexisip/entrypoint.sh: B2BUA_APP_DOMAIN, Standard SIP_GW_NAME): bei Anrufen an die
+        # Apps steht sie im From der re-INVITEs (Halten, Video) der Apps
+        app_domain = (os.environ.get("B2BUA_APP_DOMAIN", "").strip() or os.environ.get("SIP_GW_NAME", "").strip()
+                      or "apps.invalid")
         domains = [d for d in dict.fromkeys([os.environ.get("SIP_DOMAIN", "").strip(), os.environ.get("CME_HOST", "").strip(),
-                                             os.environ.get("VM_HOST_IP", "").strip()]) if d]
+                                             os.environ.get("VM_HOST_IP", "").strip(), app_domain]) if d]
         # Realm des Digest: immer die SIP-Domain (flexisip.conf.template: realm=${SIP_DOMAIN})
         realm = os.environ.get("SIP_DOMAIN", "").strip() or "cme-web"
         # ohne Kommentarzeile: Flexisip bricht schon an "(" in einem Kommentar ab (Grammatik authdb-file)
