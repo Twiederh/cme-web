@@ -6,8 +6,9 @@ createCallParams(peerCall). Das kopiert die eigenen Header des ersten INVITE mit
 "Replaces", und solche re-INVITEs verwirft CME ("invalid IE content"). Ausserdem fehlt dann
 "Call-Info: <urn:x-cisco-remotecc:hold|resume>", an dem CME ein auf der Shared Line gehaltenes Gespraech erkennt.
 
-Deshalb: fuer re-INVITEs frische Parameter (Audio/Video, Verschluesselung, Konto der Gegenseite) und
-"Call-Info" mit remotecc aus der Anfrage dieser Seite uebernehmen.
+Deshalb: die Parameter wie bisher von der Gegenseite ableiten (Bindung an die Konferenz bleibt), "Replaces" und
+ein frueheres "Call-Info" entfernen (kleine C-Funktion in liblinphone) und "Call-Info" mit remotecc aus der Anfrage
+dieser Seite neu setzen.
 Bricht ab, wenn der Quelltext nicht mehr wie erwartet aussieht (Flexisip-Update: Patch pruefen).
 """
 import sys
@@ -17,20 +18,25 @@ src = Path(sys.argv[1]) / "src/b2bua/b2bua-server.cc"
 s = src.read_text()
 
 helper_anchor = "/**\n * Return if the call media direction is set to the provided direction."
-helper = '''/**
- * CME (Cisco): Parameter fuer ein re-INVITE der Gegenseite - frisch statt createCallParams(peerCall) (das kopiert
- * "Replaces" aus dem ersten INVITE mit, CME verwirft das), dazu "Call-Info" mit remotecc aus der Anfrage dieser Seite
+helper = '''// liblinphone (cme-web-Patch, c-call-params.cpp): eigenen SIP-Header aus CallParams entfernen
+extern "C" void cme_linphone_call_params_remove_custom_header(void *params, const char *name);
+
+/**
+ * CME (Cisco): Parameter fuer ein re-INVITE der Gegenseite. createCallParams(peerCall) behaelt die Bindung an die
+ * Konferenz des B2BUA (frische Parameter verlieren den Audio-Stream: 488), kopiert aber die eigenen Header des
+ * ersten INVITE mit - nach einem Uebernehmen "Replaces", das CME in re-INVITEs verwirft - und ein frueheres
+ * "Call-Info". Beides entfernen und "Call-Info" mit remotecc aus der Anfrage dieser Seite neu setzen
  * (Halten/Fortsetzen auf der Shared Line).
  */
 std::shared_ptr<linphone::CallParams> cmeUpdateParams(const std::shared_ptr<linphone::Core>& core,
                                                       const std::shared_ptr<linphone::Call>& peerCall,
                                                       const std::shared_ptr<linphone::Call>& call) {
-	const auto current = peerCall->getCurrentParams();
-	auto params = core->createCallParams(nullptr);
-	params->enableAudio(current->audioEnabled());
-	params->enableVideo(current->videoEnabled());
-	params->setMediaEncryption(current->getMediaEncryption());
-	if (const auto account = peerCall->getParams()->getAccount()) params->setAccount(account);
+	auto params = core->createCallParams(peerCall);
+	void* cParams = linphone::Object::sharedPtrToCPtr(params);
+	for (const char* name : {"Replaces", "Call-Info"}) {
+		for (int i = 0; i < 8 && !params->getCustomHeader(name).empty(); ++i)
+			cme_linphone_call_params_remove_custom_header(cParams, name);
+	}
 	if (call && call->getRemoteParams()) {
 		const auto callInfo = call->getRemoteParams()->getCustomHeader("Call-Info");
 		if (callInfo.find("remotecc") != std::string::npos) params->addCustomHeader("Call-Info", callInfo);
@@ -80,6 +86,20 @@ s = s.replace("const auto callee = Match(", "auto callee = Match(", 1)
 
 src.write_text(s)
 print(f"patch-b2bua-cisco: {src} angepasst ({n} re-INVITE-Stellen, Video, Apps-Domain)")
+
+# liblinphone: CallSessionParams::removeCustomHeader() gibt es nur intern - als C-Funktion fuer den B2BUA freigeben
+cp_src = Path(sys.argv[1]) / "linphone-sdk/liblinphone/src/c-wrapper/api/c-call-params.cpp"
+cp = cp_src.read_text()
+if "void linphone_call_params_add_custom_header(LinphoneCallParams *params," not in cp:
+    sys.exit("patch-b2bua-cisco: c-call-params.cpp sieht anders aus als erwartet")
+cp += """
+// cme-web: eigenen SIP-Header entfernen (fuer den Flexisip-B2BUA, patch-b2bua-cisco.py)
+extern "C" LINPHONE_PUBLIC void cme_linphone_call_params_remove_custom_header(void *params, const char *name) {
+	L_GET_CPP_PTR_FROM_C_OBJECT(static_cast<LinphoneCallParams *>(params))->removeCustomHeader(name);
+}
+"""
+cp_src.write_text(cp)
+print(f"patch-b2bua-cisco: {cp_src} angepasst (removeCustomHeader)")
 
 # Nur IPv4: sonst traegt liblinphone eine IPv6-Adresse als Contact ein (CME spricht nur IPv4)
 core_src = Path(sys.argv[1]) / "src/b2bua/b2bua-core.cc"
