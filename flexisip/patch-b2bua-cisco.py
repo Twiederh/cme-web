@@ -91,7 +91,19 @@ s = s.replace("const auto callee = Match(", "auto callee = Match(", 1)
 s = replace_once(s, """	if (remoteCallParams->videoEnabled() != callParams->videoEnabled()) {""",
                  """	// CME: UPDATE/re-INVITE ohne SDP aendert keine Medien
 	const bool cmeRemoteHasMedia = remoteCallParams->audioEnabled() || remoteCallParams->videoEnabled();
-	if (cmeRemoteHasMedia && remoteCallParams->videoEnabled() != callParams->videoEnabled()) {""",
+	if (cmeRemoteHasMedia && remoteCallParams->videoEnabled() != callParams->videoEnabled()) {
+		// CME: Konferenz ohne Video angelegt (Anruf nur mit Audio) - fuer nachtraeglich eingeschaltetes Video die
+		// Konferenz erst video-faehig machen, sonst bietet der B2BUA der Gegenseite kein Video an
+		if (remoteCallParams->videoEnabled()) {
+			if (const auto conference = call->getConference()) {
+				if (const auto confParams = conference->getCurrentParams(); confParams && !confParams->videoEnabled()) {
+					auto newConfParams = confParams->clone();
+					newConfParams->enableVideo(true);
+					conference->updateParams(newConfParams);
+					LOGD << "CME: Video in der Konferenz eingeschaltet";
+				}
+			}
+		}""",
                  "Video-Umschaltung bei UPDATE")
 s = replace_once(s, """	if (remoteCallParams->audioEnabled() != callParams->audioEnabled()) {""",
                  """	if (cmeRemoteHasMedia && remoteCallParams->audioEnabled() != callParams->audioEnabled()) {""",
