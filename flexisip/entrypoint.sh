@@ -11,6 +11,10 @@ SIP_PORT="${SIP_PORT:-5062}"
 B2BUA_PORT="${B2BUA_PORT:-5064}"
 B2BUA_RTP_PORTS="${B2BUA_RTP_PORTS:-40000-40199}"
 B2BUA_VIDEO_PORTS="${B2BUA_VIDEO_PORTS:-40200-40299}"
+# Anrufe von CME an die Apps (To = sip:<nummer>@HOST_IP) leitet der B2BUA unter dieser Domain an den Proxy (sein
+# einziger Alias, HOST_IP darf keiner sein). Ausgewertet im B2BUA-Patch (patch-b2bua-cisco.py).
+B2BUA_APP_DOMAIN="${B2BUA_APP_DOMAIN:-${SIP_GW_NAME:-apps.invalid}}"
+export B2BUA_APP_DOMAIN B2BUA_REWRITE_HOST="${HOST_IP}"
 RELAY_PORT="${RELAY_PORT:-8092}"
 # cme-web (sharedline.py): prueft die Anmeldungen der Apps und bestaetigt Anfragen der CME an Flexisip
 SHARED_LINE_PORT="${SHARED_LINE_PORT:-5074}"
@@ -24,7 +28,7 @@ src=/usr/local/share/flexisip/flexisip.conf.template
 # Nur die eigenen Platzhalter ersetzen ($type, $token ... in external-push-uri gehören Flexisip)
 sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${CME_IP}|${CME_IP}|g" -e "s|\${SIP_GW_NAME}|${SIP_GW_NAME}|g" \
     -e "s|\${SIP_PORT}|${SIP_PORT}|g" -e "s|\${B2BUA_PORT}|${B2BUA_PORT}|g" \
-    -e "s|\${B2BUA_RTP_PORTS}|${B2BUA_RTP_PORTS}|g" -e "s|\${B2BUA_VIDEO_PORTS}|${B2BUA_VIDEO_PORTS}|g" -e "s|\${RELAY_PORT}|${RELAY_PORT}|g" -e "s|\${LOG_LEVEL}|${LOG_LEVEL}|g" -e "s|\${SIP_DOMAIN}|${SIP_DOMAIN}|g" \
+    -e "s|\${B2BUA_RTP_PORTS}|${B2BUA_RTP_PORTS}|g" -e "s|\${B2BUA_VIDEO_PORTS}|${B2BUA_VIDEO_PORTS}|g" -e "s|\${B2BUA_APP_DOMAIN}|${B2BUA_APP_DOMAIN}|g" -e "s|\${RELAY_PORT}|${RELAY_PORT}|g" -e "s|\${LOG_LEVEL}|${LOG_LEVEL}|g" -e "s|\${SIP_DOMAIN}|${SIP_DOMAIN}|g" \
     "$src" > /run/flexisip.conf
 # Routen (die erste passende gilt):
 #  * REGISTER der Apps -> cme-web: prueft das Passwort des Mobilgeraete-Pools; Flexisip ist Registrar fuer

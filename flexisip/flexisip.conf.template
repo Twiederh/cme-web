@@ -28,8 +28,11 @@
 [global]
 # FLEXISIP_LOG_LEVEL im Stack: debug, message, warning, error
 log-level=${LOG_LEVEL}
-# Namen/IPs, unter denen Flexisip SICH SELBST erkennt. NICHT die CME-IP eintragen!
-aliases=${SIP_GW_NAME} ${HOST_IP}
+# Namen, unter denen Flexisip SICH SELBST erkennt. NICHT die CME-IP eintragen!
+# Auch NICHT ${HOST_IP}: Aliase gelten für jeden Port - der Proxy hielte dann den B2BUA (${HOST_IP}:${B2BUA_PORT})
+# für sich selbst (482 Loop Detected). Sich selbst unter ${HOST_IP}:${SIP_PORT} erkennt er über die Transports.
+# Anrufe an die Apps adressiert der B2BUA an ${B2BUA_APP_DOMAIN} (Gateway-Name).
+aliases=${B2BUA_APP_DOMAIN}
 # Eine Adresse für Clients und CME (alles im LAN/VPN).
 # TLS: zusätzlich  sips:${HOST_IP}:5061  und tls-certificates-dir (s.u.) setzen.
 transports=sip:${HOST_IP}:${SIP_PORT};transport=tcp sip:${HOST_IP}:${SIP_PORT};transport=udp
@@ -105,7 +108,7 @@ db-implementation=internal
 # wie einen echten Cisco-Client und stellt Anrufe auf Shared Lines nur noch nach Cisco-eigenem Abo zu.
 # NOTIFY/OPTIONS der CME (service-control, Keepalive) gehen ebenfalls nicht an die Apps (würde sie per Push
 # wecken), sondern per Route an cme-web, das sie bestätigt (entrypoint.sh).
-filter=(is_request && request.method != 'REFER' && request.method != 'NOTIFY' && request.method != 'OPTIONS' && (request.uri.params contains 'doroute' || request.uri.domain == '${HOST_IP}')) || is_response
+filter=(is_request && request.method != 'REFER' && request.method != 'NOTIFY' && request.method != 'OPTIONS' && (request.uri.params contains 'doroute' || request.uri.domain == '${B2BUA_APP_DOMAIN}')) || is_response
 # Bindings unabhängig von der Domain: die App meldet sich als <nummer>@${SIP_DOMAIN} an,
 # CME ruft <nummer>@${HOST_IP} an
 use-global-domain=true
@@ -148,9 +151,9 @@ routes-config-path=/run/flexisip-routes.conf
 [module::B2bua]
 enabled=true
 b2bua-server=sip:${HOST_IP}:${B2BUA_PORT};transport=udp
-# nur Anrufe der Apps Richtung CME (Anrufe an die Apps schickt CME direkt an den B2BUA; dessen eigene
-# Anfragen erkennt das Modul am User-Agent)
-filter=is_request && request.method == 'INVITE' && request.uri.domain != '${HOST_IP}'
+# alle INVITEs der Apps: neue Anrufe Richtung CME und re-INVITEs im Gespräch (an den B2BUA). Ausgenommen die
+# Anrufe des B2BUA an die Apps (Domain ${B2BUA_APP_DOMAIN}; seine Anfragen erkennt das Modul auch am User-Agent)
+filter=is_request && request.method == 'INVITE' && request.uri.domain != '${B2BUA_APP_DOMAIN}'
 
 [b2bua-server]
 application=trenscrypter
