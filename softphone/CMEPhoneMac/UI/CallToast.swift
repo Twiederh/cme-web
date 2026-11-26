@@ -285,6 +285,7 @@ struct CallToastView: View {
     @EnvironmentObject private var rec: RecordingController
     @EnvironmentObject private var settings: PhoneSettings
     @State private var hover = false
+    @State private var showInfo = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -328,10 +329,40 @@ struct CallToastView: View {
                         .help("Ausblenden")
                     }
                 }
+                .overlay(alignment: .topTrailing) {
+                    // Info: genutzte Codecs, Auflösung, Verschlüsselung (nur laufende Softphone-Gespräche)
+                    if case .softphone(let id) = t.source, t.phase == .active, hover || showInfo {
+                        Button { showInfo.toggle() } label: {
+                            Image(systemName: "info").font(.system(size: 9, weight: .bold))
+                                .frame(width: 18, height: 18)
+                                .background(Circle().fill(Color(white: 0.45)))
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 5, y: -5)
+                        .help("Codecs und Verbindung")
+                        .popover(isPresented: $showInfo, arrowEdge: .top) { CallInfoView(callId: id) }
+                    }
+                }
                 .onHover { hover = $0 }
               }
               .frame(maxHeight: .infinity, alignment: .bottom)
             }
+        }
+    }
+
+    /// Inhalt des Info-Knopfs: aktuelle Werte, jede Sekunde neu
+    private struct CallInfoView: View {
+        let callId: String
+        @ObservedObject private var sip = SIPManager.shared
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                let lines = sip.calls.first { $0.id == callId }?.mediaDetails ?? []
+                if lines.isEmpty { Text("Keine Angaben").foregroundStyle(.secondary) }
+                ForEach(lines, id: \.self) { Text($0).font(.system(size: 12)).textSelection(.enabled) }
+            }
+            .padding(12)
+            .frame(minWidth: 240, alignment: .leading)
         }
     }
 

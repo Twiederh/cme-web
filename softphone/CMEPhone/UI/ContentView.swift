@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var showLog = false
     @State private var number = ""
     @State private var showDTMF = false
+    @State private var showInfo = false
     @State private var dtmf = ""
     @AppStorage("lastDialed") private var lastDialed = ""
 
@@ -224,6 +225,24 @@ struct ContentView: View {
         .padding(18)
         .frame(maxWidth: .infinity)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22))
+        .overlay(alignment: .topTrailing) {
+            // Info: genutzte Codecs, Auflösung, Verschlüsselung
+            if ph == .active {
+                Button { showInfo = true } label: {
+                    Image(systemName: "info.circle").font(.title3).padding(12)
+                }
+                .accessibilityLabel("Codecs und Verbindung")
+                .popover(isPresented: $showInfo) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        let lines = sip.calls.first { $0.id == call.id }?.mediaDetails ?? []
+                        if lines.isEmpty { Text("Keine Angaben").foregroundStyle(.secondary) }
+                        ForEach(lines, id: \.self) { Text($0).font(.callout).textSelection(.enabled) }
+                    }
+                    .padding()
+                    .presentationCompactAdaptation(.popover)
+                }
+            }
+        }
     }
 
     private func statusText(_ c: SIPManager.CallInfo, _ ph: Phase) -> String {

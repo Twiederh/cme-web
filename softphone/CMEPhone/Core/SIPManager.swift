@@ -42,6 +42,8 @@ final class SIPManager: ObservableObject {
         var duration: Int
         /// Lokale Aufnahme läuft (nur Softphone, interne Gespräche)
         var isRecording: Bool
+        /// Für den Info-Knopf (Toast/App): Codecs, Auflösung, Bildrate, Verschlüsselung, Gegenstelle
+        var mediaDetails: [String] = []
         /// Angenommen (läuft, gehalten oder wird gerade geändert) – erst dann sind Halten usw. sinnvoll
         var isEstablished: Bool {
             switch state {
@@ -977,15 +979,43 @@ final class SIPManager: ObservableObject {
                 isIncoming: c.dir == .Incoming,
                 hasVideo: params?.videoEnabled ?? false,
                 isPaused: c.state == .Paused || c.state == .Pausing || heldCalls.contains(id),
-                audioCodec: params?.usedAudioPayloadType.map { "\($0.mimeType) \($0.clockRate / 1000) kHz" } ?? "–",
+                audioCodec: params?.usedAudioPayloadType.map(Self.codecLabel) ?? "–",
                 videoCodec: params?.usedVideoPayloadType?.mimeType ?? "–",
                 duration: c.duration,
-                isRecording: recordingCalls.contains(id))
+                isRecording: recordingCalls.contains(id),
+                mediaDetails: Self.mediaDetails(c))
         }
         recordingCalls.formIntersection(Set(calls.map(\.id)))
         replacesDropped.formIntersection(Set(calls.map(\.id)))
         heldCalls.formIntersection(Set(calls.map(\.id)))
         if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
+    }
+
+    /// "G722 16 kHz", "opus 48 kHz stereo". G.722 meldet nach RFC 3551 den RTP-Takt 8000, arbeitet aber mit 16 kHz.
+    private static func codecLabel(_ pt: PayloadType) -> String {
+        let khz = pt.mimeType.uppercased() == "G722" ? 16 : pt.clockRate / 1000
+        return "\(pt.mimeType) \(khz) kHz" + (pt.channels > 1 ? " stereo" : "")
+    }
+
+    /// Zeilen für den Info-Knopf: was in diesem Gespräch tatsächlich genutzt wird
+    private static func mediaDetails(_ c: Call) -> [String] {
+        guard let p = c.currentParams else { return [] }
+        var out: [String] = []
+        if let a = p.usedAudioPayloadType {
+            out.append("Audio: \(codecLabel(a))" + (a.normalBitrate > 0 ? ", \(a.normalBitrate) kbit/s" : ""))
+        }
+        if p.videoEnabled, let v = p.usedVideoPayloadType {
+            func size(_ d: VideoDefinition?, _ fps: Float) -> String {
+                guard let d, d.width > 0 else { return "–" }
+                return "\(d.width)×\(d.height)" + (fps > 0 ? " @ \(Int(fps.rounded())) fps" : "")
+            }
+            out.append("Video: \(v.mimeType)")
+            out.append("Senden: \(size(p.sentVideoDefinition, p.sentFramerate))")
+            out.append("Empfangen: \(size(p.receivedVideoDefinition, p.receivedFramerate))")
+        }
+        out.append("Verschlüsselung: " + (p.mediaEncryption == .None ? "keine" : "\(p.mediaEncryption)"))
+        if let r = c.remoteAddress?.asStringUriOnly() { out.append("Gegenstelle: \(r)") }
+        return out
     }
 
     private func startDurationTimer() {
