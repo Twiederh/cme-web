@@ -120,8 +120,17 @@ final class SIPManager: ObservableObject {
         opus_bitrate 32000
         opus_stereo no
         opus_sprop_stereo no
-        sip_verify_server no
+        \(Self.tlsConfig)
         """
+    }
+
+    /// TLS zum Gateway: Zertifikat gegen die mitgelieferten Wurzelzertifikate (cacert.pem, Mozilla-Liste aus macOS)
+    /// und den Namen des Gateways prüfen
+    private static var tlsConfig: String {
+        if let ca = Bundle.main.path(forResource: "cacert", ofType: "pem") {
+            return "sip_cafile \(ca)\nsip_verify_server yes"
+        }
+        return "sip_verify_server no"
     }
 
     func start() {
@@ -264,8 +273,8 @@ final class SIPManager: ObservableObject {
         guard settings.isConfigured else { log("Kein Konto konfiguriert"); return }
         let viaGateway = settings.useGateway && !settings.jabberMode
         let transport: SIPTransport = settings.jabberMode ? (settings.transport == .tcp ? .tcp : .udp) : settings.transport
-        if transport == .tls { log("TLS gibt es mit baresip noch nicht – nehme TCP") }
-        let tp = transport == .udp ? "udp" : "tcp"
+        // TLS nur über das Gateway (Kamailio, Zertifikat für dessen Namen); direkt an CME UDP/TCP
+        let tp = transport == .udp ? "udp" : (transport == .tls && viaGateway ? "tls" : "tcp")
 
         var aor = "<sip:\(settings.extensionNumber)@\(settings.sipHost)" + (viaGateway ? "" : ";transport=\(tp)") + ">"
         if !settings.displayName.isEmpty && !settings.jabberMode {

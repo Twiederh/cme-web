@@ -700,7 +700,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                        cme_host=os.environ.get("SIP_DOMAIN", "").strip() or os.environ.get("CME_HOST", ""),
                        # direkte Anmeldung an CME (Mac, wie Jabber): Shared Line funktioniert nur ohne Flexisip
                        cme_ip=os.environ.get("CME_HOST", "").strip(),
-                       gateway={"host": s["gateway_host"], "port": s["gateway_port"], "transport": "tcp"},
+                       # TLS nur für Apps, die es können (ab Build 322: Parameter tls=1)
+                       gateway=gateway_info(s, request.args.get("tls") == "1"),
                        localpush={"host": s["gateway_host"], "port": s["localpush_port"], "secret": lp_secret(),
                                   "ssids": [x for x in s.get("ssids", "").split(",") if x]},
                        voicemail=pilot(),
@@ -727,6 +728,16 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         on = bool(d.get("on"))
         rec()["set"](rid, on)
         return jsonify(ok=True, on=on)
+
+    def gateway_info(s: dict, app_tls: bool = True) -> dict:
+        """Gateway für die Apps: TLS (Kamailio, EXT_TLS_PORT), wenn der Zugang von außen an ist und die Apps den
+        Namen des Zertifikats (SIP_GW_NAME) nutzen – sonst TCP auf SIP_GW_PORT."""
+        name = os.environ.get("SIP_GW_NAME", "").strip()
+        tls = (os.environ.get("SIP_GW_TLS", "").strip() or ("1" if os.environ.get("SIP_PUBLIC_DOMAIN", "").strip() else "0")) == "1"
+        if app_tls and tls and name and s["gateway_host"].lower() == name.lower():
+            return {"host": s["gateway_host"], "port": int(os.environ.get("EXT_TLS_PORT", "5061") or 5061),
+                    "transport": "tls", "tcp_port": s["gateway_port"]}
+        return {"host": s["gateway_host"], "port": s["gateway_port"], "transport": "tcp"}
 
     # ---------------- Voicemail und Gesprächsaufnahmen in den Apps ----------------
     # Wie Visual Voicemail am 8845 (vvm.py) und die Benutzerseite (portal.py), aber mit dem App-Schlüssel: nur

@@ -145,4 +145,12 @@ check(al and al[0] == "version:1\nanna.b +4961874191283\n", f"sip-aliases {al} (
 c.delete("/api/users/anna.b@example.de", headers=HX)
 al = [open(p + "/sip-aliases").read() for p in (d + "/push", P) if os.path.exists(p + "/sip-aliases")]
 check(al[0] == "version:1\n", "Benutzer gelöscht -> Adresse weg")
+check(c.get("/client/v1/info?ext=21&tls=1", headers=H).get_json()["gateway"]["transport"] == "tcp", "Gateway als IP -> TCP (Zertifikat passt nicht)")
+os.environ["SIP_GW_NAME"] = "sip-gw.wiederhol.de"
+c.post("/api/phoneapp/settings", json={"gateway_host": "sip-gw.wiederhol.de", "gateway_port": 5062, "localpush_port": 5072}, headers=HX)
+check(c.get("/client/v1/info?ext=21", headers=H).get_json()["gateway"]["transport"] == "tcp", "alte App ohne tls=1 -> TCP")
+g = c.get("/client/v1/info?ext=21&tls=1", headers=H).get_json()["gateway"]
+check(g["transport"] == "tls" and g["port"] == 5061 and g["host"] == "sip-gw.wiederhol.de", f"Apps über TLS: {g}")
+os.environ["SIP_GW_TLS"] = "0"
+check(c.get("/client/v1/info?ext=21&tls=1", headers=H).get_json()["gateway"]["transport"] == "tcp", "SIP_GW_TLS=0 -> TCP")
 print("ALLE PHONEAPP-TESTS OK")

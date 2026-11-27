@@ -3,6 +3,7 @@
 #   re, baresip  BSD-3   github.com/baresip
 #   libg722      CMU (unbeschränkt) / gemeinfrei   github.com/sippy/libg722
 #   opus         BSD-3   github.com/xiph/opus
+#   openssl      Apache-2.0   github.com/openssl/openssl (TLS zum SIP-Gateway, 3.5 LTS)
 # Danach: zsh third_party/build.sh
 set -eu
 cd "${0:A:h}"
@@ -19,6 +20,7 @@ get re       https://github.com/baresip/re.git      v4.13.0  b827bca
 get baresip  https://github.com/baresip/baresip.git v4.13.0  8a4f18c
 get libg722  https://github.com/sippy/libg722.git   v_1_2_0  64c49ac
 get opus     https://github.com/xiph/opus.git       v1.6.1   22244de
+get openssl  https://github.com/openssl/openssl.git openssl-3.5.9 45e844f
 
 # Eigene Erweiterungen (patches/): Contact-Parameter für Push/Gerätename, eigene Header im re-INVITE
 for p in re baresip; do

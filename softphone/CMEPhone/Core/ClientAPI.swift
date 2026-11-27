@@ -99,6 +99,9 @@ enum ClientAPI {
     static func info(ext: String, device: String = "") async throws -> Info {
         var q = ["ext": ext]
         if !device.isEmpty { q["device"] = device }
+        #if os(iOS)
+        q["tls"] = "1"   // iPhone/iPad: über TLS zum Gateway (Kamailio), auch von unterwegs ohne VPN
+        #endif
         return try await load(try request("/client/v1/info", query: q), as: Info.self)
     }
 

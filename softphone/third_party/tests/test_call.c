@@ -20,7 +20,9 @@ static void wait_for(volatile int *v, int ms) { for (int i = 0; i < ms / 50 && !
 int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IONBF, 0); alarm(25);
   role = argv[1][0]; const char *port = argv[2];
-  char cfg[512]; snprintf(cfg, sizeof cfg, "sip_listen LAN_IP:%s\naudio_player coreaudio,default\naudio_source coreaudio,default\naudio_alert coreaudio,default\nrtp_ports 30000-30999\n", port);
+  char cfg[1024]; snprintf(cfg, sizeof cfg, "sip_listen LAN_IP:%s\naudio_player coreaudio,default\naudio_source coreaudio,default\naudio_alert coreaudio,default\nrtp_ports 30000-30999\n%s%s%s%s%s%s", port,
+      getenv("CERT") ? "sip_certificate " : "", getenv("CERT") ? getenv("CERT") : "", getenv("CERT") ? "\n" : "",
+      getenv("CAFILE") ? "sip_cafile " : "", getenv("CAFILE") ? getenv("CAFILE") : "", getenv("CAFILE") ? "\n" : "");
   int e = cmesip_start("CME Phone/test", cfg, "g711,libg722,opus,srtp,coreaudio", eh, NULL); printf("%c start %d\n", role, e); if (e) return 1;
   printf("%c trace %d\n", role, cmesip_set_trace(true));
   char aor[256]; snprintf(aor, sizeof aor, "<sip:%c@LAN_IP:%s>;regint=0;mediaenc=%s;audio_codecs=G722/16000/1,PCMA/8000/1,opus/48000/2",

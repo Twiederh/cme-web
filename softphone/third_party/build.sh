@@ -5,7 +5,7 @@
 #   zsh third_party/build.sh              alle Plattformen
 #   SLICES="macos" zsh third_party/build.sh   nur eine (macos | ios | iossim)
 #
-# Quellen: third_party/fetch.sh (re, baresip v4.13.0, libg722 v_1_2_0, opus v1.6.1) nach third_party/src/.
+# Quellen: third_party/fetch.sh (re, baresip v4.13.0, libg722 v_1_2_0, opus v1.6.1, openssl 3.5.9) nach third_party/src/.
 # Ergebnis: third_party/build/CMESIP.xcframework (Swift: import CMESIP)
 set -eu
 cd "${0:A:h}"
@@ -24,7 +24,7 @@ if [ -z "${DEVELOPER_DIR:-}" ] && ! xcrun --sdk iphoneos --show-sdk-path >/dev/n
   done
 fi
 
-for d in re baresip libg722 opus; do
+for d in re baresip libg722 opus openssl; do
   [ -d "$SRC/$d" ] || { echo "FEHLER: $SRC/$d fehlt – erst third_party/fetch.sh"; exit 1; }
 done
 
@@ -67,22 +67,43 @@ build_slice() {
   cmake --build $B/opus -j $JOBS >> $B/opus.log 2>&1 || { grep -E "error" $B/opus.log | head -20; exit 1; }
   cmake --install $B/opus >> $B/opus.log 2>&1
 
-  # libre: ohne OpenSSL – AES/HMAC über CommonCrypto (SRTP); TLS kommt später.
-  # Die OPENSSL_*-Platzhalter braucht nur das Konfigurieren der Testsuite (retest, wird nicht gebaut);
-  # im iOS-SDK gibt es kein OpenSSL, CMake bricht sonst ab.
+  # OpenSSL (TLS zum SIP-Gateway): statisch, nur die Bibliotheken. Dauert – das Ergebnis bleibt in
+  # build/openssl/<slice> liegen und wird nur neu gebaut, wenn es fehlt (OPENSSL_REBUILD=1 erzwingt es).
+  local O=$OUT/openssl/$slice target
+  case $slice in
+    macos)  target=darwin64-arm64 ;;
+    ios)    target=ios64-xcrun ;;
+    iossim) target=iossimulator-arm64-xcrun ;;
+  esac
+  if [ ! -f $O/lib/libssl.a ] || [ -n "${OPENSSL_REBUILD:-}" ]; then
+    echo "    OpenSSL ($target) ..."
+    rm -rf $OUT/openssl-build/$slice $O && mkdir -p $OUT/openssl-build/$slice
+    ( cd $OUT/openssl-build/$slice && \
+      SDKROOT=$sysroot CC="xcrun --sdk $sdk clang" $SRC/openssl/Configure $target --prefix=$O --libdir=lib \
+        no-shared no-tests no-apps no-docs no-module no-legacy no-engine no-dso no-ui-console no-quic \
+        $minflag -isysroot $sysroot > ../$slice.log 2>&1 && \
+      make -j $JOBS build_libs >> ../$slice.log 2>&1 && make install_dev >> ../$slice.log 2>&1 ) \
+      || { tail -30 $OUT/openssl-build/$slice.log; exit 1; }
+  fi
+  cp -R $O/include/openssl $P/include/
+  cp $O/lib/libssl.a $O/lib/libcrypto.a $P/lib/
+
+  # libre mit OpenSSL (TLS, SRTP-Krypto)
   cmake -S $SRC/re -B $B/re ${common[@]} -DLIBRE_BUILD_SHARED=OFF -DLIBRE_BUILD_STATIC=ON \
-    -DUSE_OPENSSL=OFF -DUSE_MBEDTLS=OFF \
-    -DOPENSSL_INCLUDE_DIR=$P/include -DOPENSSL_CRYPTO_LIBRARY=$P/lib/libg722.a -DOPENSSL_SSL_LIBRARY=$P/lib/libg722.a \
+    -DUSE_OPENSSL=ON -DUSE_MBEDTLS=OFF \
+    -DOPENSSL_ROOT_DIR=$P -DOPENSSL_INCLUDE_DIR=$P/include -DOPENSSL_CRYPTO_LIBRARY=$P/lib/libcrypto.a \
+    -DOPENSSL_SSL_LIBRARY=$P/lib/libssl.a -DOPENSSL_USE_STATIC_LIBS=ON \
     > $B/re.log 2>&1 || { tail -30 $B/re.log; exit 1; }
   cmake --build $B/re -j $JOBS >> $B/re.log 2>&1 || { grep -E "error" $B/re.log | head -20; exit 1; }
   cmake --install $B/re >> $B/re.log 2>&1
 
   # baresip statisch mit den Modulen im Programm (static.c)
-  cmake -S $SRC/baresip -B $B/baresip ${common[@]} -DSTATIC=ON -DMODULES="$mods" -DUSE_OPENSSL=OFF \
+  cmake -S $SRC/baresip -B $B/baresip ${common[@]} -DSTATIC=ON -DMODULES="$mods" -DUSE_OPENSSL=ON \
     -DLIBG722_INCLUDE_DIR=$P/include -DLIBG722_LIBRARY=$P/lib/libg722.a \
     -DRE_INCLUDE_DIR=$P/include/re -DRE_LIBRARY=$P/lib/libre.a \
     -DOPUS_INCLUDE_DIR=$P/include -DOPUS_LIBRARY=$P/lib/libopus.a \
-    -DOPENSSL_INCLUDE_DIR=$P/include -DOPENSSL_CRYPTO_LIBRARY=$P/lib/libg722.a -DOPENSSL_SSL_LIBRARY=$P/lib/libg722.a > $B/baresip.log 2>&1 \
+    -DOPENSSL_ROOT_DIR=$P -DOPENSSL_INCLUDE_DIR=$P/include -DOPENSSL_CRYPTO_LIBRARY=$P/lib/libcrypto.a \
+    -DOPENSSL_SSL_LIBRARY=$P/lib/libssl.a -DOPENSSL_USE_STATIC_LIBS=ON > $B/baresip.log 2>&1 \
     || { tail -30 $B/baresip.log; exit 1; }
   grep -E "MODULES_DETECTED" $B/baresip.log || true
   cmake --build $B/baresip -j $JOBS --target baresip >> $B/baresip.log 2>&1 \
@@ -100,14 +121,12 @@ build_slice() {
     ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 -fblocks \
       -I$P/include/re -I$P/include -I$SRC/baresip/include ${redefs[@]} \
       -c $TP/cmesip/cmesip.c -o $B/cmesip.o
-    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 -fblocks \
-      -I$P/include/re -I$P/include ${redefs[@]} -c $TP/cmesip/tls_stub.c -o $B/tls_stub.o
   fi
 
   # alles in eine Bibliothek
-  local libs=($P/lib/libre.a $P/lib/libg722.a $P/lib/libopus.a $B/baresip/libbaresip.a)
+  local libs=($P/lib/libre.a $P/lib/libg722.a $P/lib/libopus.a $P/lib/libssl.a $P/lib/libcrypto.a $B/baresip/libbaresip.a)
   libs+=($(find $B/baresip/modules -name '*.a'))
-  [ -f $B/cmesip.o ] && libs+=($B/cmesip.o $B/tls_stub.o)
+  [ -f $B/cmesip.o ] && libs+=($B/cmesip.o)
   xcrun libtool -static -o $B/libcmesip.a ${libs[@]} 2>/dev/null
   echo "    $(du -h $B/libcmesip.a | cut -f1) $B/libcmesip.a"
 }

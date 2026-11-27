@@ -391,7 +391,7 @@ static void *thread_main(void *unused)
 	err = baresip_init(conf_config());
 	if (err)
 		goto out;
-	err = ua_init(g.software, true, true, false);
+	err = ua_init(g.software, true, true, true);   /* TLS zum SIP-Gateway (OpenSSL) */
 	if (err)
 		goto out;
 	err = load_modules(g.modules);

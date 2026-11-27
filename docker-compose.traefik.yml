@@ -53,6 +53,9 @@ services:
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       # Adressen <name>@SIP_PUBLIC_DOMAIN für Anrufe von draußen (aus den E-Mail-Adressen im Tab Benutzer)
       SIP_PUBLIC_DOMAIN: ${SIP_PUBLIC_DOMAIN:-}
+      # Apps über TLS zum Gateway (1 = ja, Standard: wenn SIP_PUBLIC_DOMAIN gesetzt ist), Port wie Kamailio
+      SIP_GW_TLS: ${SIP_GW_TLS:-}
+      EXT_TLS_PORT: ${EXT_TLS_PORT:-5061}
       SIP_GW_PORT: ${SIP_GW_PORT:-5062}
       # Kamailio: Ziel des Pools MOB<Nummer> bei CME (sharedline.py)
       B2BUA_PORT: ${B2BUA_PORT:-5064}

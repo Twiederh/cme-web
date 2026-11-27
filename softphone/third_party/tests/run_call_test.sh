@@ -11,10 +11,23 @@ xcrun clang -I$B/headers $T/test_call.c $B/macos/libcmesip.a -framework CoreAudi
   -framework CoreFoundation -framework SystemConfiguration -framework Security -lz -lresolv -o $T/test_call
 ($T/test_call B 15070 > $T/b.txt 2>&1 &)
 sleep 1
-RECFILE=$T/rec.wav $T/test_call A 15071 "sip:B@$IP:15070" > $T/a.txt 2>&1
+RECFILE=$T/rec.wav $T/test_call A 15080 "sip:B@$IP:15070" > $T/a.txt 2>&1
 sleep 1.5
 pkill -f "$T/test_call" || true
 ok=$(grep -c 'SIP/2.0 200' $T/a.txt); ci=$(grep -c 'Call-Info' $T/a.txt)
 rec=$(stat -f %z $T/rec.wav 2>/dev/null || echo 0)
 echo "200 OK: $ok (erwartet 4), Call-Info: $ci (erwartet 2), $(grep -o 'info: .*' $T/a.txt), Aufnahme: $rec Byte (erwartet > 50000), $(grep -o 'record -*[0-9]*' $T/a.txt)"
-[ "$ok" -ge 4 ] && [ "$ci" -eq 2 ] && grep -q "menc=srtp" $T/a.txt && [ "$rec" -gt 50000 ]
+[ "$ok" -ge 4 ] && [ "$ci" -eq 2 ] && grep -q "menc=srtp" $T/a.txt && [ "$rec" -gt 50000 ] || exit 1
+
+# Zweiter Lauf über TLS: B mit selbst signiertem Zertifikat (IP im SAN), A prüft es (sip_cafile)
+openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/key.pem -out $T/crt.pem -days 1 -subj "/CN=$IP" \
+  -addext "subjectAltName=IP:$IP" >/dev/null 2>&1
+cat $T/crt.pem $T/key.pem > $T/b.pem
+(CERT=$T/b.pem $T/test_call B 15090 > $T/b2.txt 2>&1 &)
+sleep 1
+CAFILE=$T/crt.pem $T/test_call A 15100 "sip:B@$IP:15091;transport=tls" > $T/a2.txt 2>&1
+sleep 1.5
+pkill -f "$T/test_call" || true
+ok=$(grep -c 'SIP/2.0 200' $T/a2.txt)
+echo "TLS: 200 OK: $ok (erwartet 4), $(grep -o 'info: .*' $T/a2.txt)"
+[ "$ok" -ge 4 ] && grep -q "menc=srtp" $T/a2.txt
