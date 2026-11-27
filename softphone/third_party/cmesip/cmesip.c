@@ -739,7 +739,23 @@ int cmesip_audio_session(bool active)
 {
 #if TARGET_OS_IPHONE
 	return run(^int(void) {
+		struct le *le;
 		audiosess_interrupt(!active);
+		if (!active)
+			return 0;
+		/* Ton neu aufbauen: Startete er vor der Freigabe durch CallKit (Annehmen kommt vor didActivate),
+		 * lehnte iOS die Audio-Units ab ('!pri'), und audio_update brach ab – ohne Player, Mikrofon
+		 * und Empfang. */
+		for (le = list_head(uag_list()); le; le = le->next) {
+			struct le *lc;
+			for (lc = list_head(ua_calls(le->data)); lc; lc = lc->next) {
+				struct audio *au = call_audio(lc->data);
+				if (au && stream_sdpmedia(audio_strm(au))) {
+					int err = audio_update(au);
+					info("cmesip: Audio nach Aktivierung neu gestartet (%m)\n", err);
+				}
+			}
+		}
 		return 0;
 	});
 #else

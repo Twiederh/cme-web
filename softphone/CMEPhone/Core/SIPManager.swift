@@ -245,7 +245,7 @@ final class SIPManager: ObservableObject {
             case "G722": return "G722/16000/1"
             case "PCMA": return "PCMA/8000/1"
             case "PCMU": return "PCMU/8000/1"
-            case "OPUS": return "opus/48000/2"
+            case "OPUS": return "opus/48000/1"   // baresip führt Opus (Mono) so; im SDP steht opus/48000/2
             default: return nil
             }
         }.joined(separator: ",")
@@ -738,6 +738,7 @@ final class SIPManager: ObservableObject {
 
     /// CallKit hat die Audio-Sitzung aktiviert bzw. beendet: Audio-Units starten/stoppen
     func audioSession(active: Bool) {
+        log("Audio-Sitzung \(active ? "aktiv" : "inaktiv") (CallKit)")
         _ = cmesip_audio_session(active)
     }
 
