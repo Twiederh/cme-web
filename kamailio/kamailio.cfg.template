@@ -1,0 +1,373 @@
+#!KAMAILIO
+#
+# Kamailio für CME Phone (ersetzt Flexisip). Die Platzhalter (Dollar, Name in geschweiften Klammern) füllt entrypoint.sh.
+#
+# Aufbau:
+#   Apps (iPhone/iPad)  --TCP/UDP ${HOST_IP}:${APP_PORT}-->  Kamailio  --UDP ${HOST_IP}:${CME_SIDE_PORT}-->  CME
+#   CME klingelt den Pool MOB<Nummer>; dessen Contact (cme-web meldet ihn an) ist ${HOST_IP}:${CME_SIDE_PORT}.
+#
+# - Registrar für die Apps; Digest gegen die Passwörter aus cme-web (htable ha1/num, Anmeldename = Gerät).
+# - Topologie-Verdeckung (topos): CME sieht als Contact immer ${HOST_IP}:${CME_SIDE_PORT} und ordnet so jedes
+#   Gespräch der Apps dem Pool MOB<Nummer> zu (Shared Line: Halten sichtbar, Übernehmen per Replaces).
+#   Call-ID und Tags bleiben durchgehend gleich - Replaces, Call-Info (remotecc) und UPDATE laufen unverändert.
+# - Medien über rtpengine: zur CME RTP/AVP, zu den Apps ${APP_MEDIA} (SRTP nur auf der iOS-Seite).
+# - Push: bei einem Anruf an die Apps weckt der Relay (cme-push-relay) jedes Gerät mit pn-prid; das Gerät meldet
+#   sich neu an, tsilo hängt es dann an den wartenden Anruf an.
+
+####### Global ##########
+debug=${LOG_LEVEL}
+log_stderror=yes
+memdbg=5
+memlog=5
+log_prefix="{$mt $hdr(CSeq) $ci} "
+fork=yes
+children=4
+tcp_children=4
+auto_aliases=no
+server_header="Server: CME-Kamailio"
+user_agent_header="User-Agent: CME-Kamailio"
+
+listen=udp:${HOST_IP}:${APP_PORT}
+listen=tcp:${HOST_IP}:${APP_PORT}
+listen=udp:${HOST_IP}:${CME_SIDE_PORT}
+# JSON-RPC für cme-web (Status der Anmeldungen), nur aus dem Docker-Netz / vom Host
+listen=tcp:${HOST_IP}:${RPC_PORT}
+
+# Apps: Anmeldungen gelten bis zu 7 Tage, die TCP-Verbindung bleibt, solange iOS die App lässt
+tcp_connection_lifetime=86400
+tcp_accept_no_cl=yes
+tcp_keepalive=yes
+tcp_keepidle=60
+
+####### Module ##########
+loadmodule "jsonrpcs.so"
+loadmodule "kex.so"
+loadmodule "corex.so"
+loadmodule "tm.so"
+loadmodule "tmx.so"
+loadmodule "sl.so"
+loadmodule "rr.so"
+loadmodule "pv.so"
+loadmodule "maxfwd.so"
+loadmodule "usrloc.so"
+loadmodule "registrar.so"
+loadmodule "textops.so"
+loadmodule "siputils.so"
+loadmodule "xlog.so"
+loadmodule "sanity.so"
+loadmodule "ctl.so"
+loadmodule "cfg_rpc.so"
+loadmodule "auth.so"
+loadmodule "db_text.so"
+loadmodule "htable.so"
+loadmodule "nathelper.so"
+loadmodule "rtpengine.so"
+loadmodule "topos.so"
+loadmodule "tsilo.so"
+loadmodule "http_client.so"
+loadmodule "xhttp.so"
+loadmodule "uac.so"
+
+modparam("jsonrpcs", "transport", 1)
+modparam("ctl", "binrpc", "unix:/run/kamailio/kamailio_ctl")
+
+modparam("tm", "fr_timer", 5000)
+modparam("tm", "fr_inv_timer", 30000)
+modparam("rr", "enable_full_lr", 1)
+modparam("rr", "append_fromtag", 1)
+
+# db_text: Änderungen sofort auf die Platte (Anmeldungen überstehen einen Neustart)
+modparam("db_text", "db_mode", 1)
+
+# Passwörter der Apps (passwd2htable.py aus der Datei von cme-web), Schlüssel = Anmeldename klein
+modparam("htable", "db_url", "text://${DBDIR}")
+modparam("htable", "htable", "ha1=>size=6;dbtable=subs_ha1;")
+modparam("htable", "htable", "num=>size=6;dbtable=subs_num;")
+modparam("htable", "htable", "pushed=>size=6;autoexpire=120;")
+# Gespräche mit SRTP zur App (iOS): Call-ID -> 1, damit re-INVITEs der CME wieder SRTP zur App bekommen
+modparam("htable", "htable", "srtp=>size=8;autoexpire=43200;")
+
+modparam("usrloc", "db_url", "text://${DBDIR}")
+modparam("usrloc", "db_mode", ${USRLOC_DB_MODE})
+modparam("usrloc", "use_domain", 0)
+modparam("registrar", "default_expires", 600)
+modparam("registrar", "min_expires", 60)
+modparam("registrar", "max_expires", 604800)
+modparam("registrar", "received_avp", "$avp(RECEIVED)")
+modparam("nathelper", "received_avp", "$avp(RECEIVED)")
+
+modparam("auth", "nonce_expire", 600)
+
+modparam("rtpengine", "rtpengine_sock", "udp:127.0.0.1:${RTPENGINE_NG_PORT}")
+
+modparam("topos", "db_url", "text://${DBDIR}")
+modparam("topos", "storage", "db")
+
+modparam("http_client", "connection_timeout", 2)
+
+####### Routing ##########
+request_route {
+	if (!mf_process_maxfwd_header("10")) {
+		sl_send_reply("483", "Too Many Hops");
+		exit;
+	}
+	if (!sanity_check()) {
+		xlog("L_WARN", "kaputte Anfrage von $si:$sp\n");
+		exit;
+	}
+
+	route(WITHINDLG);
+
+	if (is_method("CANCEL")) {
+		if (t_check_trans()) {
+			route(RELAY);
+		}
+		exit;
+	}
+	if (!is_method("ACK")) {
+		t_check_trans();
+	}
+
+	if (is_method("REGISTER")) {
+		route(REGISTER);
+	}
+
+	if ($si == "${CME_IP}") {
+		route(FROM_CME);
+	}
+	route(FROM_APP);
+}
+
+# Anfragen im Gespräch (Halten/Fortsetzen, UPDATE, BYE, Replaces-Folgeanfragen ...)
+route[WITHINDLG] {
+	if (!has_totag()) return;
+	if (loose_route()) {
+		if (is_method("BYE")) {
+			rtpengine_delete();
+			sht_rm("srtp", "$ci");
+		} else if (is_method("ACK") && has_body("application/sdp")) {
+			rtpengine_manage();
+		} else if (has_body("application/sdp")) {
+			route(MEDIA_OFFER);
+		}
+		t_on_reply("MANAGE");
+		route(RELAY);
+		exit;
+	}
+	if (is_method("ACK")) {
+		if (t_check_trans()) {
+			route(RELAY);
+		}
+		exit;
+	}
+	sl_send_reply("404", "Not here");
+	exit;
+}
+
+# SDP in einer Anfrage: Richtung CME RTP/AVP, Richtung App ${APP_MEDIA}
+route[MEDIA_OFFER] {
+	if ($si == "${CME_IP}" && $sht(srtp=>$ci) == 1) {
+		rtpengine_manage("${APP_MEDIA} replace-origin replace-session-connection ICE=remove");
+	} else if ($si == "${CME_IP}") {
+		rtpengine_manage("RTP/AVP replace-origin replace-session-connection ICE=remove");
+	} else {
+		rtpengine_manage("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove");
+	}
+}
+
+route[RELAY] {
+	if (!t_relay()) {
+		sl_reply_error();
+	}
+	exit;
+}
+
+# Anmeldung einer App: Digest mit dem Anmeldenamen des Geräts, die Nummer im To muss dazu passen
+route[REGISTER] {
+	if (!is_present_hf("Authorization") || !pv_www_authenticate("${SIP_DOMAIN}", "$sht(ha1=>$(au{s.tolower}))", "1")) {
+		www_challenge("${SIP_DOMAIN}", "0");
+		exit;
+	}
+	if ($sht(num=>$(au{s.tolower})) != $tU) {
+		xlog("L_WARN", "REGISTER: $au gehört nicht zu $tU\n");
+		sl_send_reply("403", "Forbidden");
+		exit;
+	}
+	consume_credentials();
+	fix_nated_register();
+	if (!save("location")) {
+		sl_reply_error();
+		exit;
+	}
+	xlog("L_INFO", "angemeldet: $au ($tU) von $si:$sp/$pr, Expires $hdr(Expires)\n");
+	# cme-web (Anzeige "Softphone angemeldet") Bescheid geben
+	$var(exp) = $hdr(Expires);
+	if ($var(exp) == $null || $var(exp) == "") {
+		$var(exp) = $(ct{tobody.params}{param.value,expires});
+	}
+	$uac_req(method) = "NOTIFY";
+	$uac_req(ruri) = "sip:cme-web@${HOST_IP}:${SHARED_LINE_PORT}";
+	$uac_req(furi) = "sip:kamailio@${HOST_IP}";
+	$uac_req(turi) = "sip:cme-web@${HOST_IP}";
+	$uac_req(hdrs) = "Event: x-cme-app\r\nX-CME-Device: " + $au + "\r\nX-CME-Number: " + $tU
+		+ "\r\nX-CME-Expires: " + $var(exp) + "\r\nX-CME-Source: " + $si + "\r\nX-CME-UA: " + $ua + "\r\n";
+	uac_req_send();
+	# wartet ein Anruf auf dieses Gerät (Push), jetzt anhängen
+	ts_append("location", "sip:$tU@${SIP_DOMAIN}");
+	exit;
+}
+
+# Neue Anfragen der CME: Anrufe an den Pool MOB<Nummer> -> Apps; sonst (NOTIFY service-control, OPTIONS,
+# REFER) bestätigen
+route[FROM_CME] {
+	if (!is_method("INVITE")) {
+		if (is_method("REFER")) {
+			sl_send_reply("202", "Accepted");
+		} else {
+			sl_send_reply("200", "OK");
+		}
+		exit;
+	}
+	record_route();
+	$ru = "sip:" + $rU + "@${SIP_DOMAIN}";
+	if (!t_newtran()) {
+		sl_reply_error();
+		exit;
+	}
+	# Push an alle Geräte der Nummer, Anruf für deren Neuanmeldung vormerken
+	route(PUSH);
+	ts_store("sip:$rU@${SIP_DOMAIN}");
+	if (!lookup("location")) {
+		if ($var(pushed) == 0) {
+			t_reply("480", "Temporarily Unavailable");
+			exit;
+		}
+	}
+	# Warte-Zweig: hält den Anruf offen, bis ein per Push geweckte Gerät sich angemeldet hat (ts_append)
+	if ($var(pushed) > 0) {
+		append_branch("sip:wait@${HOST_IP}:${WAIT_PORT};transport=udp");
+	}
+	t_set_fr(30000, 30000);
+	t_on_branch("TO_APP");
+	t_on_reply("TO_APP");
+	t_on_failure("TO_APP");
+	route(RELAY);
+}
+
+branch_route[TO_APP] {
+	if ($rp == ${WAIT_PORT}) {
+		return;
+	}
+	# tote TCP-Verbindung (App schläft): nicht selbst aufbauen, der Push weckt das Gerät
+	set_forward_no_connect();
+	if (!has_body("application/sdp")) {
+		return;
+	}
+	# iOS-Geräte (Contact mit pn-provider) bekommen SRTP, der Mac unverschlüsseltes RTP
+	if ($ru =~ "pn-provider=") {
+		setbflag(1);
+		rtpengine_offer("${APP_MEDIA} replace-origin replace-session-connection ICE=remove via-branch=1");
+	} else {
+		rtpengine_offer("RTP/AVP replace-origin replace-session-connection ICE=remove via-branch=1");
+	}
+}
+
+onreply_route[TO_APP] {
+	if (t_check_status("2[0-9][0-9]") && isbflagset(1)) {
+		$sht(srtp=>$ci) = 1;
+	}
+	if (has_body("application/sdp")) {
+		rtpengine_answer("replace-origin replace-session-connection ICE=remove via-branch=1");
+	}
+}
+
+failure_route[TO_APP] {
+	if (t_is_canceled()) {
+		exit;
+	}
+	if (t_check_status("408")) {
+		t_reply("480", "Temporarily Unavailable");
+	}
+}
+
+onreply_route[MANAGE] {
+	if (has_body("application/sdp")) {
+		rtpengine_manage();
+	}
+}
+
+# Neue Anfragen der Apps (Anrufe, Übernehmen per Replaces ...): Digest, dann zur CME über den Pool-Socket
+route[FROM_APP] {
+	if (!is_present_hf("Proxy-Authorization") || !pv_proxy_authenticate("${SIP_DOMAIN}", "$sht(ha1=>$(au{s.tolower}))", "1")) {
+		proxy_challenge("${SIP_DOMAIN}", "0");
+		exit;
+	}
+	if ($sht(num=>$(au{s.tolower})) != $fU) {
+		xlog("L_WARN", "$rm: $au gehört nicht zu $fU\n");
+		sl_send_reply("403", "Forbidden");
+		exit;
+	}
+	consume_credentials();
+	if (is_method("INVITE|SUBSCRIBE|REFER")) {
+		record_route();
+	}
+	if (is_method("INVITE") && has_body("application/sdp")) {
+		if (search_body("a=crypto:")) {
+			$sht(srtp=>$ci) = 1;
+		}
+		rtpengine_manage("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove");
+	}
+	$du = "sip:${CME_IP}:${CME_PORT};transport=udp";
+	force_send_socket(udp:${HOST_IP}:${CME_SIDE_PORT});
+	t_on_reply("MANAGE");
+	t_on_failure("FROM_APP");
+	route(RELAY);
+}
+
+failure_route[FROM_APP] {
+	if (is_method("INVITE")) {
+		rtpengine_delete();
+	}
+}
+
+# Push an jedes Gerät der Nummer mit pn-prid (einmal je Anruf und Token); $var(pushed) = Anzahl
+route[PUSH] {
+	$var(pushed) = 0;
+	if (!reg_fetch_contacts("location", "sip:$rU@${SIP_DOMAIN}", "c")) {
+		return;
+	}
+	$var(i) = 0;
+	while ($var(i) < $(ulc(c=>count))) {
+		$var(addr) = $(ulc(c=>addr)[$var(i)]);
+		$var(prid) = $(var(addr){uri.param,pn-prid});
+		$var(key) = $ci + "|" + $var(prid);
+		if ($var(prid) != "" && $sht(pushed=>$var(key)) == $null) {
+			$sht(pushed=>$var(key)) = 1;
+			$var(inst) = $(ulc(c=>instance)[$var(i)]);
+			$var(url) = "http://127.0.0.1:${RELAY_PORT}/push?pn-prid=" + $(var(prid){s.escape.param})
+				+ "&app-id=" + $(var(addr){uri.param,pn-param})
+				+ "&pn-provider=" + $(var(addr){uri.param,pn-provider})
+				+ "&call-id=" + $(ci{s.escape.param})
+				+ "&from-uri=" + $(fu{s.escape.param})
+				+ "&from-name=" + $(fn{s.escape.param})
+				+ "&uid=" + $(var(inst){s.escape.param});
+			$var(rc) = http_client_query("$var(url)", "$var(res)");
+			xlog("L_INFO", "Push an $(var(prid){s.substr,0,12}): HTTP $var(rc) $var(res)\n");
+			$var(pushed) = $var(pushed) + 1;
+		}
+		$var(i) = $var(i) + 1;
+	}
+}
+
+# JSON-RPC (cme-web: ul.dump für den Anmeldestatus)
+event_route[xhttp:request] {
+	if ($Rp != ${RPC_PORT} || !($si =~ "^(127\.|172\.(1[6-9]|2[0-9]|3[01])\.|${HOST_IP_RE}$)")) {
+		xhttp_reply("403", "Forbidden", "text/plain", "");
+		exit;
+	}
+	if ($hu =~ "^/RPC") {
+		jsonrpc_dispatch();
+		exit;
+	}
+	xhttp_reply("404", "Not Found", "text/plain", "");
+}

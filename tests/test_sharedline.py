@@ -211,3 +211,20 @@ def test_track_held_notifies_once_and_ends():
     a._track_held(_notify("192.168.1.110", RESUMED_BODY))
     assert events == [("held", "+4961874191283", "3E11@192.168.11.4", "sip:+4961874191283@192.168.11.46"),
                       ("end", "+4961874191283", "3E11@192.168.11.4")]
+
+
+def test_app_registered_via_kamailio_notify():
+    agent = sharedline.Agent("127.0.0.1", "127.0.0.1", 0, "127.0.0.1:5062", lambda n: {}, "cme.local")
+    agent_port = agent.sock.getsockname()[1]
+    kam = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    kam.bind(("127.0.0.1", 0))
+    kam.settimeout(2)
+    msg = ("NOTIFY sip:cme-web@127.0.0.1 SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:5062;branch=z9hG4bK9\r\n"
+           "From: <sip:kamailio@127.0.0.1>;tag=k\r\nTo: <sip:cme-web@127.0.0.1>\r\nCall-ID: k1\r\n"
+           "CSeq: 1 NOTIFY\r\nEvent: x-cme-app\r\nX-CME-Device: MOBIphone\r\nX-CME-Number: +4961874191283\r\n"
+           "X-CME-Expires: 604800\r\nX-CME-Source: 10.0.0.5\r\nX-CME-UA: CME Phone/297\r\nContent-Length: 0\r\n\r\n")
+    kam.sendto(msg.encode(), ("127.0.0.1", agent_port))
+    assert kam.recvfrom(65535)[0].decode().startswith("SIP/2.0 200")
+    st = agent.app_status()
+    assert len(st) == 1 and st[0]["name"] == "MOBIphone" and st[0]["state"] == "angemeldet" \
+        and st[0]["ip"] == "10.0.0.5" and st[0]["expires"] == min(604800, sharedline.APP_MAX_EXPIRES), st

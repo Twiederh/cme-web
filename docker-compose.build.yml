@@ -10,10 +10,7 @@ services:
     build: ./recorder
   push-relay:
     build: ./push-relay
-  flexisip:
-    build:
-      context: ./flexisip
-      args:
-        FLEXISIP_VERSION: "2.6.2"
-        LINPHONESDK_VERSION: "5.5.16"
-        NJOBS: "4"
+  kamailio:
+    build: ./kamailio
+  rtpengine:
+    build: ./rtpengine

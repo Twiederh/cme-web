@@ -218,6 +218,11 @@ class Agent:
                     self._app_register(msg, addr)
                 except Exception:  # noqa: BLE001
                     self._reply(msg, addr, "500 Server Internal Error")
+            elif msg.startswith("NOTIFY") and _header(msg, "Event").lower() == "x-cme-app":
+                # Kamailio meldet eine erfolgreiche Anmeldung einer App (Digest prüft Kamailio selbst)
+                self._reply_ok(msg, addr)
+                if addr[0] in (self.host, "127.0.0.1") or addr[0].startswith("172."):
+                    self._app_registered(msg)
             elif msg.strip():
                 # NOTIFY (Event: dialog, service-control), REFER, OPTIONS u. a. bestätigen – ohne die Bestätigung
                 # des ersten NOTIFY nimmt CME das Gerät nicht in die Shared Line auf
@@ -318,6 +323,23 @@ class Agent:
         self.app_devices[name.lower()] = {"name": name, "number": number, "time": now, "expires": expires,
                                           "ip": m.group(1) if m else "", "ua": _header(msg, "User-Agent")[:60]}
         self._reply(msg, addr, "200 OK", extra)
+
+    def _app_registered(self, msg: str) -> None:
+        """Anmeldung einer App, gemeldet von Kamailio (X-CME-Device/-Number/-Expires/-Source/-UA)."""
+        name = _header(msg, "X-CME-Device").strip()
+        number = _header(msg, "X-CME-Number").strip()
+        if not name or not number:
+            return
+        try:
+            expires = min(int(_header(msg, "X-CME-Expires") or 600), APP_MAX_EXPIRES)
+        except ValueError:
+            expires = 600
+        now = time.time()
+        if expires:
+            self.app_regs[number] = now
+        self.app_devices[name.lower()] = {"name": name, "number": number, "time": now, "expires": expires,
+                                          "ip": _header(msg, "X-CME-Source").strip(),
+                                          "ua": _header(msg, "X-CME-UA")[:60]}
 
     def app_status(self) -> list[dict]:
         """Anmeldungen der Mobilgeräte bei Flexisip: angemeldet (gültig), abgelaufen oder abgemeldet."""

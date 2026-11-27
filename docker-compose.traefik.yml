@@ -52,7 +52,7 @@ services:
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_GW_PORT: ${SIP_GW_PORT:-5062}
-      # B2BUA in Flexisip: Ziel des Pools MOB<Nummer> bei CME (sharedline.py)
+      # Kamailio: Ziel des Pools MOB<Nummer> bei CME (sharedline.py)
       B2BUA_PORT: ${B2BUA_PORT:-5064}
       RELAY_LOCALPUSH_PORT: ${RELAY_LOCALPUSH_PORT:-5072}
       APNS_TEAM_ID: ${APNS_TEAM_ID:-}
@@ -176,15 +176,15 @@ services:
 
 
   # ---------------- CME Phone (Softphone, Ordner softphone/) ----------------
-  # Push-Gateway vor CME: Die Apps melden sich hierueber an, CME schickt eingehende Anrufe hierher.
-  # Host-Netz (SIP braucht die echten Absender-IPs), nicht hinter Traefik. Braucht TCP/UDP SIP_GW_PORT (5062).
-  # Das Image baut GitHub (.github/workflows/images.yml); Flexisip wird dort aus den Quellen gebaut.
-  flexisip:
-    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-flexisip:${IMAGE_TAG:-latest}
+  # SIP-Server der Apps (iPhone/iPad): Registrar, Proxy zur CME, Push über push-relay (Ordner kamailio/).
+  # Die Apps melden sich hier an (TCP/UDP SIP_GW_PORT, 5062); CME klingelt den Pool MOB<Nummer> unter
+  # VM_HOST_IP:B2BUA_PORT (5064, nur UDP von der CME). Host-Netz (SIP braucht die echten Absender-IPs).
+  kamailio:
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-kamailio:${IMAGE_TAG:-latest}
     labels:
       # Updates über Portainer (Pull and redeploy), nicht über Watchtower – kein Neustart mitten im Gespräch
       - "com.centurylinklabs.watchtower.enable=false"
-    container_name: cme-flexisip
+    container_name: cme-kamailio
     # SIP-Signalisierung der Apps: vor den uebrigen Diensten, hinter Asterisk/Recorder
     cpu_shares: 2048
     network_mode: host
@@ -193,21 +193,37 @@ services:
       HOST_IP: ${VM_HOST_IP:?VM_HOST_IP = LAN-IP des Docker-Hosts setzen}
       CME_IP: ${CME_HOST}
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
-      SIP_GW_NAME: ${SIP_GW_NAME:-}
       SIP_PORT: ${SIP_GW_PORT:-5062}
-      # B2BUA zwischen Apps und CME (UDP, Host-Netz) und seine RTP-Ports
+      # Contact des Pools MOB<Nummer> bei CME (cme-web meldet ihn mit diesem Port an)
       B2BUA_PORT: ${B2BUA_PORT:-5064}
-      B2BUA_RTP_PORTS: ${B2BUA_RTP_PORTS:-40000-40199}
       RELAY_PORT: ${RELAY_HTTP_PORT:-8092}
-      # cme-web prueft die Anmeldungen der Apps (sharedline.py)
-      SHARED_LINE_PORT: ${SHARED_LINE_PORT:-5074}
-      LOG_LEVEL: ${FLEXISIP_LOG_LEVEL:-message}
+      # JSON-RPC für cme-web (Anmeldestatus der Apps)
+      RPC_PORT: ${KAMAILIO_RPC_PORT:-5069}
+      # 1 = SRTP zu den Apps (Standard), 0 = unverschlüsselt
+      APP_SRTP: ${APP_SRTP:-1}
+      KAMAILIO_LOG_LEVEL: ${KAMAILIO_LOG_LEVEL:-2}
       TZ: Europe/Berlin
     volumes:
-      - flexisip-conf:/etc/flexisip
+      # Anmeldungen der Apps (überstehen einen Neustart)
+      - kamailio-data:/data/kamailio
       # Passwoerter der Apps (cme-web schreibt flexisip-passwd), nur lesbar
       - softphone-data:/data/push:ro
-      - flexisip-log:/var/opt/belledonne-communications/log/flexisip
+
+  # Medien der Apps: SRTP zu den iOS-Geräten, RTP zur CME (gesteuert von Kamailio, Ordner rtpengine/).
+  # Braucht UDP APP_RTP_PORTS (40000-40199) auf VM_HOST_IP.
+  rtpengine:
+    image: ${IMAGE_PREFIX:-ghcr.io/twiederh}/cme-rtpengine:${IMAGE_TAG:-latest}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    container_name: cme-rtpengine
+    # Medien: gleiche Priorität wie Asterisk/Recorder
+    cpu_shares: 4096
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      HOST_IP: ${VM_HOST_IP:?VM_HOST_IP = LAN-IP des Docker-Hosts setzen}
+      RTP_PORTS: ${APP_RTP_PORTS:-40000-40199}
+      TZ: Europe/Berlin
 
   # Weckt schlafende Apps: im Heim-WLAN per Local Push (TCP RELAY_LOCALPUSH_PORT, 5072), sonst per APNs.
   # Eingerichtet wird er in cme-web (Tab Softphone): APNs-Schluessel und Secret liegen im Volume softphone-data.
@@ -242,5 +258,4 @@ volumes:
   whisper-cache:
   recordings:
   softphone-data:
-  flexisip-conf:
-  flexisip-log:
+  kamailio-data:
