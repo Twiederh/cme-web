@@ -19,6 +19,7 @@ final class CallCenter: NSObject, ObservableObject {
         NSApp.requestUserAttention(.criticalRequest)
         completion?()
     }
+    func reportOutgoingStarted(callId: String) {}
     func reportOutgoingConnected(callId: String) {}
     func reportEnded(callId: String, failed: Bool) {}
     func forget(callId: String) {}

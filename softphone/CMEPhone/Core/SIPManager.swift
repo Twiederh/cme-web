@@ -1,17 +1,21 @@
 import Foundation
 import Combine
-import linphonesw
+import AVFoundation
+import Network
+import CMESIP
 #if canImport(UIKit)
 import UIKit
+import PushKit
 typealias PlatformView = UIView
 #else
 import AppKit
 typealias PlatformView = NSView
 #endif
 
-/// Zentraler Wrapper um den liblinphone-Core: Konto, Codecs, Anrufe, Video.
-/// Läuft komplett auf dem Main-Thread (liblinphone iteriert automatisch im Main-Loop).
-/// Gemeinsam für iOS/iPadOS (CallKit) und macOS (eigene Anruf-UI über `CallCenter`).
+/// SIP-Schicht der Apps (iOS und Mac) über baresip (CMESIP.xcframework, C-Schicht `cmesip`).
+/// baresip läuft in einem eigenen Thread; seine Ereignisse kommen per DispatchQueue.main hier an.
+/// iOS: PushKit (VoIP-Push über Kamailio/push-relay), CallKit, SRTP über das Gateway.
+/// Mac: wie Jabber direkt an der CME (eigener Pool), Rufton selbst.
 @MainActor
 final class SIPManager: ObservableObject {
     static let shared = SIPManager()
@@ -29,22 +33,27 @@ final class SIPManager: ObservableObject {
         }
     }
 
+    /// Zustände wie bei liblinphone (gleiche Namen, damit die Oberfläche unverändert bleibt)
+    enum CallState: String {
+        case Idle, IncomingReceived, PushIncomingReceived, IncomingEarlyMedia, EarlyUpdating, EarlyUpdatedByRemote
+        case OutgoingInit, OutgoingProgress, OutgoingRinging, OutgoingEarlyMedia
+        case Connected, StreamsRunning, Pausing, Paused, PausedByRemote, Resuming, Updating, UpdatedByRemote
+        case End, Error, Released
+    }
+
     struct CallInfo: Identifiable, Equatable {
         let id: String            // SIP Call-ID
         var remote: String
         var displayName: String
-        var state: Call.State
+        var state: CallState
         var isIncoming: Bool
         var hasVideo: Bool
         var isPaused: Bool
         var audioCodec: String
         var videoCodec: String
         var duration: Int
-        /// Lokale Aufnahme läuft (nur Softphone, interne Gespräche)
         var isRecording: Bool
-        /// Für den Info-Knopf (Toast/App): Codecs, Auflösung, Bildrate, Verschlüsselung, Gegenstelle
         var mediaDetails: [String] = []
-        /// Angenommen (läuft, gehalten oder wird gerade geändert) – erst dann sind Halten usw. sinnvoll
         var isEstablished: Bool {
             switch state {
             case .Connected, .StreamsRunning, .Pausing, .Paused, .PausedByRemote, .Resuming, .Updating, .UpdatedByRemote:
@@ -54,6 +63,12 @@ final class SIPManager: ObservableObject {
         }
     }
 
+    struct AudioDevice: Identifiable, Hashable {
+        let id: String            // Gerätename wie bei CoreAudio (baresip sucht danach)
+        let canRecord: Bool
+        let canPlay: Bool
+    }
+
     @Published private(set) var registration: RegistrationStatus = .none
     @Published private(set) var calls: [CallInfo] = []
     @Published private(set) var micMuted = false
@@ -61,22 +76,15 @@ final class SIPManager: ObservableObject {
     @Published private(set) var voipToken: String?
     @Published private(set) var lastLog: [String] = []
 
-    private(set) var core: Core!
-    private var coreDelegate: CoreDelegate!
     private let settings = PhoneSettings.shared
+    private var callStateHandlers: [(CallInfo, CallState) -> Void] = []
     private var durationTimer: Timer?
-    private var iterateTimer: Timer?
-    /// Zusätzliche Beobachter (z.B. Statusabo für das Tischtelefon auf macOS).
-    private var callStateHandlers: [(Call, Call.State) -> Void] = []
-    private var extraDelegates: [CoreDelegate] = []
+    private var started = false
+    private var software = ""
+    private var pathMonitor: NWPathMonitor?
+    private var lastPath = ""
 
-    /// Zusätzlichen Core-Delegate anhängen (z.B. für NOTIFY des Statusabos).
-    func addCoreDelegate(_ delegate: CoreDelegate) {
-        extraDelegates.append(delegate)
-        core?.addDelegate(delegate: delegate)
-    }
-
-    func addCallStateHandler(_ handler: @escaping (Call, Call.State) -> Void) {
+    func addCallStateHandler(_ handler: @escaping (CallInfo, CallState) -> Void) {
         callStateHandlers.append(handler)
     }
 
@@ -84,100 +92,58 @@ final class SIPManager: ObservableObject {
 
     // MARK: - Start
 
+    /// Jabber: "User-Agent: Cisco-CSF", sonst "CME Phone/<Build>" (cme-web zeigt den Build an)
+    private var wantedSoftware: String {
+        settings.jabberMode ? "Cisco-CSF"
+            : "CME Phone/" + ((Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "?")
+    }
+
+    #if os(iOS)
+    private static let audioModule = "audiounit"
+    #else
+    private static let audioModule = "coreaudio"
+    #endif
+
+    private var baresipConfig: String {
+        // 5060 wie ein Cisco-Telefon (s. CLAUDE.md: UDM-SIP-Helfer); auf allen Schnittstellen, UDP und TCP
+        let port = settings.jabberMode ? 5060 : 0
+        let m = Self.audioModule
+        let out = settings.audioOutputId.isEmpty ? "default" : settings.audioOutputId
+        let inp = settings.audioInputId.isEmpty ? "default" : settings.audioInputId
+        return """
+        sip_listen 0.0.0.0:\(port)
+        audio_player \(m),\(out)
+        audio_source \(m),\(inp)
+        audio_alert \(m),\(out)
+        rtp_ports 30000-30999
+        rtp_timeout 60
+        opus_bitrate 32000
+        opus_stereo no
+        opus_sprop_stereo no
+        sip_verify_server no
+        """
+    }
+
     func start() {
-        guard core == nil else { return }
-        LoggingService.Instance.logLevel = .Message
-        let configDir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedConfig.appGroup)
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        let configPath = configDir.appendingPathComponent("linphonerc").path
-
-        do {
-            // Konfiguration vor dem Erzeugen des Cores setzen: manche Werte (z.B. der NAT-Helfer) liest liblinphone
-            // nur beim Erzeugen, nicht erst bei core.start().
-            let config = try Factory.Instance.createConfig(path: configPath)
-            #if os(macOS)
-            // CME setzt in Antworten kein "received"/"rport" in den Via. belle-sips NAT-Helfer hält den Contact dann
-            // für falsch und schickt jedes REGISTER/SUBSCRIBE sofort ein zweites Mal ("resubmitting request because
-            // contact sent was not correct"). Das erste NOTIFY von CME kommt mitten in diese Wiederholung und wird
-            // mit 481 abgelehnt – CME nimmt den Mac dann nicht in die Shared Line auf. Im LAN direkt an CME ist der
-            // Helfer überflüssig.
-            config.setInt(section: "net", key: "enable_nat_helper", value: settings.jabberMode ? 0 : 1)
-            #endif
-            core = try Factory.Instance.createCoreWithConfig(config: config, systemContext: nil)
-        } catch {
-            log("Core konnte nicht erstellt werden: \(error)")
-            return
-        }
-
+        guard !started else { return }
+        software = wantedSoftware
         #if os(iOS)
-        // CallKit übernimmt die AVAudioSession – liblinphone darf sie nicht selbst aktivieren.
-        core.callkitEnabled = true
-        // SDK verwaltet PushKit selbst und fügt RFC-8599-Parameter (pn-provider/pn-prid/pn-param) in den Contact ein.
-        core.pushNotificationEnabled = true
-        #else
-        // macOS: kein PushKit – der Mac bleibt dauerhaft registriert.
-        core.pushNotificationEnabled = false
-        // macOS: liblinphone selbst takten. Das eingebaute Auto-Iterate läuft in der Menüleisten-App nicht
-        // zuverlässig (ohne Iterate wird nie ein REGISTER verschickt). Modus .common, damit es auch bei
-        // geöffnetem Menü weiterläuft.
-        core.autoIterateEnabled = false
-        let t = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.core?.iterate() }
-        }
-        RunLoop.main.add(t, forMode: .common)
-        iterateTimer = t
+        configureAudioSession()
         #endif
-        #if os(macOS)
-        // Wie Jabber: gleichbleibender Contact (feste UDP-Adresse + feste +sip.instance). CME lehnt eine
-        // Anmeldung mit 403 "Registration is active for another client" ab, solange die vorige Anmeldung
-        // desselben Pools von einem anderen Contact noch gilt – wechselnde Ports/IDs würden das bei jedem
-        // Neustart auslösen.
-        let uuidKey = "sipInstanceUUID"
-        let uuid = UserDefaults.standard.string(forKey: uuidKey) ?? {
-            let u = UUID().uuidString.lowercased()
-            UserDefaults.standard.set(u, forKey: uuidKey)
-            return u
-        }()
-        core.config?.setString(section: "misc", key: "uuid", value: uuid)
-        if let t = core.transports {
-            // 5060 wie ein Cisco-Telefon: CME antwortet auf Anfragen von einem anderen Port als 5060 aus einem
-            // zufälligen Absenderport. Der SIP-Helfer der UDM (nf_conntrack_sip) hält die Verbindung Mac→CME:5060
-            // dann für unbeantwortet und lässt das INVITE der CME an den Mac nicht durch. Cisco Jabber darf auf
-            // demselben Mac nicht gleichzeitig laufen.
-            // Jabber-Modus mit TCP (Einstellung "Transport"): keine IP-Fragmente. Ein INVITE der CME ist rund
-            // 1.560 Byte groß; per UDP kommt es fragmentiert an, die UDM setzt es zusammen und schickt es –
-            // bei Jumbo-Frames auf ihrer Seite – als einen zu großen Frame weiter, den der Mac (MTU 1500) verwirft.
-            t.udpPort = settings.jabberMode && !jabberTCP ? 5060 : -1
-            t.tcpPort = jabberTCP ? 5060 : -1
-            try? core.setTransports(newValue: t)
-        }
+        let err = cmesip_start(software, baresipConfig, "g711,libg722,opus,srtp,\(Self.audioModule)", cmesipCallback, nil)
+        guard err == 0 else { log("baresip-Start fehlgeschlagen: \(Self.errText(err))"); return }
+        started = true
+        _ = cmesip_set_trace(true)
+        #if os(iOS)
+        // Feste Geräte-ID (+sip.instance): Kamailio ersetzt damit die vorige Anmeldung dieses Geräts, statt nach
+        // jedem Aufwachen (neue TCP-Verbindung, neuer Port) einen weiteren Contact zu speichern
+        _ = cmesip_set_instance(Self.instanceUUID)
+        // Nach einem Start durch den VoIP-Push kommt das Token erst später – bis dahin das zuletzt bekannte
+        if voipToken == nil { voipToken = UserDefaults.standard.string(forKey: Self.voipTokenKey) }
+        startPushKit()
         #endif
-        core.keepAliveEnabled = true
-        core.ipv6Enabled = true
-        // RFC 2833 / rtp-nte – passt zu "dtmf-relay rtp-nte" in CME.
-        core.useRfc2833ForDtmf = true
-        core.useInfoForDtmf = false
-        // CME schickt häufig Delayed Offer (INVITE ohne SDP) – liblinphone kommt damit klar.
-        core.ringDuringIncomingEarlyMedia = false
-
-        coreDelegate = CoreDelegateStub(
-            // liblinphone ruft Delegates auf dem Main-Thread auf. Synchron weiterreichen (kein Task-Hop!),
-            // denn nach einem VoIP-Push MUSS CallKit noch innerhalb des PushKit-Callbacks informiert werden.
-            onCallStateChanged: { [weak self] core, call, state, message in
-                MainActor.assumeIsolated { self?.onCallState(call: call, state: state, message: message) }
-            },
-            onAccountRegistrationStateChanged: { [weak self] core, account, state, message in
-                MainActor.assumeIsolated { self?.onRegistration(account: account, state: state, message: message) }
-            }
-        )
-        core.addDelegate(delegate: coreDelegate)
-        for d in extraDelegates { core.addDelegate(delegate: d) }
-
-        applyMediaSettings()
-
-        do { try core.start() } catch { log("Core-Start fehlgeschlagen: \(error)"); return }
-        log("CME Phone \(BuildInfo.text), liblinphone \(Core.getVersion) gestartet")
+        log("CME Phone \(BuildInfo.text), baresip gestartet")
+        startPathMonitor()
         let d = UserDefaults.standard
         if !settings.jabberMode {
             d.set(false, forKey: Self.runningKey)
@@ -190,204 +156,208 @@ final class SIPManager: ObservableObject {
         applyAccount()
     }
 
+    /// Netzwechsel (WLAN, VPN): Transporte neu aufbauen und neu anmelden
+    private func startPathMonitor() {
+        let m = NWPathMonitor()
+        m.pathUpdateHandler = { path in
+            let key = path.availableInterfaces.map(\.name).joined(separator: ",") + "|\(path.status)"
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let sip = SIPManager.shared
+                    guard sip.started, key != sip.lastPath else { return }
+                    let first = sip.lastPath.isEmpty
+                    sip.lastPath = key
+                    if !first, path.status == .satisfied {
+                        sip.log("Netz geändert (\(key)) – Transporte neu")
+                        _ = cmesip_network_changed()
+                    }
+                }
+            }
+        }
+        m.start(queue: .global(qos: .utility))
+        pathMonitor = m
+    }
+
     // MARK: - Konto
 
-    private var applyGeneration = 0
-    /// Jabber-Modus direkt an CME: UDP wie Jabber, oder TCP, wenn in den Einstellungen gewählt
-    /// (CME-Pool dann mit "session-transport tcp"). TLS wird hier nicht unterstützt.
-    private var jabberTCP: Bool { settings.jabberMode && settings.transport == .tcp }
-    private var jabberTransport: TransportType { jabberTCP ? .Tcp : .Udp }
-    /// Jabber-Modus: CME lehnt eine neue Anmeldung (neue Call-ID) mit "403 Registration is active for another
-    /// client" ab, solange eine frühere noch gilt – etwa nach einem Absturz. Ein Abmelden mit neuer Call-ID
-    /// beantwortet CME mit 404. Deshalb kurze Anmeldedauer (s. jabberExpires) und bei 403 regelmäßig neu versuchen.
-    /// 60 s: Bleibt eine Anmeldung nach einem harten Ende (Absturz, Kill, Ruhezustand) bei CME hängen, ist die
-    /// Leitung höchstens so lange blockiert. CME akzeptiert 60 s als kleinste Dauer.
+    /// Kürzeste Anmeldedauer, die CME annimmt: Bleibt eine Anmeldung nach einem harten Ende hängen, ist die
+    /// Leitung höchstens so lange blockiert ("403 Registration is active for another client").
     private static let jabberExpires = 60
-    /// Merker für "der letzte Lauf hat sich sauber abgemeldet" (Diagnose für 403 nach dem Start)
     private static let cleanQuitKey = "lastQuitUnregistered"
     private static let runningKey = "sipRunning"
     private var forbiddenRetry: DispatchWorkItem?
+    private var applyGeneration = 0
+    private var accountActive = false
+
+    /// Wie ein Cisco-Telefon (8845: "Supported: …,X-cisco-sis-7.0.0,…"). CME antwortet mit X-cisco-cme-sis und
+    /// behandelt das Gerät als Cisco-Endgerät (Shared Line, dialog-Abo). "X-cisco-duplicate-reg": eine erneute
+    /// Anmeldung desselben Geräts gilt nicht als Duplikat.
+    static let ciscoSupported = "replaces,join,sdp-anat,norefersub,resource-priority,extended-refer,"
+        + "X-cisco-callinfo,X-cisco-serviceuri,X-cisco-escapecodes,X-cisco-service-control,X-cisco-srtp-fallback,"
+        + "X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1,X-cisco-graceful-reg,X-cisco-duplicate-reg"
 
     func applyAccount() {
-        guard let core else { return }
+        guard started else { start(); return }
         applyGeneration += 1
         let generation = applyGeneration
-        // Bestehende Konten entfernen (wir haben genau eines). Ein angemeldetes Konto meldet sich dabei ab.
-        // CME kennt pro Pool nur EINE Anmeldung: Läuft die Abmeldung des alten Kontos (z.B. andere Domain)
-        // nach der neuen Anmeldung durch, ist der Mac beim CME abgemeldet. Deshalb erst abmelden lassen,
-        // dann neu anmelden.
-        lineEvent?.terminate()
-        lineEvent = nil
-        lineAccount = nil
-        let old = core.accountList
-        let wasRegistered = old.contains { $0.state == .Ok || $0.state == .Progress }
-        for acc in old { core.removeAccount(account: acc) }
-        registration = .none
+        stopLineSubscription()
         forbiddenRetry?.cancel(); forbiddenRetry = nil
+        let wasRegistered = accountActive && (registration == .ok || registration == .progress)
+        registration = .none
+        // CME kennt pro Pool nur EINE Anmeldung: erst die alte abmelden lassen, dann neu anmelden
+        if accountActive {
+            cmesip_remove_account()
+            accountActive = false
+        }
+        // User-Agent (Jabber ↔ Gateway) und Port gelten nur ab Start von baresip
+        let restart = software != wantedSoftware
+        let go = { [weak self] in
+            guard let self, self.applyGeneration == generation else { return }
+            if restart {
+                self.log("baresip wird neu gestartet (\(self.wantedSoftware))")
+                self.stopEngine()
+                self.start()
+                return
+            }
+            self.addConfiguredAccount()
+        }
         if wasRegistered {
             log("Konto wird neu angemeldet – alte Anmeldung wird zuerst beendet")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.applyGeneration == generation else { return }
-                    self.addConfiguredAccount()
-                }
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { MainActor.assumeIsolated { go() } }
         } else {
-            addConfiguredAccount()
+            go()
         }
     }
 
+    private func stopEngine() {
+        cmesip_unsubscribe(0)
+        subHandlers.removeAll()
+        cmesip_stop()
+        started = false
+        entries.removeAll()
+        refreshCalls()
+    }
+
+    /// Codecs in der Reihenfolge der Einstellungen (baresip-Namen mit Takt)
+    private var codecList: String {
+        settings.audioCodecs.filter(\.enabled).compactMap { c -> String? in
+            switch c.mime.uppercased() {
+            case "G722": return "G722/16000/1"
+            case "PCMA": return "PCMA/8000/1"
+            case "PCMU": return "PCMU/8000/1"
+            case "OPUS": return "opus/48000/2"
+            default: return nil
+            }
+        }.joined(separator: ",")
+    }
+
+    /// SRTP (SDES): iOS über das Gateway immer – Kamailio/rtpengine verschlüsseln die Strecke zu den iOS-Geräten.
+    /// Nicht verpflichtend (baresip "srtp": unverschlüsseltes RTP wird weiter angenommen). Sonst die Einstellung.
+    private var useSRTP: Bool {
+        #if os(iOS)
+        if settings.useGateway && !settings.jabberMode { return true }
+        #endif
+        return settings.mediaEncryption == .srtp
+    }
+
     private func addConfiguredAccount() {
-        guard let core else { return }
-        core.clearAllAuthInfo()
         guard settings.isConfigured else { log("Kein Konto konfiguriert"); return }
-        #if os(macOS)
-        // Transport im Jabber-Modus geändert (UDP ↔ TCP): lokale Ports ohne Neustart anpassen
-        if settings.jabberMode, let t = core.transports {
-            let udp = jabberTCP ? -1 : 5060, tcp = jabberTCP ? 5060 : -1
-            if t.udpPort != udp || t.tcpPort != tcp {
-                t.udpPort = udp; t.tcpPort = tcp
-                try? core.setTransports(newValue: t)
-                log("Jabber-Modus: \(jabberTCP ? "TCP" : "UDP") 5060")
+        let viaGateway = settings.useGateway && !settings.jabberMode
+        let transport: SIPTransport = settings.jabberMode ? (settings.transport == .tcp ? .tcp : .udp) : settings.transport
+        if transport == .tls { log("TLS gibt es mit baresip noch nicht – nehme TCP") }
+        let tp = transport == .udp ? "udp" : "tcp"
+
+        var aor = "<sip:\(settings.extensionNumber)@\(settings.sipHost)" + (viaGateway ? "" : ";transport=\(tp)") + ">"
+        if !settings.displayName.isEmpty && !settings.jabberMode {
+            aor = "\"\(settings.displayName.replacingOccurrences(of: "\"", with: ""))\" " + aor
+        }
+        if !settings.password.isEmpty {
+            let authId = settings.authUser.isEmpty ? String(settings.extensionNumber.drop(while: { $0 == "+" })) : settings.authUser
+            aor += ";auth_user=\(authId);auth_pass=\(settings.password)"
+        }
+        if viaGateway {
+            aor += ";outbound=\"sip:\(settings.gatewayHost):\(settings.gatewayPort);transport=\(tp)\""
+        }
+        #if os(iOS)
+        // Über das Gateway mit Push: die Anmeldung muss bis zum nächsten Öffnen gelten (Kamailio max_expires 7 Tage)
+        aor += ";regint=\(settings.jabberMode ? Self.jabberExpires : 7 * 24 * 3600)"
+        #else
+        aor += ";regint=\(settings.jabberMode ? Self.jabberExpires : 600)"
+        #endif
+        aor += ";answermode=manual;ptime=20"
+        let codecs = codecList
+        if !codecs.isEmpty { aor += ";audio_codecs=\(codecs)" }
+        if useSRTP { aor += ";mediaenc=srtp" }
+
+        // CME nimmt im CME-Modus nur MAC-Adressen oder – für Softclients wie Jabber – einen Gerätenamen an
+        var hdrParams = settings.jabberMode
+            ? "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\";+u.sip!model.ccm.cisco.com=\"503\"" : nil
+        let regHdr = settings.jabberMode ? "Supported: \(Self.ciscoSupported)" : nil
+        var uriParams: String?
+        #if os(iOS)
+        if viaGateway {
+            // CME ordnet INVITEs dem Pool über den Gerätenamen im Contact zu (MOB<Nummer>, meldet cme-web an)
+            hdrParams = "+u.sip!devicename.ccm.cisco.com=\"\(settings.mobilePoolName)\";+u.sip!model.ccm.cisco.com=\"503\""
+            // RFC 8599 wie liblinphone: Kamailio schickt darüber den VoIP-Push (push-relay)
+            if let tok = voipToken {
+                #if DEBUG
+                let provider = "apns.dev"
+                #else
+                let provider = "apns"
+                #endif
+                uriParams = "pn-provider=\(provider);pn-prid=\(tok):voip;pn-param=\(Self.teamID).de.wiederhol.cmephone.voip"
+            } else {
+                log("Noch kein VoIP-Token – Anmeldung ohne Push")
             }
         }
         #endif
 
-        do {
-            let identity = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
-            // Jabber schickt keinen Anzeigenamen in From/To (den Namen kennt CME aus "name" am dn)
-            if !settings.displayName.isEmpty && !settings.jabberMode { try identity.setDisplayname(newValue: settings.displayName) }
-            // Jabber meldet sich als "User-Agent: Cisco-CSF"
-            // sonst "CME Phone/<Build>" – cme-web zeigt den Build der Mobilgeräte an (Tab Softphone)
-            core.setUserAgent(name: settings.jabberMode ? "Cisco-CSF" : "CME Phone",
-                              version: settings.jabberMode ? nil
-                                  : Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-
-            let params = try core.createAccountParams()
-            try params.setIdentityaddress(newValue: identity)
-
-            let serverHost: String
-            let serverPort: Int
-            let viaGateway = settings.useGateway && !settings.jabberMode
-            if viaGateway {
-                serverHost = settings.gatewayHost; serverPort = settings.gatewayPort
-            } else {
-                serverHost = settings.sipHost; serverPort = 5060
-            }
-            let server = try Factory.Instance.createAddress(addr: "sip:\(serverHost):\(serverPort)")
-            // Jabber meldet sich per UDP direkt an der CME an
-            try server.setTransport(newValue: settings.jabberMode ? jabberTransport : settings.transport.linphone)
-            try params.setServeraddress(newValue: server)
-            // Bei Gateway-Betrieb: alle Requests über Flexisip (Outbound-Proxy), Request-URI bleibt CME.
-            params.outboundProxyEnabled = viaGateway
-            params.registerEnabled = true
-            // iOS: Anmeldung über Flexisip mit Push – die App kann sie im Hintergrund nicht erneuern, sie muss bis
-            // zum nächsten Öffnen gelten (sonst 404 bei Flexisip, kein Push). 7 Tage wie die Linphone-App.
-            #if os(iOS)
-            params.expires = settings.jabberMode ? Self.jabberExpires : 7 * 24 * 3600
-            #else
-            params.expires = settings.jabberMode ? Self.jabberExpires : 600
-            #endif
-            // CME nimmt im CME-Modus nur MAC-Adressen oder - für Softclients wie Jabber - einen Gerätenamen an.
-            // cme-web legt die App als Pool "id device-id-name CSF<Nebenstelle>" an; den Namen schickt die App
-            // wie Jabber im Contact mit.
-            // Über das Push-Gateway meldet sich die App nur bei Flexisip an (cme-web prüft das Passwort);
-            // die Cisco-Merkmale braucht nur die direkte Anmeldung an CME.
-            if settings.jabberMode {
-                params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.deviceName)\""
-                    + ";+u.sip!model.ccm.cisco.com=\"503\""
-            }
-            #if os(iOS)
-            // Über Flexisip: CME ordnet INVITEs dem Pool über den Gerätenamen im Contact zu. Ohne ihn gehört ein
-            // Anruf vom iPhone (auch das Übernehmen) zu keinem Pool der Shared Line – CME schickt dann keine
-            // dialog-NOTIFYs, und Halten am iPhone sehen die anderen Geräte nicht. Den Pool MOB<Nummer> meldet
-            // cme-web (sharedline.py) mit demselben Namen an.
-            if viaGateway {
-                params.contactParameters = "+u.sip!devicename.ccm.cisco.com=\"\(settings.mobilePoolName)\""
-                    + ";+u.sip!model.ccm.cisco.com=\"503\""
-            }
-            #endif
-
-            #if os(iOS)
-            // Push: VoIP-Push (PushKit) erlauben; Remote-Push (Banner) nicht nötig.
-            params.pushNotificationAllowed = viaGateway
-            params.remotePushNotificationAllowed = false
-            #if DEBUG
-            params.pushNotificationConfig?.provider = "apns.dev"
-            #else
-            params.pushNotificationConfig?.provider = "apns"
-            #endif
-            #else
-            params.pushNotificationAllowed = false
-            params.remotePushNotificationAllowed = false
-            #endif
-
-            if !settings.password.isEmpty {
-                // CME (Soft-Client-Pool): username <nummer ohne +> password <…> – Realm/Domain offen lassen
-                // liblinphone sucht die Zugangsdaten über den Benutzer der Identität (+49…); der abweichende
-                // Anmeldename für CME (z.B. CSF…-2) gehört in "userid".
-                let authId = settings.authUser.isEmpty ? String(settings.extensionNumber.drop(while: { $0 == "+" })) : settings.authUser
-                let auth = try Factory.Instance.createAuthInfo(
-                    username: settings.extensionNumber, userid: authId, passwd: settings.password,
-                    ha1: nil, realm: nil, domain: nil)
-                core.addAuthInfo(info: auth)
-            }
-
-            let account = try core.createAccount(params: params)
-            if settings.jabberMode {
-                // Wie ein Cisco-Telefon (8845: "Supported: …,X-cisco-sis-7.0.0,…"). CME antwortet dann mit
-                // X-cisco-cme-sis und behandelt das Gerät als Cisco-Endgerät (Shared Line, dialog-Abo).
-                account.addCustomHeader(headerName: "Supported", headerValue: Self.ciscoSupported)
-            }
-            try core.addAccount(account: account)
-            core.defaultAccount = account
-            log("Konto \(identity.asStringUriOnly()) über \(server.asStringUriOnly())")
-        } catch {
-            log("Konto-Fehler: \(error)")
-            registration = .failed("\(error)")
+        registration = .progress
+        let err = cmesip_set_account(aor, uriParams, hdrParams, regHdr)
+        if err != 0 {
+            log("Konto-Fehler: \(Self.errText(err))")
+            registration = .failed(Self.errText(err))
+            return
         }
+        accountActive = true
+        log("Konto sip:\(settings.extensionNumber)@\(settings.sipHost) über "
+            + (viaGateway ? "\(settings.gatewayHost):\(settings.gatewayPort)" : "\(settings.sipHost) (\(tp.uppercased()))")
+            + ", Codecs \(codecs)")
     }
 
-    func refreshRegistration() { core?.refreshRegisters() }
+    func refreshRegistration() { _ = cmesip_register() }
 
-    /// "Neu anmelden" (Knopf in der App): Konto neu anlegen – hilft auch nach "io error" (Verbindung zu Flexisip
-    /// abgerissen, z.B. nach einem Neustart des Stacks, der die Anmeldungen vergessen hat)
     func reRegister() {
         log("Neu anmelden (von Hand)")
-        if core == nil { start() } else { applyAccount() }
+        if !started { start() } else { applyAccount() }
     }
 
-    /// Abmelden und kurz warten, bis CME es bestätigt (beim Beenden der App).
+    /// Abmelden und kurz warten (beim Beenden der App)
     func unregisterBlocking(timeout: TimeInterval) {
-        guard let core else { return }
-        lineEvent?.terminate()
-        lineEvent = nil
-        for acc in core.accountList {
-            guard let p = acc.params?.clone() else { continue }
-            p.registerEnabled = false
-            acc.params = p
-        }
-        log("Beenden: Konten \(core.accountList.map { "\($0.state)" }.joined(separator: ","))")
+        guard started else { return }
+        stopLineSubscription()
+        cmesip_unsubscribe(0)
+        unregisterAnswered = false
+        awaitingUnregister = true
+        _ = cmesip_unregister()
         let end = Date().addingTimeInterval(timeout)
-        repeat {
-            core.iterate()
-            Thread.sleep(forTimeInterval: 0.02)
-        } while Date() < end && core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress })
-        let states = core.accountList.map { "\($0.state)" }.joined(separator: ",")
-        log("Beim Beenden abgemeldet: \(states)")
-        let ok = !core.accountList.contains(where: { $0.state == .Ok || $0.state == .Progress })
+        while Date() < end && !unregisterAnswered {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        let ok = unregisterAnswered
+        log("Beim Beenden abgemeldet: \(ok ? "bestätigt" : "keine Antwort")")
         let stamp = Date().formatted(date: .numeric, time: .standard)
-        UserDefaults.standard.set("\(stamp) \(ok ? "abgemeldet" : "Abmelden NICHT bestätigt") (\(states))",
-                                  forKey: Self.cleanQuitKey)
+        UserDefaults.standard.set("\(stamp) \(ok ? "abgemeldet" : "Abmelden NICHT bestätigt")", forKey: Self.cleanQuitKey)
         UserDefaults.standard.set(false, forKey: Self.runningKey)
         UserDefaults.standard.synchronize()
-        core.stop()
+        cmesip_stop()
+        started = false
     }
+    private var unregisterAnswered = false
+    private var awaitingUnregister = false
 
     // MARK: - Gehaltene Gespräche auf der Shared Line (Übernehmen)
 
-    /// Ein auf einem anderen Gerät der Shared Line gehaltenes Gespräch. CME meldet es im dialog-NOTIFY mit
-    /// <local>…<param pname="+sip.rendering" pval="no"/>…</local>; ohne <local>/<remote> läuft es wieder.
     struct HeldLineCall: Equatable, Identifiable {
         var id: String { callId }
         let callId: String
@@ -395,7 +365,7 @@ final class SIPManager: ObservableObject {
         let remoteTag: String    // Tag der CME
         let remoteURI: String    // Gegenstelle, z.B. sip:0179…@192.168.11.4
         let remoteName: String
-        let holder: String       // Gerät, das hält (entity, z.B. sip:+49…@192.168.11.46)
+        let holder: String       // Gerät, das hält
     }
     @Published private(set) var heldOnLine: [HeldLineCall] = []
 
@@ -403,26 +373,27 @@ final class SIPManager: ObservableObject {
         let p = "\\b\(name)=\"([^\"]*)\""
         guard let re = try? NSRegularExpression(pattern: p),
               let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Swift.Range(m.range(at: 1), in: text) else { return "" }
+              let r = Range(m.range(at: 1), in: text) else { return "" }
         return String(text[r])
     }
 
     private static func firstGroup(_ pattern: String, in text: String) -> String {
         guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
               let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Swift.Range(m.range(at: 1), in: text) else { return "" }
+              let r = Range(m.range(at: 1), in: text) else { return "" }
         return String(text[r])
     }
 
+    /// dialog-NOTIFY der CME: gehalten = <param pname="+sip.rendering" pval="no"/> (Cisco schreibt pval)
     func handleLineNotify(_ xml: String) {
         guard xml.contains("<dialog") else { return }
         let entity = Self.attr("entity", in: xml)
         guard let re = try? NSRegularExpression(pattern: "<dialog\\s.*?</dialog>", options: [.dotMatchesLineSeparators])
         else { return }
-        let ownIds = Set(core?.calls.compactMap { $0.callLog?.callId } ?? [])
+        let ownIds = Set(entries.keys)
         var list = heldOnLine
         for m in re.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)) {
-            guard let r = Swift.Range(m.range, in: xml) else { continue }
+            guard let r = Range(m.range, in: xml) else { continue }
             let d = String(xml[r])
             let head = String(d.prefix(while: { $0 != ">" }))
             let callId = Self.attr("call-id", in: head)
@@ -445,276 +416,248 @@ final class SIPManager: ObservableObject {
         }
     }
 
-    /// SRTP (SDES): iOS über das Gateway immer – Kamailio/rtpengine verschlüsseln die Strecke zu den iOS-Geräten
-    /// (APP_SRTP). Nicht verpflichtend, unverschlüsseltes RTP wird weiter angenommen. Sonst die Einstellung.
-    private var useSRTP: Bool {
-        #if os(iOS)
-        if settings.useGateway && !settings.jabberMode { return true }
-        #endif
-        return settings.mediaEncryption == .srtp
-    }
-
-    /// Gehaltenes Gespräch übernehmen wie ein Cisco-Telefon: INVITE an die Gegenstelle mit
-    /// "Replaces: <call-id>;to-tag=<Tag des haltenden Geräts>;from-tag=<Tag der CME>". CME verbindet die
-    /// Gegenstelle mit diesem Gerät und beendet den Zweig des haltenden Geräts.
+    /// Übernehmen wie ein Cisco-Telefon: INVITE an die Gegenstelle mit
+    /// "Replaces: <call-id>;to-tag=<Tag des haltenden Geräts>;from-tag=<Tag der CME>"
     @discardableResult
-    func takeOver(_ h: HeldLineCall) -> Call? {
-        guard let core else { return nil }
-        do {
-            let addr = try Factory.Instance.createAddress(addr: h.remoteURI)
-            let params = try core.createCallParams(call: nil)
-            params.videoEnabled = false
-            params.mediaEncryption = (useSRTP ? .SRTP : .None)
-            params.addCustomHeader(headerName: "Replaces",
-                                   headerValue: "\(h.callId);to-tag=\(h.localTag);from-tag=\(h.remoteTag)")
-            // Über Flexisip (iPhone/iPad): From mit der CME-IP wie beim Mac und den Cisco-Telefonen. Mit der
-            // SIP-Domain (cme.local) ordnet CME das Gespräch keinem Pool der Shared Line zu – Halten am iPhone
-            // sähen die anderen Geräte dann nicht.
-            if !settings.jabberMode, !settings.cmeIP.isEmpty {
-                params.fromHeader = "<sip:\(settings.extensionNumber)@\(settings.cmeIP)>"
-            }
-            params.recordFile = Self.recordingPath(remote: addr.username ?? "unbekannt")
-            #if os(iOS)
-            core.configureAudioSession()
-            #endif
-            heldOnLine.removeAll { $0.callId == h.callId }
-            log("Übernehme gehaltenes Gespräch \(h.remoteURI)")
-            return core.inviteAddressWithParams(addr: addr, params: params)
-        } catch {
-            log("Übernehmen fehlgeschlagen: \(error)")
-            return nil
-        }
+    func takeOver(_ h: HeldLineCall) -> String? {
+        heldOnLine.removeAll { $0.callId == h.callId }
+        log("Übernehme gehaltenes Gespräch \(h.remoteURI)")
+        // Über das Gateway: From mit der CME-IP, sonst ordnet CME das Gespräch keinem Pool der Shared Line zu
+        let from = !settings.jabberMode && !settings.cmeIP.isEmpty ? "sip:\(settings.extensionNumber)@\(settings.cmeIP)" : nil
+        return dial(h.remoteURI, from: from, replaces: "\(h.callId);to-tag=\(h.localTag);from-tag=\(h.remoteTag)",
+                    remote: h.remoteURI, name: h.remoteName)
     }
 
-    // MARK: - Cisco-Leitungsmodus (experimentell)
+    // MARK: - Abos (dialog der eigenen Leitung, presence des Tischtelefons)
 
-    /// Genau wie Cisco Jabber für Mac 15.3 (REGISTER an CME). "X-cisco-duplicate-reg" sorgt dafür, dass CME eine
-    /// erneute Anmeldung desselben Geräts nicht als Duplikat behandelt (sonst fehlt es bei Shared Lines).
-    static let ciscoSupported = "replaces,join,sdp-anat,norefersub,resource-priority,extended-refer,"
-        + "X-cisco-callinfo,X-cisco-serviceuri,X-cisco-escapecodes,X-cisco-service-control,X-cisco-srtp-fallback,"
-        + "X-cisco-monrec,X-cisco-config,X-cisco-sis-7.0.0,X-cisco-xsi-8.5.1,X-cisco-graceful-reg,X-cisco-duplicate-reg"
-    private var lineEvent: Event?
-    private var lineEventDelegate: EventDelegateStub?
-    /// Hilfskonto nur für das dialog-Abo (meldet sich nicht an): CME trägt einen Abonnenten unter dem From-URI
-    /// in die Shared Line ein ("+49…@192.168.11.46" beim 8845) und sucht den Dial-Peer über dessen Host.
-    /// Das 8845 schickt deshalb seine eigene IP im From – mit der CME-Adresse im From (wie beim REGISTER)
-    /// nimmt CME das Abo zwar an, führt das Gerät aber nicht als Teilnehmer und lässt es nicht mitklingeln.
-    private var lineAccount: Account?
+    private var subHandlers: [Int: (notify: (String) -> Void, closed: (String) -> Void)] = [:]
+    private var lineSub: Int?
+    private var lineRetry: DispatchWorkItem?
 
-    private func lineProxy() -> ProxyConfig? {
-        guard let core, let main = core.defaultAccount,
-              let host = main.contactAddress?.domain, !host.isEmpty else { return nil }
-        if lineAccount == nil {
-            do {
-                let p = try core.createAccountParams()
-                try p.setIdentityaddress(newValue: try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(host)"))
-                let server = try Factory.Instance.createAddress(addr: "sip:\(settings.sipHost):5060")
-                try server.setTransport(newValue: jabberTransport)
-                try p.setServeraddress(newValue: server)
-                p.registerEnabled = false
-                p.pushNotificationAllowed = false
-                p.remotePushNotificationAllowed = false
-                p.contactParameters = main.params?.contactParameters
-                let acc = try core.createAccount(params: p)
-                try core.addAccount(account: acc)
-                core.defaultAccount = main
-                lineAccount = acc
-                log("Cisco-Leitungsmodus: Abo-Absender sip:\(settings.extensionNumber)@\(host)")
-            } catch {
-                log("Cisco-Leitungsmodus: Hilfskonto fehlgeschlagen: \(error)")
-                return nil
-            }
-        }
-        return core.proxyConfigList.first { $0.identityAddress?.domain == host }
+    /// Abo über das Konto. Ergebnis: Abo-Nummer oder nil
+    @discardableResult
+    func subscribe(uri: String, event: String, from: String? = nil, expires: Int, headers: [String: String],
+                   onNotify: @escaping (String) -> Void, onClosed: @escaping (String) -> Void) -> Int? {
+        let hdrs = headers.map { "\($0.key): \($0.value)\r\n" }.joined()
+        let id = Int(cmesip_subscribe(uri, event, from, UInt32(expires), hdrs))
+        guard id > 0 else { log("Abo \(event) auf \(uri) fehlgeschlagen: \(Self.errText(Int32(-id)))"); return nil }
+        subHandlers[id] = (onNotify, onClosed)
+        return id
     }
 
-    /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren.
+    func unsubscribe(_ id: Int) {
+        subHandlers[id] = nil
+        cmesip_unsubscribe(Int32(id))
+    }
+
+    /// Wie das 8845: nach der Anmeldung die eigene Leitung per "dialog" abonnieren. CME nimmt das Gerät nur in die
+    /// Shared Line auf, wenn das Abo die eigene IP im From trägt.
     private func subscribeOwnLine() {
-        guard settings.jabberMode, let core, lineEvent == nil, !settings.extensionNumber.isEmpty else { return }
-        do {
-            let me = try Factory.Instance.createAddress(addr: "sip:\(settings.extensionNumber)@\(settings.sipHost)")
-            // CME nimmt das Gerät nur in die Shared Line auf ("show shared-line details"), wenn das Abo die eigene
-            // IP im From trägt (Hilfskonto, s. lineProxy) und die App das erste NOTIFY mit 200 bestätigt (dafür
-            // NAT-Helfer aus, s. start()). Ein Gerätename im Contact ist nicht nötig (getestet 24.11.2026).
-            let ev: Event
-            if let proxy = lineProxy() {
-                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
-            } else if let proxy = core.defaultProxyConfig {
-                ev = try core.createSubscribe(resource: me, proxy: proxy, event: "dialog", expires: 600)
-            } else {
-                ev = try core.createSubscribe(resource: me, event: "dialog", expires: 600)
-            }
-            ev.addCustomHeader(name: "Accept", value: "application/dialog-info+xml")
-            ev.addCustomHeader(name: "Allow", value: "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE")
-            let d = EventDelegateStub(
-                onNotifyReceived: { [weak self] _, body in
-                    MainActor.assumeIsolated { self?.handleLineNotify(body?.utf8Text ?? "") }
-                },
-                onSubscribeStateChanged: { [weak self] ev, state in
-                    MainActor.assumeIsolated {
-                        let code = ev.errorInfo?.protocolCode ?? 0
-                        self?.log("Cisco-Leitungsmodus: Abo \(state)" + (code > 0 ? " (\(code))" : ""))
-                    }
-                })
-            ev.addDelegate(delegate: d)
-            lineEventDelegate = d
-            try ev.sendSubscribe(body: nil)
-            lineEvent = ev
-            log("Cisco-Leitungsmodus: Abo dialog auf \(settings.extensionNumber), über das Konto")
-        } catch {
-            log("Cisco-Leitungsmodus: Abo fehlgeschlagen: \(error)")
-        }
+        guard settings.jabberMode, lineSub == nil, !settings.extensionNumber.isEmpty else { return }
+        let host = Self.localAddress(toward: settings.sipHost) ?? settings.sipHost
+        let me = "sip:\(settings.extensionNumber)@\(settings.sipHost)"
+        lineSub = subscribe(
+            uri: me, event: "dialog", from: "sip:\(settings.extensionNumber)@\(host)", expires: 600,
+            headers: ["Accept": "application/dialog-info+xml",
+                      "Allow": "ACK,BYE,CANCEL,INVITE,NOTIFY,OPTIONS,REFER,REGISTER,UPDATE,SUBSCRIBE"],
+            onNotify: { [weak self] body in self?.handleLineNotify(body) },
+            onClosed: { [weak self] why in
+                guard let self else { return }
+                self.log("Cisco-Leitungsmodus: Abo beendet (\(why)) – neu in 30 s")
+                self.lineSub = nil
+                let item = DispatchWorkItem { MainActor.assumeIsolated { self.subscribeOwnLine() } }
+                self.lineRetry = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: item)
+            })
+        if lineSub != nil { log("Cisco-Leitungsmodus: Abo dialog auf \(settings.extensionNumber), From sip:\(settings.extensionNumber)@\(host)") }
     }
 
-    // MARK: - Medien / Codecs
+    private func stopLineSubscription() {
+        lineRetry?.cancel(); lineRetry = nil
+        if let id = lineSub { unsubscribe(id) }
+        lineSub = nil
+    }
 
+    /// Eigene IP auf dem Weg zu host (UDP-Socket verbinden, nichts senden)
+    static func localAddress(toward host: String) -> String? {
+        var hints = addrinfo(ai_flags: 0, ai_family: AF_INET, ai_socktype: SOCK_DGRAM, ai_protocol: 0,
+                             ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, "5060", &hints, &res) == 0, let ai = res else { return nil }
+        defer { freeaddrinfo(res) }
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        guard connect(fd, ai.pointee.ai_addr, ai.pointee.ai_addrlen) == 0 else { return nil }
+        var sin = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &sin) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) == 0 }
+        }
+        guard ok else { return nil }
+        var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
+        return String(cString: buf)
+    }
+
+    // MARK: - Medien
+
+    /// Codecs und SRTP stehen im Konto – neu anmelden übernimmt sie (applyAccount ruft das danach auf).
     func applyMediaSettings() {
-        guard let core else { return }
-        core.audioPayloadTypes = Self.ordered(core.audioPayloadTypes, by: settings.audioCodecs, audio: true)
-        core.videoPayloadTypes = Self.ordered(core.videoPayloadTypes, by: settings.videoCodecs, audio: false)
-
-        core.videoCaptureEnabled = settings.videoEnabled
-        core.videoDisplayEnabled = settings.videoEnabled
-        if let policy = try? Factory.Instance.createVideoActivationPolicy() {
-            policy.automaticallyAccept = settings.videoEnabled
-            policy.automaticallyInitiate = false   // Video wird pro Anruf gestartet
-            core.videoActivationPolicy = policy
-        }
-        // Frontkamera als Standard
-        if let front = core.videoDevicesList.first(where: { $0.contains("built-in_video:1") }) {
-            try? core.setVideodevice(newValue: front)
-        }
-        do {
-            try core.setMediaencryption(newValue: (useSRTP ? .SRTP : .None))
-            core.mediaEncryptionMandatory = false
-        } catch { log("Media-Encryption: \(error)") }
-
-        let a = core.audioPayloadTypes.filter { $0.enabled() }.map { "\($0.mimeType)/\($0.clockRate)" }
-        let v = core.videoPayloadTypes.filter { $0.enabled() }.map { $0.mimeType }
-        log("Audio: \(a.joined(separator: ", ")) | Video: \(v.joined(separator: ", "))")
-    }
-
-    /// Sortiert die vorhandenen Payload-Types nach der gewünschten Reihenfolge,
-    /// aktiviert die gewählten und deaktiviert alle anderen (Speex, GSM, iLBC, VP8, AV1 …).
-    private static func ordered(_ available: [PayloadType], by wanted: [CodecEntry], audio: Bool) -> [PayloadType] {
-        var result: [PayloadType] = []
-        for entry in wanted {
-            let matches = available.filter { pt in
-                guard pt.mimeType.caseInsensitiveCompare(entry.mime) == .orderedSame else { return false }
-                // Opus: nur 48 kHz; G.711/G.722: 8 kHz (G.722 meldet per RFC 3551 8000)
-                if audio && entry.mime.lowercased() == "opus" { return pt.clockRate == 48000 }
-                return true
-            }
-            for pt in matches {
-                _ = pt.enable(enabled: entry.enabled)
-                result.append(pt)
-            }
-        }
-        // telephone-event (DTMF) muss aktiv bleiben
-        for pt in available where !result.contains(where: { $0 === pt }) {
-            let keep = audio && pt.mimeType.lowercased() == "telephone-event" && pt.clockRate == 8000
-            _ = pt.enable(enabled: keep)
-            result.append(pt)
-        }
-        return result
+        log("Audio: \(codecList)\(useSRTP ? " | SRTP" : "")")
     }
 
     // MARK: - Anrufe
 
-    /// Wird vom CallKit-Provider (CXStartCallAction) aufgerufen.
-    @discardableResult
-    func placeCall(to number: String, video: Bool) -> Call? {
-        guard let core else { return nil }
-        let target = number.contains("@") ? number : "sip:\(number)@\(settings.sipHost)"
-        do {
-            let addr = try Factory.Instance.createAddress(addr: target.hasPrefix("sip") ? target : "sip:\(target)")
-            let params = try core.createCallParams(call: nil)
-            params.videoEnabled = video && settings.videoEnabled
-            params.mediaEncryption = (useSRTP ? .SRTP : .None)
-            params.recordFile = Self.recordingPath(remote: number)
-            #if os(iOS)
-            core.configureAudioSession()
-            #endif
-            return core.inviteAddressWithParams(addr: addr, params: params)
-        } catch {
-            log("Anruf fehlgeschlagen: \(error)")
-            return nil
+    private final class Entry {
+        let id: String
+        var remoteURI: String
+        var displayName: String
+        let incoming: Bool
+        var state: CallState
+        let created = Date()
+        var established: Date?
+        var heldLocal = false
+        var heldRemote = false
+        var info = ""
+        init(id: String, remoteURI: String, displayName: String, incoming: Bool, state: CallState) {
+            self.id = id; self.remoteURI = remoteURI; self.displayName = displayName
+            self.incoming = incoming; self.state = state
         }
     }
+    private var entries: [String: Entry] = [:]
+    private var order: [String] = []
 
-    func call(withId callId: String) -> Call? {
-        core?.calls.first { $0.callLog?.callId == callId }
+    private func dial(_ uri: String, from: String?, replaces: String?, remote: String, name: String) -> String? {
+        var buf = [CChar](repeating: 0, count: 256)
+        let err = cmesip_dial(uri, from, replaces, &buf, buf.count)
+        guard err == 0 else { log("Anruf fehlgeschlagen: \(Self.errText(err))"); return nil }
+        let id = String(cString: buf)
+        if entries[id] == nil {
+            entries[id] = Entry(id: id, remoteURI: remote, displayName: name, incoming: false, state: .OutgoingInit)
+            order.append(id)
+        }
+        if micMuted { _ = cmesip_mute(id, true) }
+        refreshCalls()
+        return id
     }
 
-    /// Parameter für ein Re-INVITE (Halten, Video). createCallParams(call:) übernimmt die eigenen Header früherer
-    /// INVITEs – nach dem Übernehmen "Replaces", nach dem Halten "Call-Info: …hold". "Replaces" lehnt CME in einem
-    /// Re-INVITE als ungültig ab ("invalid IE content", keine Antwort). Deshalb immer frische Parameter mit den
-    /// Einstellungen dieses Gesprächs.
-    private func updateParams(for call: Call) throws -> CallParams {
-        guard let core else { throw NSError(domain: "SIP", code: 1) }
-        let cur = try core.createCallParams(call: call)
-        let p = try core.createCallParams(call: nil)
-        p.videoEnabled = cur.videoEnabled
-        p.mediaEncryption = cur.mediaEncryption
-        p.recordFile = cur.recordFile
-        return p
+    @discardableResult
+    func placeCall(to number: String, video: Bool) -> String? {
+        let target = number.contains("@") ? number : "sip:\(number)@\(settings.sipHost)"
+        let uri = target.hasPrefix("sip") ? target : "sip:\(target)"
+        return dial(uri, from: nil, replaces: nil, remote: uri, name: "")
     }
 
     func accept(callId: String) {
-        guard let core, let call = call(withId: callId) else { return }
-        do {
-            let params = try core.createCallParams(call: call)
-            params.videoEnabled = settings.videoEnabled && (call.remoteParams?.videoEnabled ?? false)
-            params.recordFile = Self.recordingPath(remote: call.remoteAddress?.username ?? "unbekannt")
-            #if os(iOS)
-            core.configureAudioSession()
-            #endif
-            try call.acceptWithParams(params: params)
-        } catch { log("Annehmen fehlgeschlagen: \(error)") }
+        let err = cmesip_answer(callId)
+        if err != 0 { log("Annehmen fehlgeschlagen: \(Self.errText(err))") }
     }
 
     func terminate(callId: String) {
-        guard let call = call(withId: callId) else { return }
-        try? call.terminate()
+        _ = cmesip_hangup(callId, 0)
     }
 
-    /// Eingehenden Anruf abweisen.
-    /// toVoicemail: 486 Busy – CME leitet dann per "call-forward b2bua busy" (setzt cme-web für Nummern mit
-    /// Postfach) an die Voicemail. Sonst 603 Decline.
-    #if os(macOS)
-    private var defaultRing: String?
-    /// Telefonsteuerung: Mac klingelt über die Shared Line nur stumm mit (Toast), es klingelt das Tischtelefon.
-    func setRingerEnabled(_ on: Bool) {
-        guard let core else { return }
-        if defaultRing == nil { defaultRing = core.ring ?? "" }
-        core.ring = on ? (defaultRing?.isEmpty == false ? defaultRing : nil) : nil
-    }
-    #endif
-
+    /// Eingehenden Anruf abweisen. An die Voicemail: 302 auf die Voicemail-Nummer – CME leitet dann den GANZEN
+    /// Anruf um (auch bei weiteren klingelnden Geräten). Ohne Nummer 486 (call-forward busy), sonst 603.
     func decline(callId: String, toVoicemail: Bool) {
-        guard let call = call(withId: callId) else { return }
-        // An die Voicemail: per 302 auf die Voicemail-Nummer umleiten. CME leitet dann den GANZEN Anruf um –
-        // auch bei einem Sammelanschluss, an dem weitere Geräte klingeln (ein "besetzt" beendete nur diesen
-        // Zweig). Asterisk findet das Postfach über die Umleitungsinfo (Diversion: diese Nebenstelle).
         if toVoicemail, !settings.voicemailNumber.isEmpty {
-            do {
-                let target = try Factory.Instance.createAddress(addr: "sip:\(settings.voicemailNumber)@\(settings.sipHost)")
-                try call.redirectTo(redirectAddress: target)
-                log("An Voicemail umgeleitet (\(settings.voicemailNumber))")
-                return
-            } catch {
-                log("Umleiten an Voicemail fehlgeschlagen: \(error) – lehne mit besetzt ab")
-            }
+            let err = cmesip_redirect(callId, "sip:\(settings.voicemailNumber)@\(settings.sipHost)")
+            if err == 0 { log("An Voicemail umgeleitet (\(settings.voicemailNumber))"); return }
+            log("Umleiten an Voicemail fehlgeschlagen: \(Self.errText(err)) – lehne mit besetzt ab")
         }
-        do { try call.decline(reason: toVoicemail ? .Busy : .Declined) } catch {
-            log("Abweisen: \(error)")
-            try? call.terminate()
-        }
+        _ = cmesip_hangup(callId, toVoicemail ? 486 : 603)
     }
 
-    // MARK: - Lokale Aufnahme (interne Gespräche; externe nimmt cme-recorder auf)
+    /// Halten / Fortsetzen wie ein Cisco-Telefon: re-INVITE (sendonly/sendrecv) mit
+    /// "Call-Info: <urn:x-cisco-remotecc:hold|resume>" – nur so sehen die anderen Geräte der Shared Line es.
+    func setHeld(callId: String, held: Bool) {
+        let hdr = "Call-Info: <urn:x-cisco-remotecc:\(held ? "hold" : "resume")>\r\n"
+        let err = cmesip_hold(callId, held, hdr)
+        guard err == 0 else { log("Halten: \(Self.errText(err))"); return }
+        entries[callId]?.heldLocal = held
+        log(held ? "Gespräch gehalten" : "Gespräch fortgesetzt")
+        refreshCalls()
+    }
 
-    /// Ordner für lokale Aufnahmen: macOS ~/Music/CME Phone, iOS Dokumente/Aufnahmen
+    func setMuted(_ muted: Bool) {
+        micMuted = muted
+        for id in entries.keys { _ = cmesip_mute(id, muted) }
+    }
+
+    func sendDTMF(_ digits: String, callId: String? = nil) {
+        guard let id = callId ?? calls.first(where: { $0.isEstablished })?.id else { return }
+        for ch in digits { _ = cmesip_send_dtmf(id, CChar(ch.asciiValue ?? 0)) }
+    }
+
+    func toggleSpeaker() {
+        #if os(iOS)
+        let want = !speakerOn
+        do {
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(want ? .speaker : .none)
+            speakerOn = want
+        } catch { log("Lautsprecher: \(error.localizedDescription)") }
+        #endif
+    }
+
+    /// Blind Transfer (REFER)
+    func transfer(callId: String, to number: String) {
+        let err = cmesip_transfer(callId, "sip:\(number)@\(settings.sipHost)")
+        if err != 0 { log("Transfer: \(Self.errText(err))") }
+    }
+
+    // MARK: - Klingeln (baresip spielt keinen Rufton – eigener Ton über AVAudioPlayer)
+
+    private var ringerEnabled = true
+    private var ringPlayer: AVAudioPlayer?
+
+    /// Telefonsteuerung: der Mac klingelt über die Shared Line nur stumm mit (Toast), es klingelt das Tischtelefon.
+    func setRingerEnabled(_ on: Bool) {
+        ringerEnabled = on
+        updateRinger()
+    }
+
+    private func updateRinger() {
+        #if os(macOS)   // iOS: CallKit klingelt
+        let ringing = ringerEnabled && entries.values.contains { $0.incoming && $0.state == .IncomingReceived }
+        if ringing {
+            if ringPlayer == nil {
+                ringPlayer = try? AVAudioPlayer(data: Self.ringTone)
+                ringPlayer?.numberOfLoops = -1
+                ringPlayer?.volume = 0.6
+            }
+            if ringPlayer?.isPlaying == false { ringPlayer?.play() }
+        } else if ringPlayer?.isPlaying == true {
+            ringPlayer?.stop()
+            ringPlayer?.currentTime = 0
+        }
+        #endif
+    }
+
+    /// Triller wie ein Tischtelefon: 1 s abwechselnd 1000/1250 Hz (je 40 ms), 3 s Pause
+    private static let ringTone: Data = {
+        let rate = 16000
+        var samples = [Int16]()
+        let on = rate, off = 3 * rate
+        for i in 0..<on {
+            let t = Double(i) / Double(rate)
+            let f = (i / (rate / 25)) % 2 == 0 ? 1000.0 : 1250.0
+            let fade = min(1.0, Double(min(i, on - i)) / Double(rate / 100))
+            samples.append(Int16(sin(2 * .pi * f * t) * 9000 * fade))
+        }
+        samples += [Int16](repeating: 0, count: off)
+        var d = Data()
+        func u32(_ v: Int) { var x = UInt32(v).littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func u16(_ v: Int) { var x = UInt16(v).littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        d.append("RIFF".data(using: .ascii)!); u32(36 + samples.count * 2)
+        d.append("WAVEfmt ".data(using: .ascii)!); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16)
+        d.append("data".data(using: .ascii)!); u32(samples.count * 2)
+        samples.withUnsafeBytes { d.append(contentsOf: $0) }
+        return d
+    }()
+
+    // MARK: - Lokale Aufnahme (gibt es mit baresip noch nicht; externe Gespräche nimmt cme-recorder auf)
+
     static var recordingsFolder: URL {
         #if os(macOS)
         let base = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first
@@ -728,329 +671,365 @@ final class SIPManager: ObservableObject {
         return dir
     }
 
-    private static func recordingPath(remote: String) -> String {
-        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        let who = remote.filter { $0.isNumber || $0 == "+" }
-        return recordingsFolder.appendingPathComponent("\(df.string(from: Date())) \(who.isEmpty ? "Anruf" : who).wav").path
-    }
-
-    private var recordingCalls = Set<String>()
-
     func setLocalRecording(callId: String, on: Bool) {
-        guard let call = call(withId: callId) else { return }
-        if on { call.startRecording(); recordingCalls.insert(callId) } else { call.stopRecording(); recordingCalls.remove(callId) }
-        log("Lokale Aufnahme \(on ? "an" : "aus"): \(call.params?.recordFile ?? "")")
-        refreshCalls()
+        log("Lokale Aufnahme gibt es mit baresip noch nicht")
     }
 
-    /// Gespräche, die die App auf Halten gesetzt hat (Re-INVITE sendonly – liblinphone-Zustand bleibt StreamsRunning).
-    private var heldCalls = Set<String>()
+    // MARK: - Audiogeräte
 
-    /// Übernommene Gespräche (INVITE mit "Replaces"): liblinphone schickt bei späteren re-INVITEs die Parameter
-    /// des ersten INVITE samt "Replaces" mit – auch bei der automatischen Reparatur nach einem Netzwechsel
-    /// (WLAN -> LTE). CME verwirft solche re-INVITEs ("invalid IE content"), die Sprache bleibt weg und nach 30 s
-    /// legt liblinphone auf. Deshalb nach dem Verbinden einmal ein re-INVITE mit frischen Parametern: danach
-    /// gelten die für das Gespräch. (Call.params lässt sich nach dem Verbinden nicht mehr setzen.)
-    private var replacesDropped = Set<String>()
-
-    private func dropReplaces(_ call: Call) {
-        guard let id = call.callLog?.callId, !replacesDropped.contains(id),
-              !(call.params?.getCustomHeader(headerName: "Replaces") ?? "").isEmpty else { return }
-        replacesDropped.insert(id)
-        // kurz warten: CME schickt direkt nach dem Verbinden selbst ein UPDATE (sonst 491 Request Pending)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, let call = self.call(withId: id), call.state == .StreamsRunning else { return }
-                do {
-                    try call.update(params: try self.updateParams(for: call))
-                    self.log("Übernommenes Gespräch: Parameter ohne Replaces gesetzt")
-                } catch { self.log("Replaces entfernen: \(error)") }
-            }
+    var audioDevices: [AudioDevice] {
+        func list(_ input: Bool) -> [String] {
+            var buf = [CChar](repeating: 0, count: 8192)
+            guard cmesip_audio_devices(input, &buf, buf.count) == 0 else { return [] }
+            return String(cString: buf).split(separator: "\n").map(String.init)
         }
-    }
-    #if os(iOS)
-    /// Kürzlich beendete Anrufe (Call-ID -> Zeit): ein verspäteter VoIP-Push dafür darf nicht mehr klingeln.
-    private var recentlyEnded: [String: Date] = [:]
-    #endif
-
-    /// Halten / Fortsetzen wie ein Cisco-Telefon: Re-INVITE mit a=sendonly bzw. a=sendrecv und dem Header
-    /// "Call-Info: <urn:x-cisco-remotecc:hold|resume>". Nur daran erkennt CME ein auf der Shared Line gehaltenes
-    /// Gespräch – die anderen Geräte zeigen es dann mit "Fortsetzen" an und können es übernehmen (call.pause()
-    /// schickt den Header nicht; CME behandelt das Gespräch dann als privat weiterlaufend).
-    func setHeld(callId: String, held: Bool) {
-        guard let call = call(withId: callId) else { return }
-        do {
-            let p = try updateParams(for: call)
-            p.audioDirection = held ? .SendOnly : .SendRecv
-            if p.videoEnabled { p.videoDirection = held ? .SendOnly : .SendRecv }
-            p.addCustomHeader(headerName: "Call-Info",
-                              headerValue: held ? "<urn:x-cisco-remotecc:hold>" : "<urn:x-cisco-remotecc:resume>")
-            try call.update(params: p)
-            if held { heldCalls.insert(callId) } else { heldCalls.remove(callId) }
-            log(held ? "Gespräch gehalten" : "Gespräch fortgesetzt")
-            refreshCalls()
-        } catch { log("Halten: \(error)") }
+        let ins = list(true), outs = list(false)
+        var result: [AudioDevice] = []
+        for n in ins { result.append(AudioDevice(id: n, canRecord: true, canPlay: outs.contains(n))) }
+        for n in outs where !ins.contains(n) { result.append(AudioDevice(id: n, canRecord: false, canPlay: true)) }
+        return result
     }
 
-    func setMuted(_ muted: Bool) {
-        core?.micEnabled = !muted
-        micMuted = muted
-    }
-
-    func sendDTMF(_ digits: String, callId: String? = nil) {
-        guard let call = callId.flatMap({ self.call(withId: $0) }) ?? core?.currentCall else { return }
-        for ch in digits { try? call.sendDtmf(dtmf: CChar(ch.asciiValue ?? 0)) }
-    }
-
-    func toggleSpeaker() {
-        #if os(iOS)
-        guard let core else { return }
-        let wantSpeaker = !speakerOn
-        if let dev = core.audioDevices.first(where: { $0.type == (wantSpeaker ? .Speaker : .Microphone) }) {
-            core.outputAudioDevice = dev
-            speakerOn = wantSpeaker
-        }
-        #endif
-    }
-
-    /// Audio-Geräte (v.a. macOS: Headset, Studio Display, Mac-Lautsprecher).
-    var audioDevices: [AudioDevice] { core?.extendedAudioDevices ?? core?.audioDevices ?? [] }
-
-    /// Gespeicherte Audiogeräte (Einstellungen) setzen; leer = Systemstandard.
+    /// Gespeicherte Audiogeräte setzen (leer = Systemstandard); gilt auch im laufenden Gespräch
     func applySavedAudioDevices() {
-        guard let core else { return }
-        core.reloadSoundDevices()
+        guard started else { return }
         let devs = audioDevices
-        if let i = devs.first(where: { $0.id == settings.audioInputId && $0.hasCapability(capability: .CapabilityRecord) }) {
-            core.defaultInputAudioDevice = i; core.inputAudioDevice = i
-        }
-        if let o = devs.first(where: { $0.id == settings.audioOutputId && $0.hasCapability(capability: .CapabilityPlay) }) {
-            core.defaultOutputAudioDevice = o; core.outputAudioDevice = o
-        }
-        applySavedVideoDevice()
+        let input = devs.contains { $0.id == settings.audioInputId && $0.canRecord } ? settings.audioInputId : ""
+        let output = devs.contains { $0.id == settings.audioOutputId && $0.canPlay } ? settings.audioOutputId : ""
+        _ = cmesip_set_audio_devices(input, output)
     }
 
-    /// Kameras (ohne liblinphones Standbild-Quelle), z.B. "AVFoundation: FaceTime HD-Kamera"
-    var videoDevices: [String] {
-        core?.reloadVideoDevices()
-        return (core?.videoDevicesList ?? []).filter { !$0.hasPrefix("StaticImage") }
+    // MARK: - Video (kommt später)
+
+    var videoDevices: [String] { [] }
+    var currentVideoDevice: String { "" }
+    func applySavedVideoDevice() {}
+    func setVideo(callId: String, enabled: Bool) { log("Video gibt es mit baresip noch nicht") }
+    func setVideoViews(remote: PlatformView?, preview: PlatformView?) {}
+
+    func call(withId callId: String) -> CallInfo? { calls.first { $0.id == callId } }
+
+    /// Alle Gespräche beenden (CallKit-Reset)
+    func terminateAll() { for id in entries.keys { _ = cmesip_hangup(id, 0) } }
+
+    /// App kommt nach vorn: Anmeldung auffrischen (im Hintergrund schläft baresip, die TCP-Verbindung ist evtl. weg)
+    func ensureRegistered() {
+        guard started else { start(); return }
+        guard accountActive else { return }
+        _ = cmesip_network_changed()
     }
 
-    /// Gespeicherte Kamera setzen (gilt auch im laufenden Gespräch); leer = Standard von liblinphone
-    func applySavedVideoDevice() {
-        guard let core, !settings.videoDeviceId.isEmpty, videoDevices.contains(settings.videoDeviceId),
-              core.videoDevice != settings.videoDeviceId else { return }
-        do { try core.setVideodevice(newValue: settings.videoDeviceId) } catch { log("Kamera: \(error)") }
-    }
-
-    func selectAudio(input: AudioDevice?, output: AudioDevice?) {
-        if let input { core?.inputAudioDevice = input; core?.defaultInputAudioDevice = input }
-        if let output { core?.outputAudioDevice = output; core?.defaultOutputAudioDevice = output }
-    }
-
-    func setVideo(callId: String, enabled: Bool) {
-        guard let call = call(withId: callId) else { return }
-        do {
-            let params = try updateParams(for: call)
-            params.videoEnabled = enabled
-            try call.update(params: params)
-        } catch { log("Video-Update: \(error)") }
-    }
-
-    func switchCamera() {
-        guard let core else { return }
-        let current = core.videoDevice ?? ""
-        let cams = core.videoDevicesList.filter { !$0.contains("StaticImage") }
-        guard let idx = cams.firstIndex(of: current), cams.count > 1 else { return }
-        try? core.setVideodevice(newValue: cams[(idx + 1) % cams.count])
-    }
-
-    /// Blind Transfer (REFER) – CME benötigt dafür "transfer-system full-consult" bzw. "transfer-pattern".
-    func transfer(callId: String, to number: String) {
-        guard let call = call(withId: callId) else { return }
-        do {
-            let addr = try Factory.Instance.createAddress(addr: "sip:\(number)@\(settings.sipHost)")
-            try call.transferTo(referTo: addr)
-        } catch { log("Transfer: \(error)") }
-    }
-
-    func setVideoViews(remote: PlatformView?, preview: PlatformView?) {
-        guard let core else { return }
-        #if os(iOS)
-        // iOS-Wrapper erwartet direkt UIView
-        core.nativeVideoWindow = remote
-        core.nativePreviewWindow = preview
-        #else
-        // macOS-Wrapper erwartet einen Zeiger auf die NSView
-        core.nativeVideoWindow = remote.map { Unmanaged.passUnretained($0).toOpaque() }
-        core.nativePreviewWindow = preview.map { Unmanaged.passUnretained($0).toOpaque() }
-        #endif
-    }
-
-    /// Von Local Push: holt den Anruf (INVITE) aktiv ab, Flexisip liefert ihn per fork-late aus.
+    /// Von Local Push: Anmeldung erneuern, damit Kamailio das INVITE zustellt
     func processPush(callId: String) {
         start()
-        core?.processPushNotification(callId: callId)
-        core?.ensureRegistered()
+        ensureRegistered()
     }
 
-    // MARK: - Delegates
+    // MARK: - iOS: Audio-Sitzung, PushKit
 
-    private func onRegistration(account: Account, state: RegistrationState, message: String) {
-        if let line = lineAccount, line.getCobject == account.getCobject { return }
-        // Abmeldung eines entfernten Kontos nicht als Zustand des aktuellen Kontos anzeigen
-        if let core, !core.accountList.contains(where: { $0.getCobject == account.getCobject }) {
-            log("Alte Anmeldung: \(state) \(message)")
+    #if os(iOS)
+    /// Kategorie für Telefonate; aktiv schaltet CallKit die Sitzung (didActivate → audioSession(active:))
+    private func configureAudioSession() {
+        let s = AVAudioSession.sharedInstance()
+        do {
+            try s.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+        } catch { log("Audio-Sitzung: \(error.localizedDescription)") }
+    }
+
+    /// CallKit hat die Audio-Sitzung aktiviert bzw. beendet: Audio-Units starten/stoppen
+    func audioSession(active: Bool) {
+        _ = cmesip_audio_session(active)
+    }
+
+    private static let teamID = "83BLV56527"
+    private static let voipTokenKey = "voipToken"
+    private static var instanceUUID: String {
+        let key = "sipInstanceUUID"
+        if let u = UserDefaults.standard.string(forKey: key) { return u }
+        let u = UUID().uuidString.lowercased()
+        UserDefaults.standard.set(u, forKey: key)
+        return u
+    }
+
+    private var pushRegistry: PKPushRegistry?
+    private let pushDelegate = VoIPPushDelegate()
+    /// Per VoIP-Push gemeldete Anrufe, deren INVITE noch fehlt (Call-ID -> Zeit)
+    private var pushPending: [String: Date] = [:]
+    /// Kürzlich beendete Anrufe: ein verspäteter Push dafür darf nicht mehr klingeln
+    private var recentlyEnded: [String: Date] = [:]
+
+    private func startPushKit() {
+        guard pushRegistry == nil else { return }
+        let r = PKPushRegistry(queue: .main)
+        r.delegate = pushDelegate
+        r.desiredPushTypes = [.voIP]
+        pushRegistry = r
+    }
+
+    fileprivate func pushToken(_ token: String?) {
+        UserDefaults.standard.set(token, forKey: Self.voipTokenKey)
+        guard token != voipToken else { return }
+        voipToken = token
+        log("VoIP-Token \(token.map { String($0.prefix(8)) + "…" } ?? "entfernt")")
+        if let token { LocalPushController.shared.update(deviceToken: token) }
+        // Push-Parameter stehen im Contact: Konto neu setzen (ersetzt die Anmeldung, gleiche +sip.instance)
+        if accountActive { addConfiguredAccount() }
+    }
+
+    /// VoIP-Push von Kamailio/push-relay: SOFORT an CallKit melden (sonst beendet iOS die App), dann neu anmelden –
+    /// Kamailio wartet bis 30 s auf die Anmeldung und stellt das INVITE (gleiche Call-ID) dann zu.
+    fileprivate func incomingPush(_ payload: [AnyHashable: Any]) {
+        let aps = payload["aps"] as? [String: Any] ?? [:]
+        let callId = aps["call-id"] as? String ?? payload["call-id"] as? String ?? UUID().uuidString
+        let from = payload["from-uri"] as? String ?? ""
+        let name = payload["display-name"] as? String ?? ""
+        let handle = from.isEmpty ? "Unbekannt" : Self.user(of: from)
+        CallCenter.shared.reportIncoming(callId: callId, handle: handle, displayName: name, hasVideo: false)
+        log("VoIP-Push für \(callId.prefix(8)) von \(handle)")
+        if let ended = recentlyEnded[callId], Date().timeIntervalSince(ended) < 120 {
+            log("Push für bereits beendeten Anruf \(callId.prefix(8)) – beende sofort")
+            CallCenter.shared.reportEnded(callId: callId, failed: false)
+            CallCenter.shared.forget(callId: callId)
             return
         }
-        // Alte Anmeldung hält CME noch fest: alle 10 s neu versuchen, bis sie abgelaufen ist (≤ jabberExpires)
-        if state == .Failed, settings.jabberMode, message.contains("Forbidden"), forbiddenRetry == nil {
-            let item = DispatchWorkItem { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.forbiddenRetry = nil
-                    self.log("Erneuter Anmeldeversuch nach 403")
-                    self.core?.refreshRegisters()
-                }
+        if entries[callId] != nil { return }   // INVITE war schneller
+        pushPending[callId] = Date()
+        start()
+        ensureRegistered()
+        // Kommt das INVITE nicht (am anderen Gerät angenommen, Anrufer hat aufgelegt): CallKit-Anruf beenden
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.pushPending.removeValue(forKey: callId) != nil, self.entries[callId] == nil else { return }
+                self.log("Kein INVITE zum Push \(callId.prefix(8)) – Anruf beendet")
+                CallCenter.shared.reportEnded(callId: callId, failed: false)
+                CallCenter.shared.forget(callId: callId)
             }
-            forbiddenRetry = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: item)
         }
-        switch state {
-        case .Progress: registration = .progress
-        case .Ok:
+    }
+    #endif
+
+    // MARK: - Ereignisse aus baresip
+
+    fileprivate func handle(_ e: CmesipEvent) {
+        switch e.kind {
+        case CMESIP_LOG:
+            let t = e.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { log("baresip: \(t)") }
+        case CMESIP_TRACE:
+            let first = e.text.prefix(while: { $0 != "\r" && $0 != "\n" })
+            if awaitingUnregister, e.peer.hasPrefix("rx"), e.text.hasPrefix("SIP/2.0 200"), e.text.contains(" REGISTER\r") {
+                unregisterAnswered = true
+            }
+            NSLog("[CMEPhone] SIP %@\n%@", e.peer, e.text)
+            if !first.isEmpty, !first.hasPrefix("OPTIONS"), !(first.hasPrefix("SIP/2.0") && e.text.contains("CSeq: ") && e.text.contains(" OPTIONS")) {
+                log("SIP \(e.peer): \(first)")
+            }
+        case CMESIP_REGISTER_OK:
+            forbiddenRetry?.cancel(); forbiddenRetry = nil
+            if registration != .ok { log("Registrierung: Ok \(e.text)") }
             registration = .ok
             subscribeOwnLine()
-            if let tok = account.params?.pushNotificationConfig?.voipToken, !tok.isEmpty {
-                if voipToken != tok {
-                    voipToken = tok
-                    #if os(iOS)
-                    LocalPushController.shared.update(deviceToken: tok)
-                    #endif
+        case CMESIP_REGISTER_FAIL:
+            log("Registrierung: Failed \(e.text)")
+            registration = .failed(e.text)
+            // Alte Anmeldung hält CME noch fest: alle 10 s neu versuchen, bis sie abgelaufen ist
+            if settings.jabberMode, e.text.contains("403"), forbiddenRetry == nil {
+                let item = DispatchWorkItem { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.forbiddenRetry = nil
+                        self.log("Erneuter Anmeldeversuch nach 403")
+                        _ = cmesip_register()
+                    }
                 }
+                forbiddenRetry = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: item)
             }
-        case .Failed: registration = .failed(message)
-        case .Cleared: registration = .cleared
-        default: registration = .none
+        case CMESIP_UNREGISTERED:
+            registration = .cleared
+        case CMESIP_NOTIFY:
+            if let id = Int(e.callId) { subHandlers[id]?.notify(e.text) }
+        case CMESIP_SUB_CLOSED:
+            if let id = Int(e.callId), let h = subHandlers.removeValue(forKey: id) { h.closed(e.text) }
+        default:
+            handleCallEvent(e)
         }
-        log("Registrierung: \(state) \(message)")
     }
 
-    private func onCallState(call: Call, state: Call.State, message: String) {
-        let callId = call.callLog?.callId ?? ""
-        log("Call \(callId.prefix(8)): \(state) \(message)")
+    private func handleCallEvent(_ e: CmesipEvent) {
+        let id = e.callId
+        guard !id.isEmpty else { return }
         let callKit = CallCenter.shared
-
-        switch state {
-        case .PushIncomingReceived, .IncomingReceived:
-            // Muss sofort an CallKit gemeldet werden (sonst beendet iOS die App nach VoIP-Push).
-            callKit.reportIncoming(callId: callId,
-                                   handle: call.remoteAddress?.username ?? "Unbekannt",
-                                   displayName: call.remoteAddress?.displayName,
-                                   hasVideo: call.remoteParams?.videoEnabled ?? false)
+        var entry = entries[id]
+        let newState: CallState?
+        switch e.kind {
+        case CMESIP_CALL_INCOMING:
             #if os(iOS)
-            // VoIP-Push kommt erst, nachdem der Anruf schon beendet ist (z.B. am Mac angenommen, CANCEL kam per
-            // SIP schneller als der Push über APNs): liblinphone legt dann einen neuen Push-Anruf an und wartet
-            // vergeblich auf das INVITE – CallKit klingelt so lange weiter. Melden muss die App ihn trotzdem
-            // (PushKit-Pflicht), dann sofort beenden.
-            if state == .PushIncomingReceived, let ended = recentlyEnded[callId], Date().timeIntervalSince(ended) < 120 {
-                log("Push für bereits beendeten Anruf \(callId.prefix(8)) – beende sofort")
-                callKit.reportEnded(callId: callId, failed: false)
-                try? call.terminate()
-            }
+            pushPending[id] = nil
             #endif
-        case .OutgoingProgress:
-            callKit.reportOutgoingStarted(callId: callId, call: call)
-        case .Connected:
-            if call.dir == .Outgoing { callKit.reportOutgoingConnected(callId: callId) }
+            if entry == nil {
+                let c = Entry(id: id, remoteURI: e.peer, displayName: e.text, incoming: true, state: .IncomingReceived)
+                entries[id] = c; order.append(id); entry = c
+            }
+            newState = .IncomingReceived
+            callKit.reportIncoming(callId: id, handle: Self.user(of: e.peer), displayName: e.text, hasVideo: false)
+        case CMESIP_CALL_OUTGOING:
+            newState = .OutgoingProgress
+            callKit.reportOutgoingStarted(callId: id)
+        case CMESIP_CALL_RINGING: newState = .OutgoingRinging
+        case CMESIP_CALL_PROGRESS: newState = entry?.incoming == true ? .IncomingEarlyMedia : .OutgoingEarlyMedia
+        case CMESIP_CALL_ESTABLISHED:
+            entry?.established = Date()
+            newState = .StreamsRunning
+            if entry?.incoming == false { callKit.reportOutgoingConnected(callId: id) }
+            if micMuted { _ = cmesip_mute(id, true) }
             startDurationTimer()
-        case .StreamsRunning:
-            dropReplaces(call)
-        case .End, .Error:
-            callKit.reportEnded(callId: callId, failed: state == .Error)
-            #if os(iOS)
-            if !callId.isEmpty {
-                recentlyEnded[callId] = Date()
-                recentlyEnded = recentlyEnded.filter { Date().timeIntervalSince($0.value) < 120 }
-            }
-            #endif
-        case .Released:
-            callKit.forget(callId: callId)
-        default: break
+        case CMESIP_CALL_HOLD:
+            entry?.heldRemote = true; newState = .PausedByRemote
+        case CMESIP_CALL_RESUME:
+            entry?.heldRemote = false; newState = .StreamsRunning
+        case CMESIP_CALL_MENC:
+            newState = nil
+        case CMESIP_CALL_DTMF:
+            newState = nil
+        case CMESIP_CALL_CLOSED:
+            newState = .End
+        default:
+            newState = nil
         }
+        guard let entry else { return }
+        if !e.peer.isEmpty, entry.remoteURI.isEmpty { entry.remoteURI = e.peer }
+        if let newState {
+            entry.state = newState
+            log("Call \(id.prefix(8)): \(newState) \(e.text)")
+        }
+        var info = [CChar](repeating: 0, count: 128)
+        if newState != .End, cmesip_call_info(id, &info, info.count) == 0 { entry.info = String(cString: info) }
         refreshCalls()
-        callStateHandlers.forEach { $0(call, state) }
+        if let newState { notifyHandlers(entry, newState) }
+        if newState == .End {
+            callKit.reportEnded(callId: id, failed: false)
+            #if os(iOS)
+            recentlyEnded[id] = Date()
+            recentlyEnded = recentlyEnded.filter { Date().timeIntervalSince($0.value) < 120 }
+            #endif
+            // wie liblinphone: kurz "End", dann "Released" und weg
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, let c = self.entries[id] else { return }
+                    c.state = .Released
+                    self.refreshCalls()
+                    self.notifyHandlers(c, .Released)
+                    self.entries[id] = nil
+                    self.order.removeAll { $0 == id }
+                    self.refreshCalls()
+                    callKit.forget(callId: id)
+                }
+            }
+        }
+    }
+
+    private func notifyHandlers(_ c: Entry, _ state: CallState) {
+        guard let info = calls.first(where: { $0.id == c.id }) else { return }
+        callStateHandlers.forEach { $0(info, state) }
+    }
+
+    private static func user(of uri: String) -> String {
+        var s = uri
+        if let r = s.range(of: "<") { s = String(s[r.upperBound...]) }
+        if let r = s.range(of: ":") { s = String(s[r.upperBound...]) }
+        return s.components(separatedBy: CharacterSet(charactersIn: "@;>")).first ?? uri
+    }
+
+    /// "codec=G722/16000 menc=srtp" -> ("G722 16 kHz", "srtp")
+    private static func parseInfo(_ s: String) -> (codec: String, menc: String) {
+        var codec = "–", menc = "none"
+        for part in s.split(separator: " ") {
+            let kv = part.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2 else { continue }
+            if kv[0] == "codec" {
+                let c = kv[1].split(separator: "/").map(String.init)
+                if c.count >= 2, c[0] != "-", let hz = Int(c[1]) { codec = "\(c[0]) \(hz / 1000) kHz" }
+            } else if kv[0] == "menc" { menc = kv[1] }
+        }
+        return (codec, menc)
     }
 
     func refreshCalls() {
-        guard let core else { calls = []; return }
-        calls = core.calls.compactMap { c in
-            guard let id = c.callLog?.callId else { return nil }
-            let params = c.currentParams
-            return CallInfo(
-                id: id,
-                remote: c.remoteAddress?.username ?? c.remoteAddress?.asStringUriOnly() ?? "?",
-                displayName: c.remoteAddress?.displayName ?? "",
-                state: c.state,
-                isIncoming: c.dir == .Incoming,
-                hasVideo: params?.videoEnabled ?? false,
-                isPaused: c.state == .Paused || c.state == .Pausing || heldCalls.contains(id),
-                audioCodec: params?.usedAudioPayloadType.map(Self.codecLabel) ?? "–",
-                videoCodec: params?.usedVideoPayloadType?.mimeType ?? "–",
-                duration: c.duration,
-                isRecording: recordingCalls.contains(id),
-                mediaDetails: Self.mediaDetails(c))
-        }
-        recordingCalls.formIntersection(Set(calls.map(\.id)))
-        replacesDropped.formIntersection(Set(calls.map(\.id)))
-        heldCalls.formIntersection(Set(calls.map(\.id)))
-        if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
-    }
-
-    /// "G722 16 kHz", "opus 48 kHz stereo". G.722 meldet nach RFC 3551 den RTP-Takt 8000, arbeitet aber mit 16 kHz.
-    private static func codecLabel(_ pt: PayloadType) -> String {
-        let khz = pt.mimeType.uppercased() == "G722" ? 16 : pt.clockRate / 1000
-        return "\(pt.mimeType) \(khz) kHz" + (pt.channels > 1 ? " stereo" : "")
-    }
-
-    /// Zeilen für den Info-Knopf: was in diesem Gespräch tatsächlich genutzt wird
-    private static func mediaDetails(_ c: Call) -> [String] {
-        guard let p = c.currentParams else { return [] }
-        var out: [String] = []
-        if let a = p.usedAudioPayloadType {
-            out.append("Audio: \(codecLabel(a))" + (a.normalBitrate > 0 ? ", \(a.normalBitrate) kbit/s" : ""))
-        }
-        if p.videoEnabled, let v = p.usedVideoPayloadType {
-            func size(_ d: VideoDefinition?, _ fps: Float) -> String {
-                guard let d, d.width > 0 else { return "–" }
-                return "\(d.width)×\(d.height)" + (fps > 0 ? " @ \(Int(fps.rounded())) fps" : "")
+        calls = order.compactMap { id in
+            guard let c = entries[id] else { return nil }
+            let (codec, menc) = Self.parseInfo(c.info)
+            let duration = c.established.map { Int(Date().timeIntervalSince($0)) } ?? 0
+            var details: [String] = []
+            if c.established != nil {
+                details.append("Audio: \(codec)")
+                details.append("Verschlüsselung: " + (menc == "srtp" ? "SRTP" : "keine"))
             }
-            out.append("Video: \(v.mimeType)")
-            out.append("Senden: \(size(p.sentVideoDefinition, p.sentFramerate))")
-            out.append("Empfangen: \(size(p.receivedVideoDefinition, p.receivedFramerate))")
+            details.append("Gegenstelle: \(c.remoteURI)")
+            var state = c.state
+            if c.heldLocal, state == .StreamsRunning || state == .PausedByRemote { state = .Paused }
+            return CallInfo(id: id, remote: Self.user(of: c.remoteURI), displayName: c.displayName, state: state,
+                            isIncoming: c.incoming, hasVideo: false, isPaused: c.heldLocal,
+                            audioCodec: codec, videoCodec: "–", duration: duration, isRecording: false,
+                            mediaDetails: details)
         }
-        out.append("Verschlüsselung: " + (p.mediaEncryption == .None ? "keine" : "\(p.mediaEncryption)"))
-        if let r = c.remoteAddress?.asStringUriOnly() { out.append("Gegenstelle: \(r)") }
-        return out
+        updateRinger()
+        if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
     }
 
     private func startDurationTimer() {
         guard durationTimer == nil else { return }
-        durationTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshCalls() }
+        durationTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            Task { @MainActor in SIPManager.shared.refreshCalls() }
         }
+    }
+
+    static func errText(_ err: Int32) -> String {
+        String(cString: strerror(err)) + " (\(err))"
     }
 
     func log(_ line: String) {
         let df = DateFormatter(); df.dateFormat = "HH:mm:ss"
         lastLog.append("\(df.string(from: Date())) \(line)")
-        if lastLog.count > 300 { lastLog.removeFirst(lastLog.count - 300) }
+        if lastLog.count > 500 { lastLog.removeFirst(lastLog.count - 500) }
         NSLog("[CMEPhone] %@", line)
     }
 }
 
-extension SIPTransport {
-    var linphone: TransportType {
-        switch self { case .udp: return .Udp; case .tcp: return .Tcp; case .tls: return .Tls }
+#if os(iOS)
+/// PushKit-Delegate (Queue .main): Token und eingehende VoIP-Pushes an den SIPManager
+final class VoIPPushDelegate: NSObject, PKPushRegistryDelegate {
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        let hex = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
+        MainActor.assumeIsolated { SIPManager.shared.pushToken(hex) }
     }
+
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        MainActor.assumeIsolated { SIPManager.shared.pushToken(nil) }
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload,
+                      for type: PKPushType, completion: @escaping () -> Void) {
+        MainActor.assumeIsolated { SIPManager.shared.incomingPush(payload.dictionaryPayload) }
+        completion()
+    }
+}
+#endif
+
+/// Ereignis aus dem baresip-Thread (Strings schon kopiert)
+fileprivate struct CmesipEvent: Sendable {
+    let kind: cmesip_event
+    let callId: String
+    let peer: String
+    let text: String
+}
+
+/// C-Rückruf (baresip-Thread): nur kopieren und an den Main-Thread geben
+private let cmesipCallback: @convention(c) (Int32, UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+                                            UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = { ev, cid, peer, text, _ in
+    let e = CmesipEvent(kind: cmesip_event(rawValue: UInt32(ev)),
+                        callId: cid.map { String(cString: $0) } ?? "",
+                        peer: peer.map { String(cString: $0) } ?? "",
+                        text: text.map { String(cString: $0) } ?? "")
+    DispatchQueue.main.async { MainActor.assumeIsolated { SIPManager.shared.handle(e) } }
 }

@@ -16,11 +16,6 @@ settings:
     # Apple Vision Pro: die iPad-App läuft dort als "Designed for iPad" (kein eigenes visionOS-SDK von Linphone)
     SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: YES
 
-packages:
-  linphonesw:
-    url: https://gitlab.linphone.org/BC/public/linphone-sdk-swift-ios
-    branch: stable                 # stable = mit Video (novideo/* NICHT verwenden)
-
 targets:
   CMEPhone:
     type: application
@@ -29,8 +24,15 @@ targets:
       - path: CMEPhone
       - path: Shared
     dependencies:
-      - package: linphonesw
-        product: linphonesw
+      # SIP über baresip: third_party/build/CMESIP.xcframework (third_party/fetch.sh + build.sh)
+      - framework: third_party/build/CMESIP.xcframework
+        embed: false
+      - sdk: AudioToolbox.framework
+      - sdk: AVFoundation.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: Security.framework
+      - sdk: libz.tbd
+      - sdk: libresolv.tbd
       - sdk: CallKit.framework
       - sdk: PushKit.framework
       # >>> LOCALPUSH  (nur mit LOCALPUSH=1 zsh build.command – Apple vergibt das Entitlement auf Antrag)

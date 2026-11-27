@@ -5,6 +5,7 @@
  * baresip-Thread (run()); der Aufrufer wartet auf das Ergebnis. Mit re_thread_enter() hielte der Aufrufer
  * die Ereignisschleife fest – das Starten des Tons beim Annehmen wartet aber auf genau diese Schleife.
  */
+#include <TargetConditionals.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <semaphore.h>
@@ -715,4 +716,34 @@ int cmesip_set_audio_devices(const char *input, const char *output)
 		}
 		return 0;
 	});
+}
+
+
+/* --- Geräte-ID, Audio-Sitzung --- */
+
+int cmesip_set_instance(const char *uuid)
+{
+	return run(^int(void) {
+		struct config *cfg = conf_config();
+		str_ncpy(cfg->sip.uuid, uuid ? uuid : "", sizeof(cfg->sip.uuid));
+		return 0;
+	});
+}
+
+#if TARGET_OS_IPHONE
+/* modules/audiounit/sess.c: stoppt (true) bzw. startet (false) alle Audio-Units */
+void audiosess_interrupt(bool interrupted);
+#endif
+
+int cmesip_audio_session(bool active)
+{
+#if TARGET_OS_IPHONE
+	return run(^int(void) {
+		audiosess_interrupt(!active);
+		return 0;
+	});
+#else
+	(void)active;
+	return 0;
+#endif
 }

@@ -1,6 +1,6 @@
 # Eigenes Xcode-Projekt für macOS (CMEPhoneMac.xcodeproj).
 # SIP über baresip: third_party/build/CMESIP.xcframework (third_party/fetch.sh + build.sh),
-# SIPManager der Mac-App in CMEPhoneMac/Core (iOS nutzt noch liblinphone, CMEPhone/Core/SIPManager.swift).
+# SIPManager (CMEPhone/Core/SIPManager.swift) gemeinsam mit iOS.
 #   xcodegen generate --spec project-mac.yml
 name: CMEPhoneMac
 options:
@@ -30,7 +30,6 @@ targets:
         excludes:
           - CallKitProvider.swift        # iOS: CallKit
           - LocalPushController.swift    # iOS: Local Push
-          - SIPManager.swift             # iOS: liblinphone (Mac: CMEPhoneMac/Core/SIPManager.swift)
     dependencies:
       - framework: third_party/build/CMESIP.xcframework
         embed: false

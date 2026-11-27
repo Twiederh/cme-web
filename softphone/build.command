@@ -43,10 +43,11 @@ say "$BUILD_INFO"
 
 # SIP-Bibliothek der Mac-App (baresip, third_party/): nur bauen, wenn sie fehlt oder die C-Schicht neuer ist
 XCF=third_party/build/CMESIP.xcframework
-if [ "${ONLY:-}" != "ios" ]; then
-  if [ ! -d $XCF/macos-arm64 ] || [ -n "$(find third_party/cmesip third_party/patches -newer $XCF -type f 2>/dev/null)" ]; then
+# immer alle Plattformen (build.sh baut das xcframework nur aus den gebauten Teilen)
+if true; then
+  if [ ! -d $XCF/macos-arm64 ] || [ ! -d $XCF/ios-arm64 ] || [ -n "$(find third_party/cmesip third_party/patches -newer $XCF -type f 2>/dev/null)" ]; then
     say "--- SIP-Bibliothek (baresip) bauen"
-    { zsh third_party/fetch.sh && SLICES="${CMESIP_SLICES:-macos}" zsh third_party/build.sh; } > build-logs/cmesip.log 2>&1 \
+    { zsh third_party/fetch.sh && zsh third_party/build.sh; } > build-logs/cmesip.log 2>&1 \
       && say "SIP-Bibliothek OK" || { say "SIP-Bibliothek FEHLER (siehe build-logs/cmesip.log)"; exit 1; }
   fi
 fi

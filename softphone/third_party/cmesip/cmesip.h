@@ -97,6 +97,12 @@ int  cmesip_audio_devices(bool input, char *buf, size_t size);
 /* Geräte setzen (NULL = unverändert, "" = Systemstandard); gilt auch für laufende Gespräche */
 int  cmesip_set_audio_devices(const char *input, const char *output);
 
+/* Feste Geräte-ID: Contact mit +sip.instance="<urn:uuid:...>" (Registrar ersetzt dann die alte Anmeldung).
+ * Vor cmesip_set_account aufrufen; NULL/"" = ohne. */
+int  cmesip_set_instance(const char *uuid);
+/* iOS: Audio-Sitzung aktiv (CallKit didActivate) bzw. inaktiv – startet/stoppt die Audio-Units */
+int  cmesip_audio_session(bool active);
+
 #ifdef __cplusplus
 }
 #endif

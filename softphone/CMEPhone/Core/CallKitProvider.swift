@@ -1,7 +1,6 @@
 import Foundation
 import CallKit
 import AVFoundation
-import linphonesw
 
 /// Plattformneutraler Name, den der gemeinsame Kern (SIPManager) verwendet.
 /// Auf macOS gibt es stattdessen eine eigene `CallCenter`-Klasse ohne CallKit.
@@ -109,7 +108,7 @@ final class CallKitProvider: NSObject {
         }
     }
 
-    func reportOutgoingStarted(callId: String, call: Call) {
+    func reportOutgoingStarted(callId: String) {
         guard let uuid = uuidByCallId[callId] else { return }
         provider.reportOutgoingCall(with: uuid, startedConnectingAt: Date())
     }
@@ -154,7 +153,7 @@ extension CallKitProvider: CXProviderDelegate {
     // Delegate-Queue ist .main (siehe init) – daher synchron auf dem MainActor.
     nonisolated func providerDidReset(_ provider: CXProvider) {
         MainActor.assumeIsolated {
-            for call in self.sip.core?.calls ?? [] { try? call.terminate() }
+            self.sip.terminateAll()
             self.uuidByCallId.removeAll(); self.callIdByUUID.removeAll()
         }
     }
@@ -163,7 +162,7 @@ extension CallKitProvider: CXProviderDelegate {
         MainActor.assumeIsolated {
             let takeover = self.pendingTakeover.removeValue(forKey: action.callUUID)
             let placed = takeover.map { self.sip.takeOver($0) } ?? self.sip.placeCall(to: action.handle.value, video: action.isVideo)
-            guard let call = placed, let callId = call.callLog?.callId else { action.fail(); return }
+            guard let callId = placed else { action.fail(); return }
             self.uuidByCallId[callId] = action.callUUID
             self.callIdByUUID[action.callUUID] = callId
             let update = CXCallUpdate()
@@ -230,10 +229,10 @@ extension CallKitProvider: CXProviderDelegate {
     }
 
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        MainActor.assumeIsolated { self.sip.core?.activateAudioSession(activated: true) }
+        MainActor.assumeIsolated { self.sip.audioSession(active: true) }
     }
 
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
-        MainActor.assumeIsolated { self.sip.core?.activateAudioSession(activated: false) }
+        MainActor.assumeIsolated { self.sip.audioSession(active: false) }
     }
 }

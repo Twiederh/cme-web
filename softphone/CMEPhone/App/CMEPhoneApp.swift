@@ -76,15 +76,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Anrufliste der App (iPad/Vision Pro haben keine Telefon-App mit „Zuletzt“)
         SIPManager.shared.addCallStateHandler { call, state in
             MainActor.assumeIsolated {
-                let id = call.callLog?.callId ?? ""
                 switch state {
-                case .Connected, .StreamsRunning: CallHistory.shared.softphoneConnected(id: id)
+                case .StreamsRunning: CallHistory.shared.softphoneConnected(id: call.id)
                 case .Released:
                     CallHistory.shared.softphoneEnded(
-                        id: id, incoming: call.dir == .Incoming, number: call.remoteAddress?.username ?? "",
-                        name: call.remoteAddress?.displayName ?? "",
-                        start: call.callLog.map { Date(timeIntervalSince1970: TimeInterval($0.startDate)) } ?? Date(),
-                        duration: call.callLog?.duration ?? 0)
+                        id: call.id, incoming: call.isIncoming, number: call.remote, name: call.displayName,
+                        start: Date().addingTimeInterval(-TimeInterval(call.duration)), duration: call.duration)
                 default: break
                 }
             }
@@ -132,7 +129,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
-        SIPManager.shared.core?.ensureRegistered()
+        MainActor.assumeIsolated { SIPManager.shared.ensureRegistered() }
     }
 
     @MainActor private static var lastBundle = ""
