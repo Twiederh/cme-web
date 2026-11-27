@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 .DS_Store
 softphone/project.gen.yml
+
+# baresip/libre-Quellen (softphone/third_party/fetch.sh)
+softphone/third_party/src/
+softphone/third_party/build/
