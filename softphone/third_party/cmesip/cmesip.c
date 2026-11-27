@@ -1,8 +1,9 @@
 /*
  * cmesip.c – baresip für CME Phone (siehe cmesip.h).
  *
- * Ein Thread führt libre/baresip (re_main). Aufrufe aus anderen Threads sperren die Ereignisschleife
- * mit re_thread_enter()/re_thread_leave().
+ * Ein Thread führt libre/baresip (re_main). Befehle aus anderen Threads laufen über eine mqueue im
+ * baresip-Thread (run()); der Aufrufer wartet auf das Ergebnis. Mit re_thread_enter() hielte der Aufrufer
+ * die Ereignisschleife fest – das Starten des Tons beim Annehmen wartet aber auf genau diese Schleife.
  */
 #include <pthread.h>
 #include <stdlib.h>
@@ -54,6 +55,19 @@ static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 	(void)arg;
 
 	switch (ev) {
+	case BEVENT_SIPSESS_CONN: {
+		/* Eingehender Anruf: annehmen (klingeln), die App entscheidet dann über Annehmen/Ablehnen */
+		const struct sip_msg *msg = bevent_get_msg(event);
+		struct ua *ua = uag_find_msg(msg);
+		int err = ua ? ua_accept(ua, msg) : ENOENT;
+		if (err) {
+			warning("cmesip: eingehender Anruf nicht angenommen: %m\n", err);
+			if (!ua)
+				(void)sip_treply(NULL, uag_sip(), msg, 404, "Not Found");
+		}
+		bevent_stop(event);
+		break;
+	}
 	case BEVENT_REGISTER_OK:      emit(CMESIP_REGISTER_OK, NULL, NULL, txt); break;
 	case BEVENT_REGISTER_FAIL:    emit(CMESIP_REGISTER_FAIL, NULL, NULL, txt); break;
 	case BEVENT_UNREGISTERING:    emit(CMESIP_UNREGISTERED, NULL, NULL, txt); break;
@@ -80,13 +94,31 @@ static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 
 /* Befehle an den baresip-Thread (weckt die Ereignisschleife auf) */
-enum { MQ_STOP = 1 };
+enum { MQ_STOP = 1, MQ_CALL };
+
+struct cmesip_cmd {
+	int (^blk)(void);
+	int err;
+	bool done;
+	pthread_mutex_t m;
+	pthread_cond_t c;
+};
 
 static void mqueue_handler(int id, void *data, void *arg)
 {
-	(void)data; (void)arg;
-	if (id == MQ_STOP)
+	(void)arg;
+	if (id == MQ_STOP) {
 		re_cancel();
+	}
+	else if (id == MQ_CALL) {
+		struct cmesip_cmd *c = data;
+		int err = c->blk();
+		pthread_mutex_lock(&c->m);
+		c->err = err;
+		c->done = true;
+		pthread_cond_signal(&c->c);
+		pthread_mutex_unlock(&c->m);
+	}
 }
 
 
@@ -227,8 +259,31 @@ bool cmesip_running(void)
 }
 
 
-#define ENTER() do { if (!cmesip_running()) return ESRCH; re_thread_enter(); } while (0)
-#define LEAVE() re_thread_leave()
+/* blk im baresip-Thread ausführen und auf das Ergebnis warten */
+static int run(int (^blk)(void))
+{
+	struct cmesip_cmd c = { .blk = blk };
+	int err;
+
+	if (!cmesip_running())
+		return ESRCH;
+	if (pthread_equal(pthread_self(), g.thread))
+		return blk();
+
+	pthread_mutex_init(&c.m, NULL);
+	pthread_cond_init(&c.c, NULL);
+	err = mqueue_push(g.mq, MQ_CALL, &c);
+	if (!err) {
+		pthread_mutex_lock(&c.m);
+		while (!c.done)
+			pthread_cond_wait(&c.c, &c.m);
+		err = c.err;
+		pthread_mutex_unlock(&c.m);
+	}
+	pthread_cond_destroy(&c.c);
+	pthread_mutex_destroy(&c.m);
+	return err;
+}
 
 
 static struct call *find_call(const char *call_id)
@@ -239,69 +294,59 @@ static struct call *find_call(const char *call_id)
 
 int cmesip_set_account(const char *aor, const char *uri_params, const char *hdr_params)
 {
-	int err;
-
-	ENTER();
-	if (g.ua) {
-		mem_deref(g.ua);
-		g.ua = NULL;
-	}
-	err = sip_contact_set_params(uri_params, hdr_params);
-	if (!err)
-		err = ua_alloc(&g.ua, aor);
-	if (!err && account_regint(ua_account(g.ua)) > 0)
-		err = ua_register(g.ua);
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		int err;
+		g.ua = mem_deref(g.ua);
+		err = sip_contact_set_params(uri_params, hdr_params);
+		if (!err)
+			err = ua_alloc(&g.ua, aor);
+		if (!err && account_regint(ua_account(g.ua)) > 0)
+			err = ua_register(g.ua);
+		return err;
+	});
 }
 
 
 int cmesip_register(void)
 {
-	int err;
-	ENTER();
-	err = g.ua ? ua_register(g.ua) : ENOENT;
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		return g.ua ? ua_register(g.ua) : ENOENT;
+	});
 }
 
 
 int cmesip_unregister(void)
 {
-	ENTER();
-	if (g.ua)
-		ua_unregister(g.ua);
-	LEAVE();
-	return 0;
+	return run(^int(void) {
+		if (g.ua)
+			ua_unregister(g.ua);
+		return 0;
+	});
 }
 
 
 void cmesip_remove_account(void)
 {
-	if (!cmesip_running())
-		return;
-	re_thread_enter();
-	if (g.ua) {
-		ua_unregister(g.ua);
-		mem_deref(g.ua);
-		g.ua = NULL;
-	}
-	re_thread_leave();
+	(void)run(^int(void) {
+		if (g.ua) {
+			ua_unregister(g.ua);
+			g.ua = mem_deref(g.ua);
+		}
+		return 0;
+	});
 }
 
 
 int cmesip_network_changed(void)
 {
-	int err;
-	ENTER();
-	net_dns_refresh(baresip_network());
-	err = uag_reset_transp(true, true);
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		net_dns_refresh(baresip_network());
+		return uag_reset_transp(true, true);
+	});
 }
 
 
-/* Replaces-Wert für den URI-Header escapen (;=@ und Leerzeichen) */
+/* Replaces-Wert für den URI-Header escapen */
 static int print_escaped(struct re_printf *pf, const char *s)
 {
 	int err = 0;
@@ -318,123 +363,141 @@ static int print_escaped(struct re_printf *pf, const char *s)
 int cmesip_dial(const char *uri, const char *from_uri, const char *replaces,
 		char *cid_out, size_t cid_size)
 {
-	struct call *call = NULL;
-	char *target = NULL;
-	int err;
-
 	if (!uri)
 		return EINVAL;
 
-	ENTER();
-	if (!g.ua) {
-		LEAVE();
-		return ENOENT;
-	}
-	if (replaces && *replaces)
-		err = re_sdprintf(&target, "<%s?Replaces=%H>", uri, print_escaped, replaces);
-	else
-		err = re_sdprintf(&target, "%s", uri);
-	if (!err)
-		err = ua_connect(g.ua, &call, from_uri, target, VIDMODE_OFF);
-	if (!err && call && cid_out && cid_size)
-		str_ncpy(cid_out, call_id(call), cid_size);
-	mem_deref(target);
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		struct call *call = NULL;
+		char *target = NULL;
+		int err;
+
+		if (!g.ua)
+			return ENOENT;
+		if (replaces && *replaces)
+			err = re_sdprintf(&target, "<%s?Replaces=%H>", uri, print_escaped, replaces);
+		else
+			err = re_sdprintf(&target, "%s", uri);
+		if (!err)
+			err = ua_connect(g.ua, &call, from_uri, target, VIDMODE_OFF);
+		if (!err && call && cid_out && cid_size)
+			str_ncpy(cid_out, call_id(call), cid_size);
+		mem_deref(target);
+		return err;
+	});
 }
 
 
 int cmesip_answer(const char *call_id)
 {
-	int err;
-	ENTER();
-	struct call *call = find_call(call_id);
-	err = call ? ua_answer(call_get_ua(call), call, VIDMODE_OFF) : ENOENT;
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		return call ? ua_answer(call_get_ua(call), call, VIDMODE_OFF) : ENOENT;
+	});
 }
 
 
 int cmesip_hangup(const char *call_id, unsigned scode)
 {
-	ENTER();
-	struct call *call = find_call(call_id);
-	if (call)
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		if (!call)
+			return ENOENT;
 		ua_hangup(call_get_ua(call), call, (uint16_t)scode, NULL);
-	LEAVE();
-	return call ? 0 : ENOENT;
+		return 0;
+	});
 }
 
 
 int cmesip_hold(const char *call_id, bool hold, const char *hdrs)
 {
-	int err;
-	ENTER();
-	struct call *call = find_call(call_id);
-	if (!call) {
-		LEAVE();
-		return ENOENT;
-	}
-	err = call_set_reinvite_hdrs(call, hdrs);
-	if (!err)
-		err = call_hold(call, hold);
-	(void)call_set_reinvite_hdrs(call, NULL);
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		int err;
+		if (!call)
+			return ENOENT;
+		err = call_set_reinvite_hdrs(call, hdrs);
+		if (!err)
+			err = call_hold(call, hold);
+		(void)call_set_reinvite_hdrs(call, NULL);
+		return err;
+	});
 }
 
 
 int cmesip_mute(const char *call_id, bool mute)
 {
-	ENTER();
-	struct call *call = find_call(call_id);
-	if (call)
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		if (!call)
+			return ENOENT;
 		audio_mute(call_audio(call), mute);
-	LEAVE();
-	return call ? 0 : ENOENT;
+		return 0;
+	});
 }
 
 
 int cmesip_send_dtmf(const char *call_id, char key)
 {
-	int err;
-	ENTER();
-	struct call *call = find_call(call_id);
-	err = call ? call_send_digit(call, key) : ENOENT;
-	if (!err)
-		err = call_send_digit(call, KEYCODE_REL);
-	LEAVE();
-	return err;
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		int err = call ? call_send_digit(call, key) : ENOENT;
+		if (!err)
+			err = call_send_digit(call, KEYCODE_REL);
+		return err;
+	});
 }
 
 
 int cmesip_call_info(const char *call_id, char *buf, size_t size)
 {
-	ENTER();
-	struct call *call = find_call(call_id);
-	if (!call || !buf || !size) {
-		LEAVE();
-		return ENOENT;
-	}
-	const struct aucodec *ac = audio_codec(call_audio(call), true);
-	struct stream *s = audio_strm(call_audio(call));
-	re_snprintf(buf, size, "codec=%s/%u menc=%s",
-		    ac ? ac->name : "-", ac ? ac->srate : 0,
-		    s && stream_is_secure(s) ? "srtp" : "none");
-	LEAVE();
-	return 0;
+	if (!buf || !size)
+		return EINVAL;
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		if (!call)
+			return ENOENT;
+		const struct aucodec *ac = audio_codec(call_audio(call), true);
+		struct stream *s = audio_strm(call_audio(call));
+		re_snprintf(buf, size, "codec=%s/%u menc=%s",
+			    ac ? ac->name : "-", ac ? ac->srate : 0,
+			    s && stream_is_secure(s) ? "srtp" : "none");
+		return 0;
+	});
 }
 
 
 int cmesip_call_count(void)
 {
-	int n = 0;
-	struct le *le;
-	if (!cmesip_running())
+	__block int n = 0;
+	(void)run(^int(void) {
+		struct le *le;
+		for (le = list_head(uag_list()); le; le = le->next)
+			n += (int)list_count(ua_calls(le->data));
 		return 0;
-	re_thread_enter();
-	for (le = list_head(uag_list()); le; le = le->next)
-		n += (int)list_count(ua_calls(le->data));
-	re_thread_leave();
+	});
 	return n;
+}
+
+
+static void trace_handler(bool tx, enum sip_transp tp, const struct sa *src, const struct sa *dst,
+			  const uint8_t *pkt, size_t len, void *arg)
+{
+	char who[80];
+	char *msg = NULL;
+	(void)arg;
+
+	re_snprintf(who, sizeof(who), "%s %s %J", tx ? "tx" : "rx", sip_transp_name(tp), tx ? dst : src);
+	if (re_sdprintf(&msg, "%b", pkt, len))
+		return;
+	emit(CMESIP_TRACE, NULL, who, msg);
+	mem_deref(msg);
+}
+
+
+int cmesip_set_trace(bool on)
+{
+	return run(^int(void) {
+		sip_set_trace_handler(uag_sip(), on ? trace_handler : NULL);
+		return 0;
+	});
 }

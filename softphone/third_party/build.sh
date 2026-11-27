@@ -97,10 +97,10 @@ build_slice() {
   # C-Schicht der App – mit denselben Definitionen wie libre (sonst stimmt z.B. struct sa nicht überein)
   local redefs=(${=$(sed -n 's/^C_DEFINES = //p' $B/re/CMakeFiles/re-objs.dir/flags.make | tr ' ' '\n' | grep -v '"')})
   if [ -d $TP/cmesip ]; then
-    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 \
+    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 -fblocks \
       -I$P/include/re -I$P/include -I$SRC/baresip/include ${redefs[@]} \
       -c $TP/cmesip/cmesip.c -o $B/cmesip.o
-    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 \
+    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 -fblocks \
       -I$P/include/re -I$P/include ${redefs[@]} -c $TP/cmesip/tls_stub.c -o $B/tls_stub.o
   fi
 

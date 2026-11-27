@@ -31,7 +31,8 @@ enum cmesip_event {
 	CMESIP_CALL_RESUME,         /* Gegenstelle setzt fort */
 	CMESIP_CALL_MENC,           /* text: Verschlüsselung, z.B. "srtp" */
 	CMESIP_CALL_DTMF,           /* text: Taste */
-	CMESIP_LOG                  /* text: Logzeile */
+	CMESIP_LOG,                 /* text: Logzeile */
+	CMESIP_TRACE                /* text: SIP-Nachricht; peer: "tx"/"rx" + Gegenstelle */
 };
 
 /* ev: enum cmesip_event; call_id/peer/text können NULL sein */
@@ -71,6 +72,8 @@ int  cmesip_send_dtmf(const char *call_id, char key);
 int  cmesip_call_info(const char *call_id, char *buf, size_t size);
 /* Anzahl laufender Gespräche */
 int  cmesip_call_count(void);
+/* SIP-Nachrichten als CMESIP_TRACE-Ereignisse melden (für das Log der App) */
+int  cmesip_set_trace(bool on);
 
 #ifdef __cplusplus
 }
