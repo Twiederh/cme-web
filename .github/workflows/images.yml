@@ -35,6 +35,10 @@ jobs:
             context: ./recorder
           - name: cme-push-relay
             context: ./push-relay
+          - name: cme-kamailio
+            context: ./kamailio
+          - name: cme-rtpengine
+            context: ./rtpengine
           - name: cme-flexisip
             context: ./flexisip
             args: |
