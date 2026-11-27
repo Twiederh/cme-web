@@ -30,6 +30,11 @@ if [ -d "$SCHEMA" ]; then
     [ -f "$DBDIR/$t" ] || { [ -f "$SCHEMA/$t" ] && cp "$SCHEMA/$t" "$DBDIR/$t"; } || true
   done
 fi
+# topos lässt Spalten leer (z.B. x_context) – db_text lehnt die Zeile sonst ab ("null value not allowed"),
+# der Anruf kommt dann nicht zur App. Alle Spalten außer id dürfen leer sein (auch für vorhandene Tabellen).
+for t in topos_d topos_t; do
+  [ -f "$DBDIR/$t" ] && sed -i '1s/(\(string\|int\))/(\1,null)/g' "$DBDIR/$t"
+done
 USRLOC_DB_MODE=0
 [ -f "$DBDIR/location" ] && [ -f "$DBDIR/version" ] && USRLOC_DB_MODE=1
 
