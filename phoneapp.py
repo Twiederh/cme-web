@@ -87,6 +87,10 @@ def tail(n: str) -> str:
     return d[-8:] if len(d) >= 8 else d
 
 
+RE_ALIAS = re.compile(r"^[a-z0-9._+-]{1,64}$")
+RE_ALIAS_NUM = re.compile(r"^\+?[0-9]{2,32}$")
+
+
 def _write(path: Path, text: str, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name("." + path.name + ".tmp")
@@ -217,6 +221,35 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             _write(flexisip_passwd, "\n".join(lines) + "\n", 0o600)
         except OSError as e:
             print(f"Softphone: {flexisip_passwd} nicht beschreibbar ({e})", flush=True)
+
+    # Adressen für Anrufe von draußen (Kamailio: kamailio/passwd2htable.py --aliases): <name>@SIP_PUBLIC_DOMAIN aus den
+    # Benutzern (Tab Benutzer, cme-users.json: E-Mail-Adresse -> Rufnummern). Ziel ist die erste Rufnummer, die kein
+    # Fax ist. Volume softphone-data, in Kamailio nur lesbar.
+    aliases_path = data / "sip-aliases"
+
+    def write_sip_aliases() -> None:
+        dom = os.environ.get("SIP_PUBLIC_DOMAIN", "").strip().lower()
+        lines = ["version:1"]
+        if dom:
+            try:
+                users = json.loads((cfgdir / "cme-users.json").read_text()).get("users", {})
+            except (OSError, ValueError):
+                users = {}
+            try:
+                faxnums = {x["number"] for x in (app.config.get("FAX") or {}).get("numbers", list)()}
+            except Exception:  # noqa: BLE001
+                faxnums = set()
+            for key, u in sorted(users.items()):
+                local, _, d = str(key).lower().rpartition("@")
+                nums = [n for n in u.get("numbers", []) if n not in faxnums and RE_ALIAS_NUM.match(n)]
+                if d == dom and RE_ALIAS.match(local) and nums:
+                    lines.append(f"{local} {nums[0]}")
+        try:
+            _write(aliases_path, "\n".join(lines) + "\n", 0o644)
+        except OSError as e:
+            print(f"Softphone: {aliases_path} nicht beschreibbar ({e})", flush=True)
+
+    app.config["SIP_ALIASES"] = write_sip_aliases
 
     def mobile_account(name: str) -> dict:
         """{"number", "password"} des Mobilgeraets (Gross-/Kleinschreibung egal) oder {}"""
@@ -838,6 +871,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
 
     if not demo:
         write_flexisip_passwd()
+        # erst nach dem Start aller Teile (Faxnummern aus vmapps)
+        threading.Timer(5, write_sip_aliases).start()
         try:
             ensure()
         except OSError as e:

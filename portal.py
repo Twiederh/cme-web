@@ -53,6 +53,10 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         tmp = store.with_name("." + store.name + ".tmp")
         tmp.write_text(json.dumps(d, indent=1, ensure_ascii=False))
         tmp.replace(store)
+        # Adressen für Anrufe von draußen (phoneapp.write_sip_aliases) neu schreiben
+        f = app.config.get("SIP_ALIASES")
+        if f:
+            f()
 
     def me() -> dict | None:
         auth = app.config.get("AUTH") or {}

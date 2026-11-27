@@ -10,6 +10,7 @@ RUN apt-get update \
 
 COPY kamailio.cfg.template /usr/local/share/kamailio/kamailio.cfg.template
 COPY passwd2htable.py /usr/local/bin/passwd2htable.py
+COPY acme2pem.py /usr/local/bin/acme2pem.py
 COPY entrypoint.sh /usr/local/bin/kamailio-entrypoint
 RUN chmod +x /usr/local/bin/kamailio-entrypoint
 

@@ -126,6 +126,47 @@ in den Einstellungen IP, Nebenstelle und Zugangsdaten des Telefons. Welche `Key:
 (Annehmen, Ablehnen, iDivert …), hängt von Modell und Firmware ab – unter *Tischtelefon → Ausprobieren*
 testen. CSTA gibt es auf CME ab 12.6 nicht mehr und galt nur für SCCP-Telefone; deshalb Cisco XML.
 
+### 7. Anrufe aus dem Internet (optional)
+
+Kamailio nimmt dann Anrufe an `<name>@<SIP_PUBLIC_DOMAIN>` an und gibt sie an die Rufnummer bei der CME weiter.
+`<name>` ist der Teil vor dem `@` der E-Mail-Adressen im Tab **Benutzer**, sofern deren Domain `SIP_PUBLIC_DOMAIN` ist.
+Angerufen wird die erste Rufnummer des Benutzers, die kein Fax ist.
+
+1. **`.env`:**
+   - `SIP_PUBLIC_DOMAIN` setzen.
+   - `SIP_GW_NAME` muss draußen auf die öffentliche IP zeigen. Intern darf der Name auf den Docker-Host zeigen.
+2. **DNS (öffentlich):**
+   - `_sip._tcp.<domain>  SRV 10 0 5060 <SIP_GW_NAME>`
+   - `_sips._tcp.<domain> SRV 10 0 5061 <SIP_GW_NAME>`
+   - Für TLS heißt der Name `_sips._tcp`, nicht `_sips._tls`.
+3. **Router:** Portweiterleitungen an `VM_HOST_IP`:
+   - TCP 5060 und TCP 5061
+   - UDP `APP_RTP_PORTS` (40000–40199)
+   - UDP 5060 bleibt zu, die SRV-Einträge nennen nur TCP und TLS.
+4. **Zertifikat:** Traefik holt es über den Router `cme-web-sipgw` (`docker-compose.traefik.yml`). Kamailio liest es aus der `acme.json` (`TRAEFIK_ACME_JSON`) und lädt Erneuerungen selbst neu. Ohne Traefik: `TLS_CERT_DIR` mit `cert.pem` und `key.pem`.
+5. **CME:** einen eingehenden Dial-Peer für Kamailio anlegen (Port `CME_EXT_PORT`, 5066) und den Docker-Host als vertrauenswürdig eintragen:
+   ```
+   voice service voip
+    ip address trusted list
+     ipv4 192.168.1.110
+   voice class uri KAMAILIO-EXT sip
+    pattern 192\.168\.1\.110:5066
+   dial-peer voice 5066 voip
+    description Anrufe aus dem Internet (Kamailio)
+    session protocol sipv2
+    session transport udp
+    incoming uri via KAMAILIO-EXT
+    voice-class codec 3
+    dtmf-relay rtp-nte
+    no vad
+   ```
+
+**Schutz:**
+- Kamailio lässt von draußen ohne Anmeldung nur INVITEs an bekannte Adressen durch, alles andere bekommt 404.
+- Wer zu viele Anfragen schickt, ist 10 min gesperrt (pike).
+- Anmelden dürfen sich die Apps von draußen nur über TLS.
+- Die Medien laufen über die Schnittstelle `ext` von rtpengine, mit der öffentlichen IP im SDP.
+
 ## Was CME bei den Codecs mitmacht
 
 | Codec | App ↔ Cisco 88xx / Gigaset / Amt | App ↔ App |

@@ -3,7 +3,7 @@
 FROM debian:trixie
 
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rtpengine-daemon \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rtpengine-daemon bind9-dnsutils \
  && rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /usr/local/bin/rtpengine-entrypoint

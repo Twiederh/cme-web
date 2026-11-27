@@ -135,4 +135,14 @@ check(lines[0] == "version:1" and f"+4961874191283@cme.local md5:{ha1} ; MOBIpho
       and f"+4961874191283@192.168.1.110 md5:{ha1} ; MOBIphone" in lines
       and f"+4961874191283@sip-gw.example.de md5:{ha1} ; MOBIphone" in lines, "Zeilen für SIP-Domain, CME-IP, Flexisip-IP, Apps-Domain")
 check(pw not in pf[0], "kein Passwort im Klartext")
+# Adressen für Anrufe von draußen aus den Benutzern (E-Mail -> erste Rufnummer), nur Domain SIP_PUBLIC_DOMAIN
+os.environ["SIP_PUBLIC_DOMAIN"] = "example.de"
+HX = {"X-CME-Request": "1"}
+check(c.put("/api/users/Anna.B@Example.de", json={"numbers": ["+4961874191279", "+4961874191283"]}, headers=HX).get_json()["ok"], "Benutzer angelegt")
+c.put("/api/users/carl@anders.de", json={"numbers": ["+4961874191284"]}, headers=HX)
+al = [open(p + "/sip-aliases").read() for p in (d + "/push", P) if os.path.exists(p + "/sip-aliases")]
+check(al and al[0] == "version:1\nanna.b +4961874191279\n", f"sip-aliases {al}")
+c.delete("/api/users/anna.b@example.de", headers=HX)
+al = [open(p + "/sip-aliases").read() for p in (d + "/push", P) if os.path.exists(p + "/sip-aliases")]
+check(al[0] == "version:1\n", "Benutzer gelöscht -> Adresse weg")
 print("ALLE PHONEAPP-TESTS OK")

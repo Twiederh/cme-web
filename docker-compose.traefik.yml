@@ -51,6 +51,8 @@ services:
       PHONEAPP_DATA_DIR: /data/push
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_GW_NAME: ${SIP_GW_NAME:-}
+      # Adressen <name>@SIP_PUBLIC_DOMAIN für Anrufe von draußen (aus den E-Mail-Adressen im Tab Benutzer)
+      SIP_PUBLIC_DOMAIN: ${SIP_PUBLIC_DOMAIN:-}
       SIP_GW_PORT: ${SIP_GW_PORT:-5062}
       # Kamailio: Ziel des Pools MOB<Nummer> bei CME (sharedline.py)
       B2BUA_PORT: ${B2BUA_PORT:-5064}
@@ -91,6 +93,12 @@ services:
       - "traefik.http.middlewares.cme-web-headers.headers.contentTypeNosniff=true"
       - "traefik.http.middlewares.cme-web-headers.headers.frameDeny=true"
       - "traefik.http.middlewares.cme-web-headers.headers.referrerPolicy=same-origin"
+      # Zertifikat für das SIP-Gateway (Kamailio liest es aus der acme.json), Seite nur aus dem eigenen Netz
+      - "traefik.http.routers.cme-web-sipgw.rule=Host(`${SIP_GW_NAME:-sip-gw.invalid}`)"
+      - "traefik.http.routers.cme-web-sipgw.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-websecure}"
+      - "traefik.http.routers.cme-web-sipgw.tls=true"
+      - "traefik.http.routers.cme-web-sipgw.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.cme-web-sipgw.middlewares=cme-web-lan,cme-web-headers"
       # Ziel im Container
       - "traefik.http.services.cme-web.loadbalancer.server.port=8080"
 
@@ -194,6 +202,13 @@ services:
       CME_IP: ${CME_HOST}
       SIP_DOMAIN: ${SIP_DOMAIN:-cme.local}
       SIP_PORT: ${SIP_GW_PORT:-5062}
+      # Zugang von außen (leer = aus): SIP_GW_NAME mit TCP EXT_SIP_PORT und TLS EXT_TLS_PORT,
+      # Anrufe an <name>@SIP_PUBLIC_DOMAIN gehen über VM_HOST_IP:CME_EXT_PORT an die CME
+      SIP_GW_NAME: ${SIP_GW_NAME:-}
+      SIP_PUBLIC_DOMAIN: ${SIP_PUBLIC_DOMAIN:-}
+      EXT_SIP_PORT: ${EXT_SIP_PORT:-5060}
+      EXT_TLS_PORT: ${EXT_TLS_PORT:-5061}
+      CME_EXT_PORT: ${CME_EXT_PORT:-5066}
       # Contact des Pools MOB<Nummer> bei CME (cme-web meldet ihn mit diesem Port an)
       B2BUA_PORT: ${B2BUA_PORT:-5064}
       RELAY_PORT: ${RELAY_HTTP_PORT:-8092}
@@ -206,8 +221,10 @@ services:
     volumes:
       # Anmeldungen der Apps (überstehen einen Neustart)
       - kamailio-data:/data/kamailio
-      # Passwoerter der Apps (cme-web schreibt flexisip-passwd), nur lesbar
+      # Passwoerter der Apps (cme-web schreibt flexisip-passwd) und Adressen (sip-aliases), nur lesbar
       - softphone-data:/data/push:ro
+      # Zertifikat für SIP_GW_NAME (TLS): Traefik holt es über den Router cme-web-sipgw (siehe cme-web)
+      - ${TRAEFIK_ACME_JSON:-/opt/containers/traefik/letsencrypt/acme.json}:/data/acme/acme.json:ro
 
   # Medien der Apps: SRTP zu den iOS-Geräten, RTP zur CME (gesteuert von Kamailio, Ordner rtpengine/).
   # Braucht UDP APP_RTP_PORTS (40000-40199) auf VM_HOST_IP.
@@ -223,6 +240,10 @@ services:
     environment:
       HOST_IP: ${VM_HOST_IP:?VM_HOST_IP = LAN-IP des Docker-Hosts setzen}
       RTP_PORTS: ${APP_RTP_PORTS:-40000-40199}
+      # Zugang von außen: öffentliche Adresse fürs SDP (leer = SIP_GW_NAME über 1.1.1.1 auflösen)
+      SIP_GW_NAME: ${SIP_GW_NAME:-}
+      SIP_PUBLIC_DOMAIN: ${SIP_PUBLIC_DOMAIN:-}
+      SIP_PUBLIC_IP: ${SIP_PUBLIC_IP:-}
       TZ: Europe/Berlin
 
   # Weckt schlafende Apps: im Heim-WLAN per Local Push (TCP RELAY_LOCALPUSH_PORT, 5072), sonst per APNs.

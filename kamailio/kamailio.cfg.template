@@ -13,6 +13,10 @@
 # - Medien über rtpengine: zur CME RTP/AVP, zu den Apps ${APP_MEDIA} (SRTP nur auf der iOS-Seite).
 # - Push: bei einem Anruf an die Apps weckt der Relay (cme-push-relay) jedes Gerät mit pn-prid; das Gerät meldet
 #   sich neu an, tsilo hängt es dann an den wartenden Anruf an.
+# - Von außen (nur mit WITH_EXT, entrypoint.sh): TCP ${EXT_TCP_PORT} und TLS ${EXT_TLS_PORT} unter ${EXT_NAME}.
+#   Anrufe an <name>@${PUBLIC_DOMAIN} (htable alias, cme-web: sip-aliases) gehen über ${HOST_IP}:${CME_EXT_PORT}
+#   an die Rufnummer bei der CME (eigener Dial-Peer dort). Medien über die Schnittstelle "ext" von rtpengine.
+#   Über TLS dürfen sich auch die Apps anmelden und anrufen (Digest wie intern).
 
 ####### Global ##########
 debug=${LOG_LEVEL}
@@ -27,6 +31,12 @@ auto_aliases=no
 server_header="Server: CME-Kamailio"
 user_agent_header="User-Agent: CME-Kamailio"
 
+#!ifdef WITH_EXT
+enable_tls=yes
+listen=tcp:${HOST_IP}:${EXT_TCP_PORT} advertise ${EXT_NAME}:${EXT_ADV_TCP}
+listen=tls:${HOST_IP}:${EXT_TLS_PORT} advertise ${EXT_NAME}:${EXT_ADV_TLS}
+listen=udp:${HOST_IP}:${CME_EXT_PORT}
+#!endif
 listen=udp:${HOST_IP}:${APP_PORT}
 listen=tcp:${HOST_IP}:${APP_PORT}
 listen=udp:${HOST_IP}:${CME_SIDE_PORT}
@@ -67,6 +77,10 @@ loadmodule "tsilo.so"
 loadmodule "http_client.so"
 loadmodule "xhttp.so"
 loadmodule "uac.so"
+#!ifdef WITH_EXT
+loadmodule "tls.so"
+loadmodule "pike.so"
+#!endif
 
 modparam("jsonrpcs", "transport", 1)
 modparam("ctl", "binrpc", "unix:/run/kamailio/kamailio_ctl")
@@ -108,6 +122,19 @@ modparam("topos", "storage", "db")
 
 modparam("http_client", "connection_timeout", 2)
 
+#!ifdef WITH_EXT
+modparam("tls", "config", "/run/kamailio/tls.cfg")
+# Mehr als 30 Anfragen in 2 s von einer Adresse aus dem Internet: 10 min gesperrt (htable ban)
+modparam("pike", "sampling_time_unit", 2)
+modparam("pike", "reqs_density_per_unit", 30)
+modparam("pike", "remove_latency", 4)
+modparam("htable", "htable", "ban=>size=8;autoexpire=600;")
+# Adressen <name>@${PUBLIC_DOMAIN} -> Rufnummer (cme-web, Tab Benutzer), Schlüssel = Name klein
+modparam("htable", "htable", "alias=>size=6;dbtable=sip_alias;")
+# Gespräche aus dem Internet: Call-ID -> 1 (RTP) bzw. 2 (SRTP beim Anrufer), für re-INVITEs der CME
+modparam("htable", "htable", "ext=>size=8;autoexpire=43200;")
+#!endif
+
 ####### Routing ##########
 request_route {
 	if (!mf_process_maxfwd_header("10")) {
@@ -119,6 +146,9 @@ request_route {
 		exit;
 	}
 
+#!ifdef WITH_EXT
+	route(EXT_CHECK);
+#!endif
 	route(WITHINDLG);
 
 	if (is_method("CANCEL")) {
@@ -132,12 +162,23 @@ request_route {
 	}
 
 	if (is_method("REGISTER")) {
+#!ifdef WITH_EXT
+		if ($var(extsock) && $pr != "tls") {
+			sl_send_reply("403", "Nur über TLS");
+			exit;
+		}
+#!endif
 		route(REGISTER);
 	}
 
 	if ($si == "${CME_IP}") {
 		route(FROM_CME);
 	}
+#!ifdef WITH_EXT
+	if ($var(extsock)) {
+		route(FROM_OUTSIDE);
+	}
+#!endif
 	route(FROM_APP);
 }
 
@@ -145,9 +186,19 @@ request_route {
 route[WITHINDLG] {
 	if (!has_totag()) return;
 	if (loose_route()) {
+#!ifdef WITH_EXT
+		# Richtung Internet: Ziel aus dem alias-Parameter des Contacts (NAT beim Anrufer)
+		handle_ruri_alias();
+		if ($var(extsock) && nat_uac_test("18")) {
+			set_contact_alias();
+		}
+#!endif
 		if (is_method("BYE")) {
 			rtpengine_delete();
 			sht_rm("srtp", "$ci");
+#!ifdef WITH_EXT
+			sht_rm("ext", "$ci");
+#!endif
 		} else if (is_method("ACK") && has_body("application/sdp")) {
 			rtpengine_manage();
 		} else if (has_body("application/sdp")) {
@@ -169,6 +220,12 @@ route[WITHINDLG] {
 
 # SDP in einer Anfrage: Richtung CME RTP/AVP, Richtung App ${APP_MEDIA}
 route[MEDIA_OFFER] {
+#!ifdef WITH_EXT
+	if ($si == "${CME_IP}" && $sht(ext=>$ci) == 2) {
+		rtpengine_manage("RTP/SAVP replace-origin replace-session-connection ICE=remove");
+		return;
+	}
+#!endif
 	if ($si == "${CME_IP}" && $sht(srtp=>$ci) == 1) {
 		rtpengine_manage("${APP_MEDIA} replace-origin replace-session-connection ICE=remove");
 	} else if ($si == "${CME_IP}") {
@@ -266,16 +323,32 @@ branch_route[TO_APP] {
 	if (!has_body("application/sdp")) {
 		return;
 	}
+	# Gerät draußen (über TLS angemeldet): Medien über die Schnittstelle "ext" von rtpengine
+	$var(rtpdir) = "";
+#!ifdef WITH_EXT
+	$var(dst) = $du;
+	if ($var(dst) == $null || $var(dst) == "") {
+		$var(dst) = $ru;
+	}
+	if (!($(var(dst){uri.host}) =~ "^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)")) {
+		$var(rtpdir) = " direction=int direction=ext";
+	}
+#!endif
 	# iOS-Geräte (Contact mit pn-provider) bekommen SRTP, der Mac unverschlüsseltes RTP
 	if ($ru =~ "pn-provider=") {
 		setbflag(1);
-		rtpengine_offer("${APP_MEDIA} replace-origin replace-session-connection ICE=remove via-branch=1");
+		rtpengine_offer("${APP_MEDIA} replace-origin replace-session-connection ICE=remove via-branch=1$var(rtpdir)");
 	} else {
-		rtpengine_offer("RTP/AVP replace-origin replace-session-connection ICE=remove via-branch=1");
+		rtpengine_offer("RTP/AVP replace-origin replace-session-connection ICE=remove via-branch=1$var(rtpdir)");
 	}
 }
 
 onreply_route[TO_APP] {
+#!ifdef WITH_EXT
+	if (!($si =~ "^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)") && nat_uac_test("18")) {
+		set_contact_alias();
+	}
+#!endif
 	if (t_check_status("2[0-9][0-9]") && isbflagset(1)) {
 		$sht(srtp=>$ci) = 1;
 	}
@@ -311,6 +384,11 @@ route[FROM_APP] {
 		exit;
 	}
 	consume_credentials();
+#!ifdef WITH_EXT
+	if ($var(pubsrc) && nat_uac_test("18")) {
+		set_contact_alias();
+	}
+#!endif
 	if (is_method("INVITE|SUBSCRIBE|REFER")) {
 		record_route();
 	}
@@ -318,7 +396,13 @@ route[FROM_APP] {
 		if (search_body("a=crypto:")) {
 			$sht(srtp=>$ci) = 1;
 		}
-		rtpengine_manage("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove");
+		$var(rtpdir) = "";
+#!ifdef WITH_EXT
+		if ($var(pubsrc)) {
+			$var(rtpdir) = " direction=ext direction=int";
+		}
+#!endif
+		rtpengine_manage("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove$var(rtpdir)");
 	}
 	$du = "sip:${CME_IP}:${CME_PORT};transport=udp";
 	force_send_socket(udp:${HOST_IP}:${CME_SIDE_PORT});
@@ -332,6 +416,84 @@ failure_route[FROM_APP] {
 		rtpengine_delete();
 	}
 }
+
+#!ifdef WITH_EXT
+# Anfragen über die Sockets für draußen: $var(extsock) = 1, $var(pubsrc) = 1 bei Absendern aus dem Internet.
+# Absender aus dem Internet werden bei zu vielen Anfragen 10 min gesperrt (pike, htable ban).
+route[EXT_CHECK] {
+	$var(extsock) = 0;
+	$var(pubsrc) = 0;
+	if ($Rp != ${EXT_TCP_PORT} && $Rp != ${EXT_TLS_PORT}) return;
+	$var(extsock) = 1;
+	if ($si =~ "^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)") return;
+	$var(pubsrc) = 1;
+	if ($sht(ban=>$si) != $null) {
+		exit;
+	}
+	if (!pike_check_req()) {
+		xlog("L_WARN", "gesperrt (zu viele Anfragen): $si\n");
+		$sht(ban=>$si) = 1;
+		exit;
+	}
+	force_rport();
+}
+
+# Neue Anfragen von draußen: Anrufe an <name>@${PUBLIC_DOMAIN} zur CME; über TLS auch die Apps (FROM_APP)
+route[FROM_OUTSIDE] {
+	if (is_method("OPTIONS") && ($rU == $null || $rU == "")) {
+		sl_send_reply("200", "OK");
+		exit;
+	}
+	if (($rd == "${PUBLIC_DOMAIN}" || $rd == "${EXT_NAME}") && $rU != $null
+			&& $sht(alias=>$(rU{s.tolower})) != $null) {
+		route(FROM_EXT);
+	}
+	if ($pr == "tls") {
+		return;
+	}
+	if (is_method("INVITE")) {
+		xlog("L_INFO", "von draußen abgelehnt: $ru von $si\n");
+	}
+	sl_send_reply("404", "Not Found");
+	exit;
+}
+
+# Anruf aus dem Internet an <name>@${PUBLIC_DOMAIN}: an die Rufnummer bei der CME über ${HOST_IP}:${CME_EXT_PORT}
+route[FROM_EXT] {
+	$var(num) = $sht(alias=>$(rU{s.tolower}));
+	if (!is_method("INVITE")) {
+		sl_send_reply("405", "Method Not Allowed");
+		exit;
+	}
+	if (!has_body("application/sdp")) {
+		sl_send_reply("488", "Not Acceptable Here");
+		exit;
+	}
+	if (nat_uac_test("18")) {
+		set_contact_alias();
+	}
+	remove_hf("Replaces");
+	remove_hf("Referred-By");
+	record_route();
+	xlog("L_INFO", "Anruf von draußen: $fu an $rU@$rd -> $var(num)\n");
+	$ru = "sip:" + $var(num) + "@${CME_IP}:${CME_PORT}";
+	$du = "sip:${CME_IP}:${CME_PORT};transport=udp";
+	if (search_body("a=crypto:")) {
+		$sht(ext=>$ci) = 2;
+	} else {
+		$sht(ext=>$ci) = 1;
+	}
+	if ($var(pubsrc)) {
+		rtpengine_offer("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove direction=ext direction=int");
+	} else {
+		rtpengine_offer("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove");
+	}
+	force_send_socket(udp:${HOST_IP}:${CME_EXT_PORT});
+	t_on_reply("MANAGE");
+	t_on_failure("FROM_APP");
+	route(RELAY);
+}
+#!endif
 
 # Push an jedes Gerät der Nummer mit pn-prid (einmal je Anruf und Token); $var(pushed) = Anzahl
 route[PUSH] {

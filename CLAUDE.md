@@ -83,6 +83,12 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 - **Eingehend:** Kamailio schickt über push-relay (`GET /push` auf 127.0.0.1:8092) einen VoIP-Push an jedes Gerät mit `pn-prid` und wartet bis 30 s auf die Anmeldung (tsilo).
 - **SRTP:** Geräte mit `pn-provider` im Contact (iOS) bekommen RTP/SAVP, alle anderen RTP/AVP. Pro Call-ID merkt sich Kamailio die Wahl (htable `srtp`), damit re-INVITEs der CME passen. `APP_SRTP=0` schaltet SRTP ab. Die iOS-App bietet über das Gateway immer SRTP an (nicht verpflichtend). Die Schlüssel (SDES) laufen noch über TCP ohne TLS.
 - Der Mac meldet sich direkt an der CME an (Pool 6) und läuft nicht über Kamailio.
+- **Von außen** (seit 27.11., nur wenn `SIP_PUBLIC_DOMAIN` gesetzt ist und ein Zertifikat da ist; im Template `#!ifdef WITH_EXT`):
+  - Kamailio hört auf TCP 5060 und TLS 5061 unter `SIP_GW_NAME`.
+  - Anrufe an `<name>@<SIP_PUBLIC_DOMAIN>` werden über `sip-aliases` (`phoneapp.write_sip_aliases`, Quelle: E-Mail-Adressen im Tab Benutzer) auf eine Rufnummer abgebildet. Sie gehen über UDP 5066 an die CME, dort ist ein eigener Dial-Peer nötig (README Abschnitt 7).
+  - rtpengine hat dafür die Schnittstelle `ext` (öffentliche IP im SDP, `direction=ext`).
+  - Das Zertifikat kommt aus Traefiks `acme.json` (DNS-Challenge bei All-Inkl).
+  - Intern zeigt `sip-gw.wiederhol.de` auf docker01, und `_sip._tcp.wiederhol.de` im internen DNS zeigt auf CUCM/vcube.
 - **Test-Stolperstein:** Ruft ein Gerät derselben Nummer (iPad → -283) an, gehört der Anruf zum MOB-Pool. Die CME schickt dem MOB-Pool dann keine dialog-NOTIFYs, es gibt also keinen Push beim Halten. Zum Testen von einer anderen Nummer anrufen.
 
 **APNs**
@@ -127,7 +133,8 @@ python3 tests/test_relay.py
 - [x] Kamailio + rtpengine statt Flexisip (27.11.): Anmeldung, Push, ein- und ausgehend, SRTP zu iOS, Halten und Übernehmen iPhone ↔ Mac ↔ 8845 getestet.
 - [x] Mac-App auf baresip (27.11., Build 311): ein- und ausgehend, Halten, Übernehmen, Voicemail per 302 getestet. Noch ohne Video und lokale Aufnahme.
 - [x] iOS-App auf baresip (27.11., Build 316): Push, ein- und ausgehend, SRTP, Halten, Übernehmen, lokale Aufnahme getestet.
-- [ ] Video (iOS + Mac). TLS für die Apps (SDES-Schlüssel). App-Store-Frage ist mit baresip (BSD) entschärft.
+- [ ] Video (iOS + Mac). TLS in den Apps (baresip mit OpenSSL bauen; Kamailio kann TLS 5061 schon).
+- [ ] Zugang von außen testen: Portweiterleitungen UDM SE, SRV `_sips._tcp`, Dial-Peer 5066 auf der CME. App-Store-Frage ist mit baresip (BSD) entschärft.
 - [x] sipgate-Dial-Peers 1/2 mit `media-class 8999` (27.11.), der cme-recorder sieht jetzt auch sipgate-Gespräche.
 - [x] `flexisip/` und das Flexisip-Image entfernt (27.11.). Der Dateiname `flexisip-passwd` bleibt (cme-web schreibt, Kamailio liest).
 - [ ] Testen nach Deploy des push-relay: Annehmen am iPhone und kein Weiterklingeln nach Annahme am Mac. Ursache war, dass der Relay die Call-ID im VoIP-Push auf die oberste Ebene legte. liblinphone sucht sie wie bei Flexisip in `aps` (`relay.voip_payload`). Ohne sie legt liblinphone einen zweiten Anruf an. Annehmen beendete dann den echten (603 Decline), der Push-Anruf klingelte ~10 s nach.
