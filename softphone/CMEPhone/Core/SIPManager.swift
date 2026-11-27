@@ -794,6 +794,9 @@ final class SIPManager: ObservableObject {
             return
         }
         if entries[callId] != nil { return }   // INVITE war schneller
+        // Zweiter Push zum selben Anruf (weitere Anmeldung desselben Geräts bei Kamailio): nicht noch einmal
+        // neu anmelden – jede Anmeldung lässt Kamailio das INVITE erneut zustellen
+        if pushPending[callId] != nil { return }
         pushPending[callId] = Date()
         start()
         ensureRegistered()

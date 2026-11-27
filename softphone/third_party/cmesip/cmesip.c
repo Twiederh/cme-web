@@ -62,7 +62,20 @@ static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 		/* Eingehender Anruf: annehmen (klingeln), die App entscheidet dann über Annehmen/Ablehnen */
 		const struct sip_msg *msg = bevent_get_msg(event);
 		struct ua *ua = uag_find_msg(msg);
-		int err = ua ? ua_accept(ua, msg) : ENOENT;
+		char cid[256];
+		int err;
+
+		/* Zweiter Zweig desselben Anrufs (z.B. Kamailio nach zwei Anmeldungen kurz nacheinander): als
+		 * "Merged Request" ablehnen (RFC 3261 8.2.2.2). Sonst gäbe es zwei Gespräche mit derselben Call-ID,
+		 * und das CANCEL des einen beendete in der App das angenommene. */
+		pl_strcpy(&msg->callid, cid, sizeof(cid));
+		if (uag_call_find(cid)) {
+			info("cmesip: zweites INVITE zu %s – 482\n", cid);
+			(void)sip_treply(NULL, uag_sip(), msg, 482, "Loop Detected");
+			bevent_stop(event);
+			break;
+		}
+		err = ua ? ua_accept(ua, msg) : ENOENT;
 		if (err) {
 			warning("cmesip: eingehender Anruf nicht angenommen: %m\n", err);
 			if (!ua)
