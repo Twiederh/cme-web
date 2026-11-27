@@ -208,6 +208,8 @@ services:
       SIP_PUBLIC_DOMAIN: ${SIP_PUBLIC_DOMAIN:-}
       EXT_SIP_PORT: ${EXT_SIP_PORT:-5060}
       EXT_TLS_PORT: ${EXT_TLS_PORT:-5061}
+      # UDP von draußen (Router: UDP 5060 -> VM_HOST_IP:EXT_UDP_PORT, 5060 belegt hier Asterisk)
+      EXT_UDP_PORT: ${EXT_UDP_PORT:-5067}
       CME_EXT_PORT: ${CME_EXT_PORT:-5066}
       # Contact des Pools MOB<Nummer> bei CME (cme-web meldet ihn mit diesem Port an)
       B2BUA_PORT: ${B2BUA_PORT:-5064}

@@ -35,6 +35,8 @@ user_agent_header="User-Agent: CME-Kamailio"
 enable_tls=yes
 listen=tcp:${HOST_IP}:${EXT_TCP_PORT} advertise ${EXT_NAME}:${EXT_ADV_TCP}
 listen=tls:${HOST_IP}:${EXT_TLS_PORT} advertise ${EXT_NAME}:${EXT_ADV_TLS}
+# UDP von draußen: 5060 ist hier Asterisk, der Router leitet UDP 5060 auf ${EXT_UDP_PORT}
+listen=udp:${HOST_IP}:${EXT_UDP_PORT} advertise ${EXT_NAME}:${EXT_ADV_UDP}
 listen=udp:${HOST_IP}:${CME_EXT_PORT}
 #!endif
 listen=udp:${HOST_IP}:${APP_PORT}
@@ -191,6 +193,18 @@ route[WITHINDLG] {
 		handle_ruri_alias();
 		if ($var(extsock) && nat_uac_test("18")) {
 			set_contact_alias();
+		}
+		# CME -> Anrufer draußen: Socket passend zum Transport des nächsten Hops (das Record-Route nennt den
+		# Socket, über den der Anruf kam - der Proxy des Anrufers will auf dem Rückweg evtl. UDP)
+		if ($si == "${CME_IP}" && $sht(ext=>$ci) != $null) {
+			$var(np) = $(nh(P){s.tolower});
+			if ($var(np) == "udp") {
+				force_send_socket(udp:${HOST_IP}:${EXT_UDP_PORT});
+			} else if ($var(np) == "tls") {
+				force_send_socket(tls:${HOST_IP}:${EXT_TLS_PORT});
+			} else {
+				force_send_socket(tcp:${HOST_IP}:${EXT_TCP_PORT});
+			}
 		}
 #!endif
 		if (is_method("BYE")) {
@@ -423,7 +437,7 @@ failure_route[FROM_APP] {
 route[EXT_CHECK] {
 	$var(extsock) = 0;
 	$var(pubsrc) = 0;
-	if ($Rp != ${EXT_TCP_PORT} && $Rp != ${EXT_TLS_PORT}) return;
+	if ($Rp != ${EXT_TCP_PORT} && $Rp != ${EXT_TLS_PORT} && $Rp != ${EXT_UDP_PORT}) return;
 	$var(extsock) = 1;
 	if ($si =~ "^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)") return;
 	$var(pubsrc) = 1;

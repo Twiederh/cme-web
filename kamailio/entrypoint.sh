@@ -26,6 +26,8 @@ PUBLIC_DOMAIN="${SIP_PUBLIC_DOMAIN:-}"
 EXT_NAME="${SIP_GW_NAME:-}"
 EXT_TCP_PORT="${EXT_SIP_PORT:-5060}"
 EXT_TLS_PORT="${EXT_TLS_PORT:-5061}"
+EXT_UDP_PORT="${EXT_UDP_PORT:-5067}"
+EXT_ADV_UDP="${EXT_UDP_PUBLIC_PORT:-5060}"
 # Ports, die draußen ankommen (Portweiterleitung am Router), stehen in Via/Record-Route
 EXT_ADV_TCP="${EXT_SIP_PUBLIC_PORT:-5060}"
 EXT_ADV_TLS="${EXT_TLS_PUBLIC_PORT:-5061}"
@@ -105,6 +107,7 @@ sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${HOST_IP_RE}|${HOST_IP_RE}|g" -e "s|
     -e "s|\${USRLOC_DB_MODE}|${USRLOC_DB_MODE}|g" -e "s|\${PUBLIC_DOMAIN}|${PUBLIC_DOMAIN:-invalid}|g" \
     -e "s|\${EXT_NAME}|${EXT_NAME:-invalid}|g" -e "s|\${EXT_TCP_PORT}|${EXT_TCP_PORT}|g" -e "s|\${EXT_TLS_PORT}|${EXT_TLS_PORT}|g" \
     -e "s|\${EXT_ADV_TCP}|${EXT_ADV_TCP}|g" -e "s|\${EXT_ADV_TLS}|${EXT_ADV_TLS}|g" -e "s|\${CME_EXT_PORT}|${CME_EXT_PORT}|g" \
+    -e "s|\${EXT_UDP_PORT}|${EXT_UDP_PORT}|g" -e "s|\${EXT_ADV_UDP}|${EXT_ADV_UDP}|g" \
     /usr/local/share/kamailio/kamailio.cfg.template > /run/kamailio/kamailio.cfg
 # Zugang von außen einschalten (Präprozessor: #!ifdef WITH_EXT)
 [ "$EXT" = 1 ] && sed -i '1a #!define WITH_EXT' /run/kamailio/kamailio.cfg
@@ -112,7 +115,7 @@ if grep -n '\${' /run/kamailio/kamailio.cfg; then
   echo "kamailio: Platzhalter nicht ersetzt (siehe oben)" >&2
   exit 1
 fi
-[ "$EXT" = 1 ] && echo "kamailio: von außen ${EXT_NAME} TCP ${EXT_TCP_PORT}/TLS ${EXT_TLS_PORT} (hier ${HOST_IP}), Adressen @${PUBLIC_DOMAIN}, zur CME über ${HOST_IP}:${CME_EXT_PORT}"
+[ "$EXT" = 1 ] && echo "kamailio: von außen ${EXT_NAME} TCP ${EXT_TCP_PORT}/TLS ${EXT_TLS_PORT}/UDP ${EXT_UDP_PORT} (hier ${HOST_IP}), Adressen @${PUBLIC_DOMAIN}, zur CME über ${HOST_IP}:${CME_EXT_PORT}"
 echo "kamailio: Apps ${HOST_IP}:${APP_PORT}, CME ${CME_IP}:${CME_PORT} über ${HOST_IP}:${CME_SIDE_PORT}, Medien zu den Apps: ${APP_MEDIA%% *}, Anmeldungen ${USRLOC_DB_MODE:+gespeichert (db_mode $USRLOC_DB_MODE)}"
 
 [ "${1:-}" = "check" ] && exec kamailio -c -f /run/kamailio/kamailio.cfg

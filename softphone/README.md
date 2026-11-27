@@ -140,9 +140,9 @@ Angerufen wird die erste Rufnummer des Benutzers mit CME Phone (Mobilgerät), so
    - `_sips._tcp.<domain> SRV 10 0 5061 <SIP_GW_NAME>`
    - Für TLS heißt der Name `_sips._tcp`, nicht `_sips._tls`.
 3. **Router:** Portweiterleitungen an `VM_HOST_IP`:
-   - TCP 5060 und TCP 5061
+   - TCP 5060 und TCP 5061, UDP 5060 auf `EXT_UDP_PORT` (5067; 5060 belegt dort Asterisk)
    - UDP `APP_RTP_PORTS` (40000–40199)
-   - UDP 5060 bleibt zu, die SRV-Einträge nennen nur TCP und TLS.
+   - Für UDP zusätzlich `_sip._udp.<domain> SRV 10 0 5060 <SIP_GW_NAME>`.
 4. **Zertifikat:** Traefik holt es über den Router `cme-web-sipgw` (`docker-compose.traefik.yml`). Kamailio liest es aus der `acme.json` (`TRAEFIK_ACME_JSON`) und lädt Erneuerungen selbst neu. Ohne Traefik: `TLS_CERT_DIR` mit `cert.pem` und `key.pem`.
 5. **CME:** einen eingehenden Dial-Peer für Kamailio anlegen (Port `CME_EXT_PORT`, 5066) und den Docker-Host als vertrauenswürdig eintragen:
    ```
