@@ -8,7 +8,8 @@ B=../build
 T=$(mktemp -d)
 sed "s|LAN_IP|$IP|g" test_call.c > $T/test_call.c
 xcrun clang -I$B/headers $T/test_call.c $B/macos/libcmesip.a -framework CoreAudio -framework AudioToolbox \
-  -framework CoreFoundation -framework SystemConfiguration -framework Security -lz -lresolv -o $T/test_call
+  -framework CoreFoundation -framework SystemConfiguration -framework Security -framework Foundation \
+  -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -lz -lresolv -o $T/test_call
 ($T/test_call B 15070 > $T/b.txt 2>&1 &)
 sleep 1
 RECFILE=$T/rec.wav $T/test_call A 15080 "sip:B@$IP:15070" > $T/a.txt 2>&1
@@ -31,3 +32,17 @@ pkill -f "$T/test_call" || true
 ok=$(grep -c 'SIP/2.0 200' $T/a2.txt)
 echo "TLS: 200 OK: $ok (erwartet 4), $(grep -o 'info: .*' $T/a2.txt)"
 [ "$ok" -ge 4 ] && grep -q "menc=srtp" $T/a2.txt
+
+
+# Video: H.264 und H.265 mit Testbild in beide Richtungen
+for vc in H264 H265; do
+  (VCODEC=$vc $T/test_call B 15130 > $T/bv.txt 2>&1 &)
+  sleep 1
+  LOGALL=1 VCODEC=$vc $T/test_call A 15140 "sip:B@$IP:15130" > $T/av.txt 2>&1
+  sleep 1.5
+  pkill -f "$T/test_call" || true
+  ra=$(grep -o 'A video remote=[0-9]*' $T/av.txt | grep -o '[0-9]*$' || echo 0)
+  rb=$(grep -o 'B video remote=[0-9]*' $T/bv.txt | grep -o '[0-9]*$' || echo 0)
+  echo "Video $vc: Bilder bei A $ra, bei B $rb (erwartet je > 10), $(grep -ho 'Kodierer [^,]*' $T/av.txt | head -1)"
+  [ "$ra" -gt 10 ] && [ "$rb" -gt 10 ] || { grep -h -i -E "cmevideo|video" $T/av.txt $T/bv.txt | head -20; exit 1; }
+done

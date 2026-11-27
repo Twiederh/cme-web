@@ -27,7 +27,7 @@ final class CallCenter: NSObject, ObservableObject {
     // MARK: - Aktionen
 
     func startOutgoing(number: String, video: Bool) {
-        _ = sip.placeCall(to: number, video: false)
+        _ = sip.placeCall(to: number, video: video)
     }
     func requestAnswer(callId: String) { sip.accept(callId: callId) }
     func requestEnd(callId: String) { sip.terminate(callId: callId) }

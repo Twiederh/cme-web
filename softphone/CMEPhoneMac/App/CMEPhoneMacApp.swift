@@ -39,10 +39,10 @@ enum URLRouter {
 
     /// Wählt je nach Modus über den Mac oder am Tischtelefon.
     @MainActor
-    static func dial(_ number: String) {
+    static func dial(_ number: String, video: Bool = false) {
         switch PhoneSettings.shared.macMode {
         case .softphone:
-            CallCenter.shared.startOutgoing(number: number, video: false)
+            CallCenter.shared.startOutgoing(number: number, video: video)
         case .deskPhone:
             DeskPhoneController.shared.dial(number)
             // Der Tischtelefon-Status meldet den Anruf nicht immer mit Nummer: hier merken

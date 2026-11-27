@@ -42,18 +42,18 @@ struct ContentView: View {
                     // Voicemail und Gesprächsaufnahmen der Nebenstelle (cme-web) und dieses Geräts
                     HStack(spacing: 10) {
                         NavigationLink {
-                            CallHistoryView(onCall: dial).navigationTitle("Anrufe")
+                            CallHistoryView(onCall: { dial($0) }).navigationTitle("Anrufe")
                         } label: {
                             Label("Anrufe", systemImage: "clock")
                         }
                         NavigationLink {
-                            MediaListView(source: .voicemail, onCall: dial).navigationTitle("Voicemail")
+                            MediaListView(source: .voicemail, onCall: { dial($0) }).navigationTitle("Voicemail")
                         } label: {
                             Label(media.newVoicemails > 0 ? "Voicemail (\(media.newVoicemails))" : "Voicemail",
                                   systemImage: media.newVoicemails > 0 ? "recordingtape.circle.fill" : "recordingtape")
                         }
                         NavigationLink {
-                            MediaListView(source: .recordings, onCall: dial).navigationTitle("Aufnahmen")
+                            MediaListView(source: .recordings, onCall: { dial($0) }).navigationTitle("Aufnahmen")
                         } label: {
                             Label("Aufnahmen", systemImage: "waveform")
                         }
@@ -135,6 +135,18 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .disabled(number.isEmpty && lastDialed.isEmpty)
             .accessibilityLabel(number.isEmpty ? "Wahlwiederholung" : "Anrufen")
+            .overlay(alignment: .trailing) {
+                // Videoanruf (nur mit Nummer)
+                if settings.videoEnabled && !number.isEmpty {
+                    Button { dial(number, video: true) } label: {
+                        Image(systemName: "video.fill").font(.title3).foregroundStyle(.white)
+                            .frame(width: 52, height: 52).background(Color.green.opacity(0.85), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 78)
+                    .accessibilityLabel("Videoanruf")
+                }
+            }
         }
     }
 
@@ -143,12 +155,12 @@ struct ContentView: View {
         if !s.isEmpty { number = s }
     }
 
-    private func dial(_ n: String) {
+    private func dial(_ n: String, video: Bool = false) {
         let n = n.filter { "0123456789*#+".contains($0) }
         guard !n.isEmpty else { return }
         lastDialed = n
         number = ""
-        CallKitProvider.shared.startOutgoing(number: n, video: false)
+        CallKitProvider.shared.startOutgoing(number: n, video: video)
     }
 
     // MARK: Gespräch (Knöpfe wie im Toast der Mac-App)
@@ -169,6 +181,21 @@ struct ContentView: View {
                 if !call.displayName.isEmpty { Text(call.remote).font(.callout).foregroundStyle(.secondary) }
                 Text(statusText(call, ph)).font(.callout).foregroundStyle(call.isPaused ? .orange : .secondary)
                     .monospacedDigit()
+            }
+
+            // Video: Gegenstelle groß, eigene Kamera klein unten rechts
+            if ph == .active && call.hasVideo {
+                ZStack(alignment: .bottomTrailing) {
+                    VideoLayerView(remote: true)
+                        .aspectRatio(3 / 4, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    VideoLayerView(remote: false)
+                        .frame(width: 84, height: 112)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.4)))
+                        .padding(8)
+                }
+                .frame(maxHeight: 420)
             }
 
             switch ph {

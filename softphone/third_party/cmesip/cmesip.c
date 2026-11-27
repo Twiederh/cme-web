@@ -18,6 +18,10 @@
 #include <baresip.h>
 #include "cmesip.h"
 
+/* cmevideo.m */
+int  cmevideo_init(void);
+void cmevideo_close(void);
+
 static struct {
 	pthread_t thread;
 	pthread_mutex_t lock;     /* nur für Start/Stopp */
@@ -404,6 +408,8 @@ static void *thread_main(void *unused)
 		err = mutex_alloc(&recl_mtx);
 	if (!err)
 		aufilt_register(baresip_aufiltl(), &rec_filt);
+	if (!err)
+		err = cmevideo_init();
 	err = mqueue_alloc(&g.mq, mqueue_handler, NULL);
 
  out:
@@ -420,6 +426,7 @@ static void *thread_main(void *unused)
 	/* Aufräumen im selben Thread */
 	list_flush(&subl);
 	aufilt_unregister(&rec_filt);
+	cmevideo_close();
 	recl_mtx = mem_deref(recl_mtx);
 	bevent_unregister(event_handler);
 	g.mq = mem_deref(g.mq);
@@ -608,7 +615,7 @@ static int print_escaped(struct re_printf *pf, const char *s)
 }
 
 
-int cmesip_dial(const char *uri, const char *from_uri, const char *replaces,
+int cmesip_dial(const char *uri, const char *from_uri, const char *replaces, bool video,
 		char *cid_out, size_t cid_size)
 {
 	if (!uri)
@@ -626,7 +633,7 @@ int cmesip_dial(const char *uri, const char *from_uri, const char *replaces,
 		else
 			err = re_sdprintf(&target, "%s", uri);
 		if (!err)
-			err = ua_connect(g.ua, &call, from_uri, target, VIDMODE_OFF);
+			err = ua_connect(g.ua, &call, from_uri, target, video ? VIDMODE_ON : VIDMODE_OFF);
 		if (!err && call && cid_out && cid_size)
 			str_ncpy(cid_out, call_id(call), cid_size);
 		mem_deref(target);
@@ -639,7 +646,9 @@ int cmesip_answer(const char *call_id)
 {
 	return run(^int(void) {
 		struct call *call = find_call(call_id);
-		return call ? ua_answer(call_get_ua(call), call, VIDMODE_OFF) : ENOENT;
+		/* mit Video nur, wenn die Gegenstelle es anbietet (sonst bliebe ein m=video im Angebot) */
+		return call ? ua_answer(call_get_ua(call), call, call_has_video(call) ? VIDMODE_ON : VIDMODE_OFF)
+			: ENOENT;
 	});
 }
 
@@ -706,9 +715,10 @@ int cmesip_call_info(const char *call_id, char *buf, size_t size)
 			return ENOENT;
 		const struct aucodec *ac = audio_codec(call_audio(call), true);
 		struct stream *s = audio_strm(call_audio(call));
-		re_snprintf(buf, size, "codec=%s/%u menc=%s",
+		const struct vidcodec *vc = call_video(call) ? video_codec(call_video(call), true) : NULL;
+		re_snprintf(buf, size, "codec=%s/%u menc=%s vcodec=%s",
 			    ac ? ac->name : "-", ac ? ac->srate : 0,
-			    s && stream_is_secure(s) ? "srtp" : "none");
+			    s && stream_is_secure(s) ? "srtp" : "none", vc ? vc->name : "-");
 		return 0;
 	});
 }
@@ -1032,5 +1042,38 @@ int cmesip_record(const char *call_id, const char *path)
 		}
 		mtx_unlock(recl_mtx);
 		return err;
+	});
+}
+
+
+bool cmesip_call_video(const char *call_id)
+{
+	return 1 == run(^int(void) {
+		struct call *call = find_call(call_id);
+		return call && call_video(call) && call_has_video(call) ? 1 : 0;
+	});
+}
+
+
+int cmesip_set_video_device(const char *dev)
+{
+	return run(^int(void) {
+		struct config *cfg = conf_config();
+		str_ncpy(cfg->video.src_mod, "cmecam", sizeof(cfg->video.src_mod));
+		str_ncpy(cfg->video.src_dev, dev ? dev : "", sizeof(cfg->video.src_dev));
+		return 0;
+	});
+}
+
+
+int cmesip_set_video(const char *call_id, bool on)
+{
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		if (!call)
+			return ENOENT;
+		if (!call_video(call))
+			return ENOTSUP;   /* Gespräch ohne Video-Stream (als Audio-Anruf aufgebaut) */
+		return call_set_video_dir(call, on ? SDP_SENDRECV : SDP_INACTIVE);
 	});
 }

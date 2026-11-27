@@ -51,6 +51,23 @@ struct DialpadView: View {
             .disabled(number.isEmpty && history.lastDialed == nil)
             .help(number.isEmpty ? "Wahlwiederholung" : "Anrufen")
             .padding(.top, 4)
+            .overlay(alignment: .trailing) {
+                // Videoanruf (nur Softphone, mit Nummer)
+                if settings.macMode == .softphone && settings.videoEnabled && !number.isEmpty {
+                    Button {
+                        URLRouter.dial(number, video: true)
+                        number = ""
+                        StatusBarController.shared.close()
+                    } label: {
+                        Image(systemName: "video.fill").foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Color(red: 0.30, green: 0.69, blue: 0.31)))
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 56, y: 2)
+                    .help("Videoanruf")
+                }
+            }
         }
         .padding(.horizontal, 18)
         .padding(.top, 6)

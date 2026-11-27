@@ -64,7 +64,7 @@ int  cmesip_network_changed(void);
 
 /* Anruf. from_uri: eigener From (NULL = Konto), replaces: "call-id;to-tag=..;from-tag=.." oder NULL.
  * call_id: Puffer für die Call-ID des neuen Gesprächs. */
-int  cmesip_dial(const char *uri, const char *from_uri, const char *replaces,
+int  cmesip_dial(const char *uri, const char *from_uri, const char *replaces, bool video,
 		 char *call_id, size_t call_id_size);
 int  cmesip_answer(const char *call_id);
 int  cmesip_hangup(const char *call_id, unsigned scode);
@@ -110,5 +110,19 @@ int  cmesip_record(const char *call_id, const char *path);
 #ifdef __cplusplus
 }
 #endif
+
+/* Video (cmevideo.m): Kamera "cmecam", Anzeige "cmedisp", H.264/H.265 über VideoToolbox.
+ * Der Handler bekommt jedes Bild als CVPixelBufferRef (nur während des Aufrufs gültig – CFRetain zum Behalten);
+ * remote = Bild der Gegenstelle, sonst Vorschau der eigenen Kamera. Aufruf aus beliebigen Threads. */
+typedef void (cmesip_video_h)(bool remote, void *pixel_buffer, void *arg);
+void cmesip_set_video_handler(cmesip_video_h *h, void *arg);
+/* Kameras: Zeilen "uniqueID<TAB>Name\n" */
+int  cmesip_video_devices(char *buf, size_t size);
+/* Kamera für neue Gespräche (uniqueID, leer = Standard/Frontkamera) */
+int  cmesip_set_video_device(const char *dev);
+/* Video im Gespräch an/aus (re-INVITE); ENOTSUP, wenn das Gespräch ohne Video aufgebaut wurde */
+int  cmesip_set_video(const char *call_id, bool on);
+/* Gespräch mit Video? */
+bool cmesip_call_video(const char *call_id);
 
 #endif

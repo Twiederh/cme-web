@@ -121,12 +121,16 @@ build_slice() {
     ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 -fblocks \
       -I$P/include/re -I$P/include -I$SRC/baresip/include ${redefs[@]} \
       -c $TP/cmesip/cmesip.c -o $B/cmesip.o
+    # Video (Kamera, VideoToolbox H.264/H.265, Anzeige)
+    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -fobjc-arc -fblocks \
+      -I$P/include/re -I$P/include -I$SRC/baresip/include -I$TP/cmesip ${redefs[@]} \
+      -c $TP/cmesip/cmevideo.m -o $B/cmevideo.o
   fi
 
   # alles in eine Bibliothek
   local libs=($P/lib/libre.a $P/lib/libg722.a $P/lib/libopus.a $P/lib/libssl.a $P/lib/libcrypto.a $B/baresip/libbaresip.a)
   libs+=($(find $B/baresip/modules -name '*.a'))
-  [ -f $B/cmesip.o ] && libs+=($B/cmesip.o)
+  [ -f $B/cmesip.o ] && libs+=($B/cmesip.o $B/cmevideo.o)
   xcrun libtool -static -o $B/libcmesip.a ${libs[@]} 2>/dev/null
   echo "    $(du -h $B/libcmesip.a | cut -f1) $B/libcmesip.a"
 }

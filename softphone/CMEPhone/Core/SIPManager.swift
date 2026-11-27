@@ -117,6 +117,11 @@ final class SIPManager: ObservableObject {
         audio_alert \(m),\(out)
         rtp_ports 30000-30999
         rtp_timeout 60
+        video_source cmecam,\(Self.cameraId(settings.videoDeviceId))
+        video_display cmedisp,app
+        video_size 1280x720
+        video_fps 30
+        video_bitrate 1500000
         opus_bitrate 32000
         opus_stereo no
         opus_sprop_stereo no
@@ -143,6 +148,7 @@ final class SIPManager: ObservableObject {
         guard err == 0 else { log("baresip-Start fehlgeschlagen: \(Self.errText(err))"); return }
         started = true
         _ = cmesip_set_trace(true)
+        VideoRenderer.shared.install()
         #if os(iOS)
         // Feste Geräte-ID (+sip.instance): Kamailio ersetzt damit die vorige Anmeldung dieses Geräts, statt nach
         // jedem Aufwachen (neue TCP-Verbindung, neuer Port) einen weiteren Contact zu speichern
@@ -296,6 +302,8 @@ final class SIPManager: ObservableObject {
         aor += ";answermode=manual;ptime=20"
         let codecs = codecList
         if !codecs.isEmpty { aor += ";audio_codecs=\(codecs)" }
+        let vcodecs = settings.videoCodecs.filter(\.enabled).map(\.mime).joined(separator: ",")
+        if !vcodecs.isEmpty { aor += ";video_codecs=\(vcodecs)" }
         if useSRTP { aor += ";mediaenc=srtp" }
 
         // CME nimmt im CME-Modus nur MAC-Adressen oder – für Softclients wie Jabber – einen Gerätenamen an
@@ -537,9 +545,10 @@ final class SIPManager: ObservableObject {
     private var entries: [String: Entry] = [:]
     private var order: [String] = []
 
-    private func dial(_ uri: String, from: String?, replaces: String?, remote: String, name: String) -> String? {
+    private func dial(_ uri: String, from: String?, replaces: String?, remote: String, name: String,
+                      video: Bool = false) -> String? {
         var buf = [CChar](repeating: 0, count: 256)
-        let err = cmesip_dial(uri, from, replaces, &buf, buf.count)
+        let err = cmesip_dial(uri, from, replaces, video, &buf, buf.count)
         guard err == 0 else { log("Anruf fehlgeschlagen: \(Self.errText(err))"); return nil }
         let id = String(cString: buf)
         if entries[id] == nil {
@@ -555,7 +564,8 @@ final class SIPManager: ObservableObject {
     func placeCall(to number: String, video: Bool) -> String? {
         let target = number.contains("@") ? number : "sip:\(number)@\(settings.sipHost)"
         let uri = target.hasPrefix("sip") ? target : "sip:\(target)"
-        return dial(uri, from: nil, replaces: nil, remote: uri, name: "")
+        // Videoanruf nur auf Wunsch: ein m=video im Angebot an reine Audio-Gegenstellen (Trunk) vermeiden
+        return dial(uri, from: nil, replaces: nil, remote: uri, name: "", video: video && settings.videoEnabled)
     }
 
     func accept(callId: String) {
@@ -722,13 +732,58 @@ final class SIPManager: ObservableObject {
         _ = cmesip_set_audio_devices(input, output)
     }
 
-    // MARK: - Video (kommt später)
+    // MARK: - Video (cmevideo.m: Kamera, H.264/H.265 über VideoToolbox)
 
-    var videoDevices: [String] { [] }
-    var currentVideoDevice: String { "" }
-    func applySavedVideoDevice() {}
-    func setVideo(callId: String, enabled: Bool) { log("Video gibt es mit baresip noch nicht") }
-    func setVideoViews(remote: PlatformView?, preview: PlatformView?) {}
+    /// Kameras als "uniqueID: Name" (Mac-Einstellungen zeigen den Teil nach ": ")
+    var videoDevices: [String] {
+        var buf = [CChar](repeating: 0, count: 4096)
+        _ = cmesip_video_devices(&buf, buf.count)
+        return String(cString: buf).split(separator: "\n").compactMap { line in
+            let p = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            return p.count == 2 ? "\(p[0]): \(p[1])" : nil
+        }
+    }
+    var currentVideoDevice: String { videoDevices.first ?? "" }
+
+    /// uniqueID aus "uniqueID: Name" (ältere Einstellung "AVFoundation: <Name>" -> Standardkamera)
+    static func cameraId(_ setting: String) -> String {
+        guard let r = setting.range(of: ": ") else { return setting }
+        let id = String(setting[..<r.lowerBound])
+        return id == "AVFoundation" ? "" : id
+    }
+
+    func applySavedVideoDevice() {
+        guard started else { return }
+        _ = cmesip_set_video_device(Self.cameraId(settings.videoDeviceId))
+    }
+
+    func setVideo(callId: String, enabled: Bool) {
+        let err = cmesip_set_video(callId, enabled)
+        if err == ENOTSUP {
+            log("Video nachträglich einschalten geht nicht – Gespräch wurde ohne Video aufgebaut")
+        } else if err != 0 {
+            log("Video \(enabled ? "an" : "aus"): \(Self.errText(err))")
+        }
+        refreshCalls()
+    }
+
+    private var videoHosts: [VideoLayerHostView] = []
+
+    /// Mac: Ansichten für Gegenstelle und Vorschau (NativeVideoView in CallToast/VideoWindow)
+    func setVideoViews(remote: PlatformView?, preview: PlatformView?) {
+        videoHosts.forEach { $0.removeFromSuperview() }
+        videoHosts = []
+        for (view, layer) in [(remote, VideoRenderer.shared.remoteLayer), (preview, VideoRenderer.shared.previewLayer)] {
+            guard let view else { continue }
+            let h = VideoLayerHostView(layer: layer)
+            h.frame = view.bounds
+            #if os(iOS)
+            h.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            #endif
+            view.addSubview(h)
+            videoHosts.append(h)
+        }
+    }
 
     func call(withId callId: String) -> CallInfo? { calls.first { $0.id == callId } }
 
@@ -982,6 +1037,15 @@ final class SIPManager: ObservableObject {
         return (codec, menc)
     }
 
+    /// "vcodec=H264" aus cmesip_call_info
+    private static func videoCodec(_ info: String) -> String? {
+        for part in info.split(separator: " ") where part.hasPrefix("vcodec=") {
+            let v = String(part.dropFirst(7))
+            return v == "-" ? nil : v
+        }
+        return nil
+    }
+
     func refreshCalls() {
         calls = order.compactMap { id in
             guard let c = entries[id] else { return nil }
@@ -990,13 +1054,14 @@ final class SIPManager: ObservableObject {
             var details: [String] = []
             if c.established != nil {
                 details.append("Audio: \(codec)")
+                if let v = Self.videoCodec(c.info) { details.append("Video: \(v)") }
                 details.append("Verschlüsselung: " + (menc == "srtp" ? "SRTP" : "keine"))
             }
             details.append("Gegenstelle: \(c.remoteURI)")
             var state = c.state
             if c.heldLocal, state == .StreamsRunning || state == .PausedByRemote { state = .Paused }
             return CallInfo(id: id, remote: Self.user(of: c.remoteURI), displayName: c.displayName, state: state,
-                            isIncoming: c.incoming, hasVideo: false, isPaused: c.heldLocal,
+                            isIncoming: c.incoming, hasVideo: c.established != nil && cmesip_call_video(id), isPaused: c.heldLocal,
                             audioCodec: codec, videoCodec: "–", duration: duration, isRecording: recordingCalls.contains(id),
                             mediaDetails: details)
         }
