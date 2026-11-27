@@ -445,6 +445,15 @@ final class SIPManager: ObservableObject {
         }
     }
 
+    /// SRTP (SDES): iOS über das Gateway immer – Kamailio/rtpengine verschlüsseln die Strecke zu den iOS-Geräten
+    /// (APP_SRTP). Nicht verpflichtend, unverschlüsseltes RTP wird weiter angenommen. Sonst die Einstellung.
+    private var useSRTP: Bool {
+        #if os(iOS)
+        if settings.useGateway && !settings.jabberMode { return true }
+        #endif
+        return settings.mediaEncryption == .srtp
+    }
+
     /// Gehaltenes Gespräch übernehmen wie ein Cisco-Telefon: INVITE an die Gegenstelle mit
     /// "Replaces: <call-id>;to-tag=<Tag des haltenden Geräts>;from-tag=<Tag der CME>". CME verbindet die
     /// Gegenstelle mit diesem Gerät und beendet den Zweig des haltenden Geräts.
@@ -455,7 +464,7 @@ final class SIPManager: ObservableObject {
             let addr = try Factory.Instance.createAddress(addr: h.remoteURI)
             let params = try core.createCallParams(call: nil)
             params.videoEnabled = false
-            params.mediaEncryption = settings.mediaEncryption == .srtp ? .SRTP : .None
+            params.mediaEncryption = (useSRTP ? .SRTP : .None)
             params.addCustomHeader(headerName: "Replaces",
                                    headerValue: "\(h.callId);to-tag=\(h.localTag);from-tag=\(h.remoteTag)")
             // Über Flexisip (iPhone/iPad): From mit der CME-IP wie beim Mac und den Cisco-Telefonen. Mit der
@@ -576,7 +585,7 @@ final class SIPManager: ObservableObject {
             try? core.setVideodevice(newValue: front)
         }
         do {
-            try core.setMediaencryption(newValue: settings.mediaEncryption == .srtp ? .SRTP : .None)
+            try core.setMediaencryption(newValue: (useSRTP ? .SRTP : .None))
             core.mediaEncryptionMandatory = false
         } catch { log("Media-Encryption: \(error)") }
 
@@ -621,7 +630,7 @@ final class SIPManager: ObservableObject {
             let addr = try Factory.Instance.createAddress(addr: target.hasPrefix("sip") ? target : "sip:\(target)")
             let params = try core.createCallParams(call: nil)
             params.videoEnabled = video && settings.videoEnabled
-            params.mediaEncryption = settings.mediaEncryption == .srtp ? .SRTP : .None
+            params.mediaEncryption = (useSRTP ? .SRTP : .None)
             params.recordFile = Self.recordingPath(remote: number)
             #if os(iOS)
             core.configureAudioSession()
