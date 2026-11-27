@@ -11,7 +11,10 @@
 #include <semaphore.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <errno.h>
 #include <re.h>
+#include <rem.h>
 #include <baresip.h>
 #include "cmesip.h"
 
@@ -138,6 +141,214 @@ static void mqueue_handler(int id, void *data, void *arg)
 }
 
 
+/* --- Lokale Aufnahme: Audiofilter mischt Mikrofon (tx) und Gegenstelle (rx) in eine WAV-Datei (mono, 16 bit) --- */
+
+#define REC_RING 48000   /* Puffer für die Gegenstelle: 1 s bei 48 kHz */
+
+struct rec_ctx {
+	struct le le;
+	const struct audio *au;
+	mtx_t *mtx;
+	FILE *f;
+	uint32_t srate;
+	size_t bytes;
+	int16_t ring[REC_RING];
+	size_t rpos, rlen;
+};
+
+struct rec_enc { struct aufilt_enc_st af; struct rec_ctx *ctx; };
+struct rec_dec { struct aufilt_dec_st af; struct rec_ctx *ctx; };
+
+static struct list recl;
+static mtx_t *recl_mtx;
+
+static void wav_header(FILE *f, uint32_t srate, uint32_t bytes)
+{
+	uint8_t h[44];
+	uint32_t v;
+	memcpy(h, "RIFF", 4); v = 36 + bytes; memcpy(h + 4, &v, 4);
+	memcpy(h + 8, "WAVEfmt ", 8); v = 16; memcpy(h + 16, &v, 4);
+	h[20] = 1; h[21] = 0; h[22] = 1; h[23] = 0;           /* PCM, mono */
+	memcpy(h + 24, &srate, 4); v = srate * 2; memcpy(h + 28, &v, 4);
+	h[32] = 2; h[33] = 0; h[34] = 16; h[35] = 0;
+	memcpy(h + 36, "data", 4); memcpy(h + 40, &bytes, 4);
+	fseek(f, 0, SEEK_SET);
+	fwrite(h, 1, sizeof(h), f);
+	fseek(f, 0, SEEK_END);
+}
+
+/* mit ctx->mtx */
+static void rec_close(struct rec_ctx *ctx)
+{
+	if (!ctx->f)
+		return;
+	wav_header(ctx->f, ctx->srate, (uint32_t)ctx->bytes);
+	fclose(ctx->f);
+	ctx->f = NULL;
+	info("cmesip: Aufnahme beendet (%zu Byte)\n", ctx->bytes);
+}
+
+static void rec_ctx_destructor(void *arg)
+{
+	struct rec_ctx *ctx = arg;
+	mtx_lock(recl_mtx);
+	list_unlink(&ctx->le);
+	mtx_unlock(recl_mtx);
+	mtx_lock(ctx->mtx);
+	rec_close(ctx);
+	mtx_unlock(ctx->mtx);
+	mem_deref(ctx->mtx);
+}
+
+static int rec_ctx_get(struct rec_ctx **ctxp, void **ctx, const struct audio *au)
+{
+	struct rec_ctx *c = *ctx;
+	struct le *le;
+	/* Encoder und Decoder werden evtl. getrennt eingerichtet (eigenes ctx): vorhandenen Zustand suchen */
+	if (!c) {
+		mtx_lock(recl_mtx);
+		for (le = list_head(&recl); le; le = le->next) {
+			struct rec_ctx *x = le->data;
+			if (x->au == au) {
+				c = x;
+				break;
+			}
+		}
+		mtx_unlock(recl_mtx);
+		if (c)
+			*ctx = c;
+	}
+	if (!c) {
+		c = mem_zalloc(sizeof(*c), rec_ctx_destructor);
+		if (!c)
+			return ENOMEM;
+		if (mutex_alloc(&c->mtx)) {
+			mem_deref(c);
+			return ENOMEM;
+		}
+		c->au = au;
+		mtx_lock(recl_mtx);
+		list_append(&recl, &c->le, c);
+		mtx_unlock(recl_mtx);
+		*ctx = c;
+		*ctxp = c;          /* erste Referenz */
+	}
+	else {
+		*ctxp = mem_ref(c);
+	}
+	return 0;
+}
+
+static void rec_enc_destructor(void *arg) { mem_deref(((struct rec_enc *)arg)->ctx); }
+static void rec_dec_destructor(void *arg) { mem_deref(((struct rec_dec *)arg)->ctx); }
+
+static int rec_encupd(struct aufilt_enc_st **stp, void **ctx, const struct aufilt *af,
+		      struct aufilt_prm *prm, const struct audio *au)
+{
+	struct rec_enc *st;
+	int err;
+	(void)af;
+	if (!stp || !ctx || !prm)
+		return EINVAL;
+	if (*stp)
+		return 0;
+	st = mem_zalloc(sizeof(*st), rec_enc_destructor);
+	if (!st)
+		return ENOMEM;
+	err = rec_ctx_get(&st->ctx, ctx, au);
+	if (err) {
+		mem_deref(st);
+		return err;
+	}
+	mtx_lock(st->ctx->mtx);
+	st->ctx->srate = prm->srate;
+	mtx_unlock(st->ctx->mtx);
+	*stp = (struct aufilt_enc_st *)st;
+	return 0;
+}
+
+static int rec_decupd(struct aufilt_dec_st **stp, void **ctx, const struct aufilt *af,
+		      struct aufilt_prm *prm, const struct audio *au)
+{
+	struct rec_dec *st;
+	int err;
+	(void)af; (void)prm;
+	if (!stp || !ctx)
+		return EINVAL;
+	if (*stp)
+		return 0;
+	st = mem_zalloc(sizeof(*st), rec_dec_destructor);
+	if (!st)
+		return ENOMEM;
+	err = rec_ctx_get(&st->ctx, ctx, au);
+	if (err) {
+		mem_deref(st);
+		return err;
+	}
+	*stp = (struct aufilt_dec_st *)st;
+	return 0;
+}
+
+/* Gegenstelle: in den Ring */
+static int rec_decode(struct aufilt_dec_st *st, struct auframe *af)
+{
+	struct rec_ctx *c = ((struct rec_dec *)st)->ctx;
+	const int16_t *s = af->sampv;
+	size_t i;
+	if (af->fmt != AUFMT_S16LE || af->ch != 1)
+		return 0;
+	mtx_lock(c->mtx);
+	if (c->f && af->srate == c->srate) {
+		for (i = 0; i < af->sampc; i++) {
+			c->ring[(c->rpos + c->rlen) % REC_RING] = s[i];
+			if (c->rlen < REC_RING)
+				c->rlen++;
+			else
+				c->rpos = (c->rpos + 1) % REC_RING;
+		}
+	}
+	mtx_unlock(c->mtx);
+	return 0;
+}
+
+/* Mikrofon: mit der Gegenstelle mischen und schreiben (Takt der Aufnahme) */
+static int rec_encode(struct aufilt_enc_st *st, struct auframe *af)
+{
+	struct rec_ctx *c = ((struct rec_enc *)st)->ctx;
+	const int16_t *s = af->sampv;
+	int16_t buf[960];
+	size_t i, done = 0;
+	if (af->fmt != AUFMT_S16LE || af->ch != 1)
+		return 0;
+	mtx_lock(c->mtx);
+	while (c->f && done < af->sampc) {
+		size_t n = af->sampc - done;
+		if (n > RE_ARRAY_SIZE(buf))
+			n = RE_ARRAY_SIZE(buf);
+		for (i = 0; i < n; i++) {
+			int32_t v = s[done + i];
+			if (c->rlen) {
+				v += c->ring[c->rpos];
+				c->rpos = (c->rpos + 1) % REC_RING;
+				c->rlen--;
+			}
+			buf[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+		}
+		c->bytes += fwrite(buf, 2, n, c->f) * 2;
+		done += n;
+	}
+	mtx_unlock(c->mtx);
+	return 0;
+}
+
+static struct aufilt rec_filt = {
+	.name = "cmerec",
+	.enabled = true,
+	.encupdh = rec_encupd, .ench = rec_encode,
+	.decupdh = rec_decupd, .dech = rec_decode,
+};
+
+
 static int load_modules(const char *list)
 {
 	char name[64];
@@ -189,6 +400,10 @@ static void *thread_main(void *unused)
 	err = bevent_register(event_handler, NULL);
 	if (err)
 		goto out;
+	if (!err)
+		err = mutex_alloc(&recl_mtx);
+	if (!err)
+		aufilt_register(baresip_aufiltl(), &rec_filt);
 	err = mqueue_alloc(&g.mq, mqueue_handler, NULL);
 
  out:
@@ -204,6 +419,8 @@ static void *thread_main(void *unused)
 
 	/* Aufräumen im selben Thread */
 	list_flush(&subl);
+	aufilt_unregister(&rec_filt);
+	recl_mtx = mem_deref(recl_mtx);
 	bevent_unregister(event_handler);
 	g.mq = mem_deref(g.mq);
 	g.ua = mem_deref(g.ua);
@@ -775,4 +992,45 @@ int cmesip_audio_session(bool active)
 	(void)active;
 	return 0;
 #endif
+}
+
+
+/* --- Lokale Aufnahme an/aus --- */
+
+int cmesip_record(const char *call_id, const char *path)
+{
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		const struct audio *au;
+		struct le *le;
+		int err = ENOENT;
+		if (!call)
+			return ENOENT;
+		au = call_audio(call);
+		mtx_lock(recl_mtx);
+		for (le = list_head(&recl); le; le = le->next) {
+			struct rec_ctx *c = le->data;
+			if (c->au != au)
+				continue;
+			mtx_lock(c->mtx);
+			rec_close(c);
+			err = 0;
+			if (path && *path) {
+				c->f = fopen(path, "w+b");
+				if (!c->f) {
+					err = errno;
+				}
+				else {
+					c->bytes = 0;
+					c->rlen = c->rpos = 0;
+					wav_header(c->f, c->srate ? c->srate : 16000, 0);
+					info("cmesip: Aufnahme nach %s (%u Hz)\n", path, c->srate);
+				}
+			}
+			mtx_unlock(c->mtx);
+			break;
+		}
+		mtx_unlock(recl_mtx);
+		return err;
+	});
 }

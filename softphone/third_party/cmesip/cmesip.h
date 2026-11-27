@@ -103,6 +103,10 @@ int  cmesip_set_instance(const char *uuid);
 /* iOS: Audio-Sitzung aktiv (CallKit didActivate) bzw. inaktiv – startet/stoppt die Audio-Units */
 int  cmesip_audio_session(bool active);
 
+/* Lokale Aufnahme des Gesprächs (Mikrofon + Gegenstelle gemischt, WAV mono 16 bit); path NULL = beenden.
+ * Endet auch mit dem Gespräch. */
+int  cmesip_record(const char *call_id, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

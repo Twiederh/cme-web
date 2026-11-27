@@ -656,7 +656,7 @@ final class SIPManager: ObservableObject {
         return d
     }()
 
-    // MARK: - Lokale Aufnahme (gibt es mit baresip noch nicht; externe Gespräche nimmt cme-recorder auf)
+    // MARK: - Lokale Aufnahme (interne Gespräche; externe nimmt cme-recorder auf)
 
     static var recordingsFolder: URL {
         #if os(macOS)
@@ -671,8 +671,22 @@ final class SIPManager: ObservableObject {
         return dir
     }
 
+    private var recordingCalls = Set<String>()
+
+    private static func recordingPath(remote: String) -> String {
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        let who = remote.filter { $0.isNumber || $0 == "+" }
+        return recordingsFolder.appendingPathComponent("\(df.string(from: Date())) \(who.isEmpty ? "Anruf" : who).wav").path
+    }
+
+    /// Lokale Aufnahme (cmesip: Mikrofon und Gegenstelle gemischt, WAV); endet spätestens mit dem Gespräch
     func setLocalRecording(callId: String, on: Bool) {
-        log("Lokale Aufnahme gibt es mit baresip noch nicht")
+        let path = on ? Self.recordingPath(remote: call(withId: callId)?.remote ?? "") : nil
+        let err = cmesip_record(callId, path)
+        guard err == 0 else { log("Lokale Aufnahme: \(Self.errText(err))"); return }
+        if on { recordingCalls.insert(callId) } else { recordingCalls.remove(callId) }
+        log("Lokale Aufnahme \(on ? "an: \(path ?? "")" : "aus")")
+        refreshCalls()
     }
 
     // MARK: - Audiogeräte
@@ -974,9 +988,10 @@ final class SIPManager: ObservableObject {
             if c.heldLocal, state == .StreamsRunning || state == .PausedByRemote { state = .Paused }
             return CallInfo(id: id, remote: Self.user(of: c.remoteURI), displayName: c.displayName, state: state,
                             isIncoming: c.incoming, hasVideo: false, isPaused: c.heldLocal,
-                            audioCodec: codec, videoCodec: "–", duration: duration, isRecording: false,
+                            audioCodec: codec, videoCodec: "–", duration: duration, isRecording: recordingCalls.contains(id),
                             mediaDetails: details)
         }
+        recordingCalls.formIntersection(Set(calls.map(\.id)))
         updateRinger()
         if calls.isEmpty { durationTimer?.invalidate(); durationTimer = nil; speakerOn = false }
     }
