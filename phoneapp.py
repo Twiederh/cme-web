@@ -191,6 +191,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     def mobile_save(m: dict) -> None:
         _write(mobile_path, json.dumps(m, indent=1), 0o600)
         write_flexisip_passwd(m)
+        write_sip_aliases()
 
     # Passwortdatei für Flexisip (module::Authentication, db-implementation=file): Flexisip prüft damit die
     # Anfragen der Apps (INVITE, re-INVITE ...) per Digest. Gesucht wird nach User und Host des From und dem
@@ -223,8 +224,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             print(f"Softphone: {flexisip_passwd} nicht beschreibbar ({e})", flush=True)
 
     # Adressen für Anrufe von draußen (Kamailio: kamailio/passwd2htable.py --aliases): <name>@SIP_PUBLIC_DOMAIN aus den
-    # Benutzern (Tab Benutzer, cme-users.json: E-Mail-Adresse -> Rufnummern). Ziel ist die erste Rufnummer, die kein
-    # Fax ist. Volume softphone-data, in Kamailio nur lesbar.
+    # Benutzern (Tab Benutzer, cme-users.json: E-Mail-Adresse -> Rufnummern). Ziel ist die erste Rufnummer mit
+    # CME Phone (Mobilgerät), sonst die erste, die kein Fax ist. Volume softphone-data, in Kamailio nur lesbar.
     aliases_path = data / "sip-aliases"
 
     def write_sip_aliases() -> None:
@@ -239,9 +240,11 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                 faxnums = {x["number"] for x in (app.config.get("FAX") or {}).get("numbers", list)()}
             except Exception:  # noqa: BLE001
                 faxnums = set()
+            apps = {v.get("number") for v in mobiles().values()}
             for key, u in sorted(users.items()):
                 local, _, d = str(key).lower().rpartition("@")
                 nums = [n for n in u.get("numbers", []) if n not in faxnums and RE_ALIAS_NUM.match(n)]
+                nums = [n for n in nums if n in apps] + [n for n in nums if n not in apps]
                 if d == dom and RE_ALIAS.match(local) and nums:
                     lines.append(f"{local} {nums[0]}")
         try:

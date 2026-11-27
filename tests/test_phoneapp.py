@@ -141,7 +141,7 @@ HX = {"X-CME-Request": "1"}
 check(c.put("/api/users/Anna.B@Example.de", json={"numbers": ["+4961874191279", "+4961874191283"]}, headers=HX).get_json()["ok"], "Benutzer angelegt")
 c.put("/api/users/carl@anders.de", json={"numbers": ["+4961874191284"]}, headers=HX)
 al = [open(p + "/sip-aliases").read() for p in (d + "/push", P) if os.path.exists(p + "/sip-aliases")]
-check(al and al[0] == "version:1\nanna.b +4961874191279\n", f"sip-aliases {al}")
+check(al and al[0] == "version:1\nanna.b +4961874191283\n", f"sip-aliases {al} (Nummer mit CME Phone zuerst)")
 c.delete("/api/users/anna.b@example.de", headers=HX)
 al = [open(p + "/sip-aliases").read() for p in (d + "/push", P) if os.path.exists(p + "/sip-aliases")]
 check(al[0] == "version:1\n", "Benutzer gelöscht -> Adresse weg")

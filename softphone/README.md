@@ -130,7 +130,7 @@ testen. CSTA gibt es auf CME ab 12.6 nicht mehr und galt nur für SCCP-Telefone;
 
 Kamailio nimmt dann Anrufe an `<name>@<SIP_PUBLIC_DOMAIN>` an und gibt sie an die Rufnummer bei der CME weiter.
 `<name>` ist der Teil vor dem `@` der E-Mail-Adressen im Tab **Benutzer**, sofern deren Domain `SIP_PUBLIC_DOMAIN` ist.
-Angerufen wird die erste Rufnummer des Benutzers, die kein Fax ist.
+Angerufen wird die erste Rufnummer des Benutzers mit CME Phone (Mobilgerät), sonst die erste, die kein Fax ist.
 
 1. **`.env`:**
    - `SIP_PUBLIC_DOMAIN` setzen.
