@@ -20,7 +20,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 | Flexisip (alt) | `flexisip/` | abgelöst durch Kamailio + rtpengine (27.11.), Image wird noch gebaut |
 | push-relay | `push-relay/relay.py` | APNs-Versand; läuft mit Host-Netz auf 127.0.0.1:8092 |
 | asterisk, recorder, whisper | jeweilige Ordner | Voicemail/Aufnahme/Transkription |
-| Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | iOS: liblinphone mit CallKit. Mac: baresip über `third_party/` (CMESIP.xcframework, C-Schicht `cmesip`), eigener `CMEPhoneMac/Core/SIPManager.swift` |
+| Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | baresip über `third_party/` (CMESIP.xcframework, C-Schicht `cmesip`), gemeinsamer `CMEPhone/Core/SIPManager.swift`; iOS mit CallKit und eigenem PushKit |
 
 **Deployment:**
 - GitHub Actions bauen die Images nach `ghcr.io/twiederh/...`.
@@ -115,13 +115,21 @@ python3 tests/test_relay.py
 
 **baresip (`softphone/third_party/`):** `fetch.sh` lädt re, baresip, libg722 und opus mit festen Commits und spielt `patches/` ein. `build.sh` baut daraus `build/CMESIP.xcframework`. `build.command` startet beides selbst, wenn das Framework fehlt oder `cmesip/` bzw. `patches/` neuer sind. Test der C-Schicht: `zsh third_party/tests/run_call_test.sh`. Mit TCP steht im Contact der Port der Verbindung, nicht 5060. CME stellt Anrufe trotzdem zu, über die bestehende Verbindung (getestet 27.11.).
 
+**iOS-Eigenheiten mit baresip:**
+- CallKit gibt die Audio-Sitzung erst nach dem Annehmen frei. baresip startet den Ton vorher, iOS lehnt das ab (`'!pri'`). Bei didActivate baut `cmesip_audio_session(true)` den Ton per `audio_update` neu auf.
+- Jede Anmeldung lässt Kamailio (tsilo) das INVITE erneut zustellen. Ein zweites INVITE mit bekannter Call-ID lehnt cmesip mit 482 ab, ein zweiter Push zum selben Anruf meldet nicht erneut an.
+- Feste `+sip.instance` (UserDefaults `sipInstanceUUID`), damit Kamailio die Anmeldung des Geräts ersetzt.
+- Protokoll live vom angeschlossenen iPhone: `xcrun devicectl device process launch --device <UDID> --terminate-existing --console de.wiederhol.cmephone` (mit `DEVELOPER_DIR` auf Xcode).
+
 **Swift-Stolperstein:** linphonesw hat eine eigene Klasse `Range`, die das Swift-`Range` überdeckt. Deshalb im Code `Swift.Range` schreiben.
 
 ## Offene Punkte
 
 - [x] Kamailio + rtpengine statt Flexisip (27.11.): Anmeldung, Push, ein- und ausgehend, SRTP zu iOS, Halten und Übernehmen iPhone ↔ Mac ↔ 8845 getestet.
 - [x] Mac-App auf baresip (27.11., Build 311): ein- und ausgehend, Halten, Übernehmen, Voicemail per 302 getestet. Noch ohne Video und lokale Aufnahme.
-- [ ] iOS-App auf baresip (CallKit, PushKit), danach Video. TLS für die Apps (SDES-Schlüssel).
+- [x] iOS-App auf baresip (27.11., Build 316): Push, ein- und ausgehend, SRTP, Halten, Übernehmen, lokale Aufnahme getestet.
+- [ ] Video (iOS + Mac). TLS für die Apps (SDES-Schlüssel). App-Store-Frage ist mit baresip (BSD) entschärft.
+- [ ] sipgate-Dial-Peers 1/2 ohne `media-class 8999`: der cme-recorder sieht sipgate-Gespräche nicht (nur Giganetz 3/4).
 - [ ] `flexisip/` und das Flexisip-Image entfernen, wenn Kamailio sich bewährt hat.
 - [ ] Testen nach Deploy des push-relay: Annehmen am iPhone und kein Weiterklingeln nach Annahme am Mac. Ursache war, dass der Relay die Call-ID im VoIP-Push auf die oberste Ebene legte. liblinphone sucht sie wie bei Flexisip in `aps` (`relay.voip_payload`). Ohne sie legt liblinphone einen zweiten Anruf an. Annehmen beendete dann den echten (603 Decline), der Push-Anruf klingelte ~10 s nach.
 - [ ] Aufräumen: Testkonfiguration auf der CME, veraltete Swift-APIs, Passwörter erneuern, die im Chat standen.
