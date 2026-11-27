@@ -341,7 +341,12 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         cl = ctx["codec_line"]()
         lines = [f"voice class codec {codec}", " codec preference 1 g711alaw", " codec preference 2 g711ulaw",
                  " codec preference 3 g722-64",
-                 f"voice class uri {uri} sip", f" host ipv4:{host_ip}",
+                 f"voice class uri {uri} sip",
+                 # nur Port 5060 (Asterisk): Kamailio kommt von derselben IP (5064 Apps, 5066 von draussen)
+                 # und soll auf seine eigenen Dial-Peers, nicht auf diesen
+                 *([f" no host ipv4:{host_ip}"] if f"host ipv4:{host_ip}" in router.show(
+                     f"show running-config | section voice class uri {uri} sip") else []),
+                 f" pattern {re.escape(host_ip)}:5060",
                  f"dial-peer voice {rec} voip", f" description {REC_DESC}", f" destination-pattern {REC_PATTERN}",
                  " session protocol sipv2", f" session target ipv4:{host_ip}:{REC_PORT}",
                  " session transport udp", f" voice-class codec {codec}", " no vad",
