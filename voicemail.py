@@ -721,6 +721,10 @@ def register(app, router, apply, demo: bool) -> None:
     import phoneapp
     phoneapp.register(app, router, demo, cfgdir)
 
+    # Konferenzen in Jitsi über Jigasi und Kamailio (Tab Jitsi)
+    import jitsi
+    jitsi.register(app, router, apply, demo, cfgdir)
+
     # Shared Line fuer Geraete ohne eigenes Abo (z. B. Gigaset): stellvertretende dialog-Abos
     import sharedline
     sharedline.register(app, router, demo, cfgdir)

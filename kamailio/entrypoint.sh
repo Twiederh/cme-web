@@ -33,6 +33,9 @@ EXT_ADV_TCP="${EXT_SIP_PUBLIC_PORT:-5060}"
 EXT_ADV_TLS="${EXT_TLS_PUBLIC_PORT:-5061}"
 CME_EXT_PORT="${CME_EXT_PORT:-5066}"
 ALIASES="${ALIASES_FILE:-/data/push/sip-aliases}"
+# Konferenzen in Jitsi über Jigasi (cme-web, Tab Jitsi): CME und Jigasi kommen über diesen Port
+CONF_PORT="${CONF_PORT:-5068}"
+CONFERENCES="${CONFERENCES_FILE:-/data/push/conferences}"
 ACME_JSON="${ACME_JSON:-/data/acme/acme.json}"
 TLSDIR=/run/kamailio/tls
 
@@ -61,6 +64,7 @@ if ! python3 /usr/local/bin/passwd2htable.py "$PASSWD" "$DBDIR" >/dev/null; then
 fi
 
 python3 /usr/local/bin/passwd2htable.py --aliases "$ALIASES" "$DBDIR" >/dev/null || true
+python3 /usr/local/bin/passwd2htable.py --conf "$CONFERENCES" "$DBDIR" >/dev/null || true
 
 # Zertifikat: eigene Dateien in TLS_CERT_DIR (cert.pem, key.pem) oder aus der acme.json von Traefik
 cert_update() {
@@ -107,7 +111,7 @@ sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${HOST_IP_RE}|${HOST_IP_RE}|g" -e "s|
     -e "s|\${USRLOC_DB_MODE}|${USRLOC_DB_MODE}|g" -e "s|\${PUBLIC_DOMAIN}|${PUBLIC_DOMAIN:-invalid}|g" \
     -e "s|\${EXT_NAME}|${EXT_NAME:-invalid}|g" -e "s|\${EXT_TCP_PORT}|${EXT_TCP_PORT}|g" -e "s|\${EXT_TLS_PORT}|${EXT_TLS_PORT}|g" \
     -e "s|\${EXT_ADV_TCP}|${EXT_ADV_TCP}|g" -e "s|\${EXT_ADV_TLS}|${EXT_ADV_TLS}|g" -e "s|\${CME_EXT_PORT}|${CME_EXT_PORT}|g" \
-    -e "s|\${EXT_UDP_PORT}|${EXT_UDP_PORT}|g" -e "s|\${EXT_ADV_UDP}|${EXT_ADV_UDP}|g" \
+    -e "s|\${EXT_UDP_PORT}|${EXT_UDP_PORT}|g" -e "s|\${EXT_ADV_UDP}|${EXT_ADV_UDP}|g" -e "s|\${CONF_PORT}|${CONF_PORT}|g" \
     /usr/local/share/kamailio/kamailio.cfg.template > /run/kamailio/kamailio.cfg
 # Zugang von außen einschalten (Präprozessor: #!ifdef WITH_EXT)
 [ "$EXT" = 1 ] && sed -i '1a #!define WITH_EXT' /run/kamailio/kamailio.cfg
@@ -116,7 +120,7 @@ if grep -n '\${' /run/kamailio/kamailio.cfg; then
   exit 1
 fi
 [ "$EXT" = 1 ] && echo "kamailio: von außen ${EXT_NAME} TCP ${EXT_TCP_PORT}/TLS ${EXT_TLS_PORT}/UDP ${EXT_UDP_PORT} (hier ${HOST_IP}), Adressen @${PUBLIC_DOMAIN}, zur CME über ${HOST_IP}:${CME_EXT_PORT}"
-echo "kamailio: Apps ${HOST_IP}:${APP_PORT}, CME ${CME_IP}:${CME_PORT} über ${HOST_IP}:${CME_SIDE_PORT}, Medien zu den Apps: ${APP_MEDIA%% *}, Anmeldungen ${USRLOC_DB_MODE:+gespeichert (db_mode $USRLOC_DB_MODE)}"
+echo "kamailio: Apps ${HOST_IP}:${APP_PORT}, CME ${CME_IP}:${CME_PORT} über ${HOST_IP}:${CME_SIDE_PORT}, Konferenzen (Jitsi) über ${HOST_IP}:${CONF_PORT}, Medien zu den Apps: ${APP_MEDIA%% *}, Anmeldungen ${USRLOC_DB_MODE:+gespeichert (db_mode $USRLOC_DB_MODE)}"
 
 [ "${1:-}" = "check" ] && exec kamailio -c -f /run/kamailio/kamailio.cfg
 
@@ -136,6 +140,10 @@ while kill -0 $KPID 2>/dev/null; do
   if out=$(python3 /usr/local/bin/passwd2htable.py --aliases "$ALIASES" "$DBDIR" 2>/dev/null) && [ "$out" = "changed" ]; then
     kamcmd -s unix:/run/kamailio/kamailio_ctl htable.reload alias >/dev/null 2>&1 || true
     echo "kamailio: Adressen für Anrufe von draußen aktualisiert"
+  fi
+  if out=$(python3 /usr/local/bin/passwd2htable.py --conf "$CONFERENCES" "$DBDIR" 2>/dev/null) && [ "$out" = "changed" ]; then
+    kamcmd -s unix:/run/kamailio/kamailio_ctl htable.reload conf >/dev/null 2>&1 || true
+    echo "kamailio: Konferenzräume (Jitsi) aktualisiert"
   fi
   # erneuertes Zertifikat (Traefik verlängert es selbst) ohne Neustart übernehmen
   if [ "$EXT" = 1 ] && out=$(cert_update 2>/dev/null) && [ "$out" = "changed" ]; then

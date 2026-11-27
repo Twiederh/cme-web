@@ -18,6 +18,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 | Kamailio | `kamailio/` (Template `kamailio.cfg.template` → `/run/kamailio/kamailio.cfg`) | Registrar und Proxy für die Apps (TCP 5062), Push über push-relay, Weg zur CME über UDP 5064 (Contact des MOB-Pools) |
 | rtpengine | `rtpengine/` | Medien-Anker: SRTP (SDES) zu den iOS-Geräten, RTP zur CME, Ports 40000–40199 |
 | push-relay | `push-relay/relay.py` | APNs-Versand; läuft mit Host-Netz auf 127.0.0.1:8092 |
+| Jitsi (Jigasi) | `jitsi.py`, `static/jitsi.js` (Tab Jitsi) | Jigasi auf 192.168.2.111 per SSH einrichten, Räume (Nummer → Raum) für Kamailio und CME-Dial-Peers |
 | asterisk, recorder, whisper | jeweilige Ordner | Voicemail/Aufnahme/Transkription |
 | Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | baresip über `third_party/` (CMESIP.xcframework, C-Schicht `cmesip`), gemeinsamer `CMEPhone/Core/SIPManager.swift`; iOS mit CallKit und eigenem PushKit |
 
@@ -90,6 +91,11 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
   - Das Zertifikat kommt aus Traefiks `acme.json` (DNS-Challenge bei All-Inkl).
   - Intern zeigt `sip-gw.wiederhol.de` auf docker01, und `_sip._tcp.wiederhol.de` im internen DNS zeigt auf CUCM/vcube.
 - **Test-Stolperstein:** Ruft ein Gerät derselben Nummer (iPad → -283) an, gehört der Anruf zum MOB-Pool. Die CME schickt dem MOB-Pool dann keine dialog-NOTIFYs, es gibt also keinen Push beim Halten. Zum Testen von einer anderen Nummer anrufen.
+
+**Jitsi (Jigasi)**
+- CME ↔ Kamailio ↔ Jigasi über UDP 5068 (`CONF_PORT`). Kamailio setzt `Jitsi-Conference-Room` aus htable `conf` (Datei `conferences` von cme-web), Jigasi läuft ohne Registrar mit Proxy Kamailio und wird an seiner IP erkannt.
+- CME: je Raum ein Dial-Peer (Beschreibung „Jitsi-Konferenz …“) zu 192.168.1.110:5068, Jigasi → CME über `voice class uri JITSI` (pattern `192\.168\.1\.110:5068`).
+- Jitsi verlangt JWT (`authentication = "token"`), Jigasi muss mit `jigasi@auth.<domain>` in den Raum (`org.jitsi.jigasi.xmpp.acc.*`). Prosodys eigenes Zertifikat war selbstsigniert und abgelaufen (Jigasi: „unable to find valid certification path“), Abhilfe: Let's-Encrypt-Zertifikat über den Renewal-Hook `prosody-cme-web.sh`.
 
 **APNs**
 - Alert-Push mit Topic `de.wiederhol.cmephone`, Kategorie `HELD_CALL`, Aktion `TAKEOVER` („Übernehmen“).

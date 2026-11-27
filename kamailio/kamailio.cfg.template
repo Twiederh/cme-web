@@ -17,6 +17,9 @@
 #   Anrufe an <name>@${PUBLIC_DOMAIN} (htable alias, cme-web: sip-aliases) gehen über ${HOST_IP}:${CME_EXT_PORT}
 #   an die Rufnummer bei der CME (eigener Dial-Peer dort). Medien über die Schnittstelle "ext" von rtpengine.
 #   Über TLS dürfen sich auch die Apps anmelden und anrufen (Digest wie intern).
+# - Konferenzen in Jitsi (Jigasi, cme-web Tab Jitsi, htable conf): CME und Jigasi über ${HOST_IP}:${CONF_PORT}.
+#   CME -> Rufnummer eines Raums -> Jigasi mit Kopfzeile Jitsi-Conference-Room; Jigasi wählt hinaus ->
+#   CME (dort Dial-Peer "incoming uri via" auf ${HOST_IP}:${CONF_PORT}). Von draußen: <name>@${PUBLIC_DOMAIN}.
 
 ####### Global ##########
 debug=${LOG_LEVEL}
@@ -42,6 +45,8 @@ listen=udp:${HOST_IP}:${CME_EXT_PORT}
 listen=udp:${HOST_IP}:${APP_PORT}
 listen=tcp:${HOST_IP}:${APP_PORT}
 listen=udp:${HOST_IP}:${CME_SIDE_PORT}
+# Konferenzen (Jitsi/Jigasi) - zur CME und zu Jigasi
+listen=udp:${HOST_IP}:${CONF_PORT}
 # JSON-RPC für cme-web (Status der Anmeldungen), nur aus dem Docker-Netz / vom Host
 listen=tcp:${HOST_IP}:${RPC_PORT}
 
@@ -102,6 +107,8 @@ modparam("htable", "htable", "num=>size=6;dbtable=subs_num;")
 modparam("htable", "htable", "pushed=>size=6;autoexpire=120;")
 # Gespräche mit SRTP zur App (iOS): Call-ID -> 1, damit re-INVITEs der CME wieder SRTP zur App bekommen
 modparam("htable", "htable", "srtp=>size=8;autoexpire=43200;")
+# Konferenzräume (cme-web: conferences): @ip/@port = Jigasi, Rufnummer -> Raum, =<name> -> Raum (von draußen)
+modparam("htable", "htable", "conf=>size=6;dbtable=conf_room;")
 
 modparam("usrloc", "db_url", "text://${DBDIR}")
 modparam("usrloc", "db_mode", ${USRLOC_DB_MODE})
@@ -173,6 +180,9 @@ request_route {
 		route(REGISTER);
 	}
 
+	if ($Rp == ${CONF_PORT}) {
+		route(CONF);
+	}
 	if ($si == "${CME_IP}") {
 		route(FROM_CME);
 	}
@@ -188,6 +198,10 @@ request_route {
 route[WITHINDLG] {
 	if (!has_totag()) return;
 	if (loose_route()) {
+		# Konferenz: CME und Jigasi sehen Kamailio immer auf ${CONF_PORT} (Dial-Peer der CME prüft den Port)
+		if ($Rp == ${CONF_PORT}) {
+			force_send_socket(udp:${HOST_IP}:${CONF_PORT});
+		}
 #!ifdef WITH_EXT
 		# Richtung Internet: Ziel aus dem alias-Parameter des Contacts (NAT beim Anrufer)
 		handle_ruri_alias();
@@ -196,7 +210,7 @@ route[WITHINDLG] {
 		}
 		# CME -> Anrufer draußen: Socket passend zum Transport des nächsten Hops (das Record-Route nennt den
 		# Socket, über den der Anruf kam - der Proxy des Anrufers will auf dem Rückweg evtl. UDP)
-		if ($si == "${CME_IP}" && $sht(ext=>$ci) != $null) {
+		if (!$var(extsock) && $sht(ext=>$ci) != $null) {
 			$var(np) = $(nh(P){s.tolower});
 			if ($var(np) == "udp") {
 				force_send_socket(udp:${HOST_IP}:${EXT_UDP_PORT});
@@ -235,7 +249,7 @@ route[WITHINDLG] {
 # SDP in einer Anfrage: Richtung CME RTP/AVP, Richtung App ${APP_MEDIA}
 route[MEDIA_OFFER] {
 #!ifdef WITH_EXT
-	if ($si == "${CME_IP}" && $sht(ext=>$ci) == 2) {
+	if (!$var(extsock) && $sht(ext=>$ci) == 2) {
 		rtpengine_manage("RTP/SAVP replace-origin replace-session-connection ICE=remove");
 		return;
 	}
@@ -458,9 +472,14 @@ route[FROM_OUTSIDE] {
 		sl_send_reply("200", "OK");
 		exit;
 	}
-	if (($rd == "${PUBLIC_DOMAIN}" || $rd == "${EXT_NAME}") && $rU != $null
-			&& $sht(alias=>$(rU{s.tolower})) != $null) {
-		route(FROM_EXT);
+	if (($rd == "${PUBLIC_DOMAIN}" || $rd == "${EXT_NAME}") && $rU != $null) {
+		$var(ck) = "=" + $(rU{s.tolower});
+		if ($sht(conf=>$var(ck)) != $null) {
+			route(FROM_EXT_CONF);
+		}
+		if ($sht(alias=>$(rU{s.tolower})) != $null) {
+			route(FROM_EXT);
+		}
 	}
 	if ($pr == "tls") {
 		return;
@@ -507,7 +526,100 @@ route[FROM_EXT] {
 	t_on_failure("FROM_APP");
 	route(RELAY);
 }
+
+# Anruf aus dem Internet an <name>@${PUBLIC_DOMAIN}, wenn <name> ein Konferenzraum ist: direkt zu Jigasi
+route[FROM_EXT_CONF] {
+	if (!is_method("INVITE")) {
+		sl_send_reply("405", "Method Not Allowed");
+		exit;
+	}
+	if (!has_body("application/sdp")) {
+		sl_send_reply("488", "Not Acceptable Here");
+		exit;
+	}
+	if ($sht(conf=>@ip) == $null) {
+		sl_send_reply("503", "Service Unavailable");
+		exit;
+	}
+	if (nat_uac_test("18")) {
+		set_contact_alias();
+	}
+	remove_hf("Replaces");
+	remove_hf("Referred-By");
+	$var(room) = $sht(conf=>$var(ck));
+	if (search_body("a=crypto:")) {
+		$sht(ext=>$ci) = 2;
+	} else {
+		$sht(ext=>$ci) = 1;
+	}
+	$var(rtpdir) = "";
+	if ($var(pubsrc)) {
+		$var(rtpdir) = " direction=ext direction=int";
+	}
+	xlog("L_INFO", "Konferenz von draußen: $fu an $rU@$rd -> $var(room)\n");
+	route(TO_JIGASI);
+}
 #!endif
+
+# Konferenzen (Port ${CONF_PORT}): CME ruft die Rufnummer eines Raums -> Jigasi; Jigasi wählt hinaus -> CME
+route[CONF] {
+	if (!is_method("INVITE")) {
+		if (is_method("OPTIONS")) {
+			sl_send_reply("200", "OK");
+		} else {
+			sl_send_reply("405", "Method Not Allowed");
+		}
+		exit;
+	}
+	if ($sht(conf=>@ip) == $null) {
+		sl_send_reply("503", "Service Unavailable");
+		exit;
+	}
+	$var(rtpdir) = "";
+	if ($si == "${CME_IP}") {
+		$var(room) = $sht(conf=>$rU);
+		if ($var(room) == $null) {
+			xlog("L_INFO", "Konferenz: kein Raum für $rU\n");
+			sl_send_reply("404", "Not Found");
+			exit;
+		}
+		xlog("L_INFO", "Konferenz: $fU an $rU -> $var(room)\n");
+		route(TO_JIGASI);
+	}
+	if ($si == $sht(conf=>@ip)) {
+		# Jigasi wählt hinaus ("Telefon einladen" in Jitsi): an die Rufnummer bei der CME
+		xlog("L_INFO", "Konferenz: Jigasi ruft $rU an\n");
+		remove_hf("Jitsi-Conference-Room");
+		record_route();
+		$ru = "sip:" + $rU + "@${CME_IP}:${CME_PORT}";
+		$du = "sip:${CME_IP}:${CME_PORT};transport=udp";
+		if (has_body("application/sdp")) {
+			rtpengine_offer("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove");
+		}
+		force_send_socket(udp:${HOST_IP}:${CONF_PORT});
+		t_on_reply("MANAGE");
+		t_on_failure("FROM_APP");
+		route(RELAY);
+	}
+	sl_send_reply("403", "Forbidden");
+	exit;
+}
+
+# Anruf an den Raum $var(room) zu Jigasi (Kopfzeile Jitsi-Conference-Room, Medien über rtpengine)
+route[TO_JIGASI] {
+	remove_hf("Jitsi-Conference-Room");
+	append_hf("Jitsi-Conference-Room: $var(room)\r\n");
+	record_route();
+	$ru = "sip:" + $rU + "@" + $sht(conf=>@ip) + ":" + $sht(conf=>@port);
+	$du = "sip:" + $sht(conf=>@ip) + ":" + $sht(conf=>@port) + ";transport=udp";
+	if (has_body("application/sdp")) {
+		rtpengine_offer("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove$var(rtpdir)");
+	}
+	force_send_socket(udp:${HOST_IP}:${CONF_PORT});
+	t_on_reply("MANAGE");
+	t_on_failure("FROM_APP");
+	route(RELAY);
+}
 
 # Push an jedes Gerät der Nummer mit pn-prid (einmal je Anruf und Token); $var(pushed) = Anzahl
 route[PUSH] {

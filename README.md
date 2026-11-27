@@ -464,6 +464,29 @@ Die Apps holen sich ihre Einstellungen über `/client/v1/…` (Anmeldung mit dem
 und schalten darüber auch die Gesprächsaufzeichnung ein und aus.
 Anleitung: [softphone/README.md](softphone/README.md).
 
+### Jitsi-Konferenzen über Jigasi (Tab Jitsi)
+
+Jigasi (das SIP-Gateway von Jitsi Meet) hängt an Kamailio, nicht direkt an der CME:
+
+```
+CME --Rufnummer des Raums--> Kamailio (VM_HOST_IP:5068) --Jitsi-Conference-Room: raum@conference...--> Jigasi
+Jigasi ("Telefon einladen") --> Kamailio (5068) --> CME (Dial-Peer "incoming uri via JITSI")
+Internet: <name>@SIP_PUBLIC_DOMAIN --> Kamailio --> Jigasi (wenn der Raum einen Namen hat)
+```
+
+- cme-web greift per SSH auf den Jitsi-Server zu (eigener Schlüssel, im Tab angezeigt; der Benutzer braucht `sudo` ohne
+  Passwort). Es liest und ändert `/etc/jitsi/jigasi/sip-communicator.properties` (Sicherung `*.cme-web-<Zeit>` daneben,
+  danach Neustart von Jigasi).
+- „Mit Kamailio verbinden“ stellt das SIP-Konto von Jigasi auf Proxy `VM_HOST_IP:CONF_PORT` ohne Registrar um. Kamailio
+  erkennt Jigasi an seiner IP.
+- Räume: Rufnummer → Raum (→ Datei `conferences` im Volume `softphone-data`, Kamailio lädt sie alle 20 s) und je Rufnummer
+  ein Dial-Peer auf der CME (Ziel Kamailio, `voice-class codec 3`). Alte Dial-Peers direkt zu Jitsi werden übernommen.
+- Verlangt Jitsi eine Anmeldung (`authentication = "token"`), muss Jigasi mit seinem Konto (`jigasi@auth.<domain>`) in den
+  Raum: Häkchen „Mit dem Jigasi-Konto in den Raum“.
+- Prosody braucht ein Zertifikat, dem Jigasi traut. Der Knopf „Let's-Encrypt-Zertifikat für Prosody verwenden“ legt
+  `/etc/letsencrypt/renewal-hooks/deploy/prosody-cme-web.sh` an und führt es aus (kopiert das Zertifikat für `<domain>` und
+  `auth.<domain>`, startet Prosody, Jicofo, Videobridge und Jigasi neu).
+
 ## Abfragen für den Status
 
 - `show sip-ua register status` – Registrierung beim Provider

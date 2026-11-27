@@ -55,6 +55,8 @@ services:
       SIP_PUBLIC_DOMAIN: ${SIP_PUBLIC_DOMAIN:-}
       # Apps über TLS zum Gateway (1 = ja, Standard: wenn SIP_PUBLIC_DOMAIN gesetzt ist), Port wie Kamailio
       SIP_GW_TLS: ${SIP_GW_TLS:-}
+      # Konferenzen in Jitsi (Tab Jitsi): Port von Kamailio für CME und Jigasi
+      CONF_PORT: ${CONF_PORT:-5068}
       EXT_TLS_PORT: ${EXT_TLS_PORT:-5061}
       SIP_GW_PORT: ${SIP_GW_PORT:-5062}
       # Kamailio: Ziel des Pools MOB<Nummer> bei CME (sharedline.py)
@@ -214,6 +216,8 @@ services:
       # UDP von draußen (Router: UDP 5060 -> VM_HOST_IP:EXT_UDP_PORT, 5060 belegt hier Asterisk)
       EXT_UDP_PORT: ${EXT_UDP_PORT:-5067}
       CME_EXT_PORT: ${CME_EXT_PORT:-5066}
+      # Konferenzen in Jitsi über Jigasi (cme-web Tab Jitsi): CME und Jigasi kommen über UDP CONF_PORT
+      CONF_PORT: ${CONF_PORT:-5068}
       # Contact des Pools MOB<Nummer> bei CME (cme-web meldet ihn mit diesem Port an)
       B2BUA_PORT: ${B2BUA_PORT:-5064}
       RELAY_PORT: ${RELAY_HTTP_PORT:-8092}

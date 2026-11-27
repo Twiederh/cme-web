@@ -14,6 +14,14 @@ Mit --aliases <datei> <db_text-verzeichnis>: Adressen für Anrufe von draußen (
     version:1
     <name> <rufnummer>
 in die Tabelle sip_alias (htable "alias", Schlüssel = Name in Kleinbuchstaben).
+
+Mit --conf <datei> <db_text-verzeichnis>: Konferenzräume in Jitsi (cme-web, jitsi.write_conf)
+    version:1
+    @ip 192.168.2.111          Jigasi (SIP)
+    @port 5060
+    8888 raum@conference.jitsi.example.de      Rufnummer an der CME -> Raum
+    =team team@conference.jitsi.example.de     Name von draußen (<name>@SIP_PUBLIC_DOMAIN) -> Raum
+in die Tabelle conf_room (htable "conf").
 """
 import re
 import sys
@@ -57,7 +65,28 @@ def aliases(src: Path, dbdir: Path) -> int:
     return 0
 
 
+CONF = re.compile(r"^(@ip|@port|[0-9*#]{1,32}|=[a-z0-9._+-]{1,64}) ([A-Za-z0-9._@-]{1,200})$")
+
+
+def conf(src: Path, dbdir: Path) -> int:
+    try:
+        lines = src.read_text().splitlines()
+    except OSError:
+        lines = ["version:1"]
+    if not lines or lines[0].strip() != "version:1":
+        return 1
+    data = {}
+    for raw in lines[1:]:
+        m = CONF.match(raw.strip())
+        if m:
+            data[m.group(1).lower()] = m.group(2)
+    print("changed" if write_tables(dbdir, [("conf_room", data)]) else "unchanged")
+    return 0
+
+
 def main() -> int:
+    if sys.argv[1] == "--conf":
+        return conf(Path(sys.argv[2]), Path(sys.argv[3]))
     if sys.argv[1] == "--aliases":
         return aliases(Path(sys.argv[2]), Path(sys.argv[3]))
     src, dbdir = Path(sys.argv[1]), Path(sys.argv[2])
