@@ -134,7 +134,7 @@ python3 tests/test_relay.py
 - [x] Mac-App auf baresip (27.11., Build 311): ein- und ausgehend, Halten, Übernehmen, Voicemail per 302 getestet. Noch ohne Video und lokale Aufnahme.
 - [x] iOS-App auf baresip (27.11., Build 316): Push, ein- und ausgehend, SRTP, Halten, Übernehmen, lokale Aufnahme getestet.
 - [ ] Video (iOS + Mac). TLS in den Apps (baresip mit OpenSSL bauen; Kamailio kann TLS 5061 schon).
-- [ ] Zugang von außen testen: Portweiterleitungen UDM SE, SRV `_sips._tcp`, Dial-Peer 5066 auf der CME. App-Store-Frage ist mit baresip (BSD) entschärft.
+- [ ] Zugang von außen: eingerichtet am 27.11. (Portweiterleitungen, SRV `_sips._tcp`, auf der CME trusted 192.168.1.110, `voice class uri KAMAILIOEXT`, dial-peer 5066). OPTIONS über TCP und TLS an die öffentliche IP gibt 200, das Zertifikat ist von Let's Encrypt. Ein Anruf aus dem Internet ist noch nicht getestet. App-Store-Frage ist mit baresip (BSD) entschärft.
 - [x] sipgate-Dial-Peers 1/2 mit `media-class 8999` (27.11.), der cme-recorder sieht jetzt auch sipgate-Gespräche.
 - [x] `flexisip/` und das Flexisip-Image entfernt (27.11.). Der Dateiname `flexisip-passwd` bleibt (cme-web schreibt, Kamailio liest).
 - [ ] Testen nach Deploy des push-relay: Annehmen am iPhone und kein Weiterklingeln nach Annahme am Mac. Ursache war, dass der Relay die Call-ID im VoIP-Push auf die oberste Ebene legte. liblinphone sucht sie wie bei Flexisip in `aps` (`relay.voip_payload`). Ohne sie legt liblinphone einen zweiten Anruf an. Annehmen beendete dann den echten (603 Decline), der Push-Anruf klingelte ~10 s nach.

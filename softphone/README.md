@@ -149,13 +149,13 @@ Angerufen wird die erste Rufnummer des Benutzers, die kein Fax ist.
    voice service voip
     ip address trusted list
      ipv4 192.168.1.110
-   voice class uri KAMAILIO-EXT sip
+   voice class uri KAMAILIOEXT sip
     pattern 192\.168\.1\.110:5066
    dial-peer voice 5066 voip
     description Anrufe aus dem Internet (Kamailio)
     session protocol sipv2
     session transport udp
-    incoming uri via KAMAILIO-EXT
+    incoming uri via KAMAILIOEXT
     voice-class codec 3
     dtmf-relay rtp-nte
     no vad
