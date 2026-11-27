@@ -81,10 +81,10 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 - **GRUU ist abgeschaltet** (`gruu_enabled 0`). Sonst nimmt liblinphone `sip:<nr>@cme.local;gr=…` als Contact, und UPDATE/BYE der CME an die App scheitern mit 478.
 - **topos** versteckt die App-Adressen vor der CME (Speicher: db_text). Die Tabellen `topos_d`/`topos_t` müssen leere Spalten erlauben, das stellt `entrypoint.sh` beim Start sicher. Sonst „null value not allowed“, und eingehende Anrufe kommen nicht zur App.
 - **Eingehend:** Kamailio schickt über push-relay (`GET /push` auf 127.0.0.1:8092) einen VoIP-Push an jedes Gerät mit `pn-prid` und wartet bis 30 s auf die Anmeldung (tsilo).
-- **SRTP:** Geräte mit `pn-provider` im Contact (iOS) bekommen RTP/SAVP, alle anderen RTP/AVP. Pro Call-ID merkt sich Kamailio die Wahl (htable `srtp`), damit re-INVITEs der CME passen. `APP_SRTP=0` schaltet SRTP ab. Die iOS-App bietet über das Gateway immer SRTP an (nicht verpflichtend). Die Schlüssel (SDES) laufen noch über TCP ohne TLS.
+- **SRTP:** Geräte mit `pn-provider` im Contact (iOS) bekommen RTP/SAVP, alle anderen RTP/AVP. Pro Call-ID merkt sich Kamailio die Wahl (htable `srtp`), damit re-INVITEs der CME passen. `APP_SRTP=0` schaltet SRTP ab. Die iOS-App bietet über das Gateway immer SRTP an (nicht verpflichtend). Die iOS-App meldet sich über TLS 5061 am Gateway an (`sip-gw`, Prüfung gegen `Core/cacert.pem`), damit laufen die SDES-Schlüssel verschlüsselt. cme-web gibt TLS nur aus, wenn die App `tls=1` mitschickt und der Gateway-Name `SIP_GW_NAME` ist (`gateway_info`, `SIP_GW_TLS=0` schaltet ab).
 - Der Mac meldet sich direkt an der CME an (Pool 6) und läuft nicht über Kamailio.
 - **Von außen** (seit 27.11., nur wenn `SIP_PUBLIC_DOMAIN` gesetzt ist und ein Zertifikat da ist; im Template `#!ifdef WITH_EXT`):
-  - Kamailio hört auf TCP 5060 und TLS 5061 unter `SIP_GW_NAME`.
+  - Kamailio hört auf TCP 5060, TLS 5061 und UDP 5067 (Router: UDP 5060 → 5067, advertise 5060) unter `SIP_GW_NAME`. Anfragen der CME an Anrufer draußen gehen über den Socket, der zum Transport des nächsten Hops passt (sonst protocol/port mismatch bei re-INVITE/BYE).
   - Anrufe an `<name>@<SIP_PUBLIC_DOMAIN>` werden über `sip-aliases` (`phoneapp.write_sip_aliases`, Quelle: E-Mail-Adressen im Tab Benutzer) auf eine Rufnummer abgebildet. Sie gehen über UDP 5066 an die CME, dort ist ein eigener Dial-Peer nötig (README Abschnitt 7).
   - rtpengine hat dafür die Schnittstelle `ext` (öffentliche IP im SDP, `direction=ext`).
   - Das Zertifikat kommt aus Traefiks `acme.json` (DNS-Challenge bei All-Inkl).
@@ -118,7 +118,7 @@ python3 tests/test_relay.py
 - Der Mac-Build wird immer signiert (`MACSIGN=1`). Unsigniert fehlt die Sandbox, dann sind die Einstellungen in `~/Library/Containers/de.wiederhol.cmephone.mac` nicht sichtbar.
 - Das Skript beendet die laufende Mac-App, installiert sie nach `/Applications/CMEPhone.app` und startet sie neu. Ein Bundle im laufenden Betrieb zu ersetzen bringt die App zum Absturz.
 
-**baresip (`softphone/third_party/`):** `fetch.sh` lädt re, baresip, libg722 und opus mit festen Commits und spielt `patches/` ein. `build.sh` baut daraus `build/CMESIP.xcframework`. `build.command` startet beides selbst, wenn das Framework fehlt oder `cmesip/` bzw. `patches/` neuer sind. Test der C-Schicht: `zsh third_party/tests/run_call_test.sh`. Mit TCP steht im Contact der Port der Verbindung, nicht 5060. CME stellt Anrufe trotzdem zu, über die bestehende Verbindung (getestet 27.11.).
+**baresip (`softphone/third_party/`):** `fetch.sh` lädt re, baresip, libg722, opus und OpenSSL 3.5.9 (statisch, für TLS) mit festen Commits und spielt `patches/` ein. `build.sh` baut daraus `build/CMESIP.xcframework`. `build.command` startet beides selbst, wenn das Framework fehlt oder `cmesip/` bzw. `patches/` neuer sind. Test der C-Schicht: `zsh third_party/tests/run_call_test.sh`. Mit TCP steht im Contact der Port der Verbindung, nicht 5060. CME stellt Anrufe trotzdem zu, über die bestehende Verbindung (getestet 27.11.).
 
 **iOS-Eigenheiten mit baresip:**
 - CallKit gibt die Audio-Sitzung erst nach dem Annehmen frei. baresip startet den Ton vorher, iOS lehnt das ab (`'!pri'`). Bei didActivate baut `cmesip_audio_session(true)` den Ton per `audio_update` neu auf.
@@ -133,7 +133,8 @@ python3 tests/test_relay.py
 - [x] Kamailio + rtpengine statt Flexisip (27.11.): Anmeldung, Push, ein- und ausgehend, SRTP zu iOS, Halten und Übernehmen iPhone ↔ Mac ↔ 8845 getestet.
 - [x] Mac-App auf baresip (27.11., Build 311): ein- und ausgehend, Halten, Übernehmen, Voicemail per 302 getestet. Noch ohne Video und lokale Aufnahme.
 - [x] iOS-App auf baresip (27.11., Build 316): Push, ein- und ausgehend, SRTP, Halten, Übernehmen, lokale Aufnahme getestet.
-- [ ] Video (iOS + Mac). TLS in den Apps (baresip mit OpenSSL bauen; Kamailio kann TLS 5061 schon).
+- [x] TLS in den Apps (27.11., Build 324): OpenSSL in libre/baresip, iOS über TLS 5061. Im Anruftest der C-Schicht geprüft, auf dem iPhone noch nicht.
+- [ ] Video (27.11., Build 324): H.264 (packetization-mode=1) und H.265 über VideoToolbox in `cmesip/cmevideo.m`, Kamera `cmecam`, Anzeige `cmedisp` → `VideoRenderer.swift`. Anruftest App↔App geht in beide Richtungen. Offen: Test auf Geräten, mit 8845/CME (Pools brauchen evtl. `video`), Video erst im Gespräch zuschalten (geht nur, wenn beim Wählen Video an war), CallKit meldet eingehend `hasVideo` false.
 - [ ] Zugang von außen: eingerichtet am 27.11. (Portweiterleitungen, SRV `_sips._tcp`, auf der CME trusted 192.168.1.110, `voice class uri KAMAILIOEXT`, dial-peer 5066). OPTIONS über TCP und TLS an die öffentliche IP gibt 200, das Zertifikat ist von Let's Encrypt. Ein Anruf aus dem Internet ist noch nicht getestet. App-Store-Frage ist mit baresip (BSD) entschärft.
 - [x] sipgate-Dial-Peers 1/2 mit `media-class 8999` (27.11.), der cme-recorder sieht jetzt auch sipgate-Gespräche.
 - [x] `flexisip/` und das Flexisip-Image entfernt (27.11.). Der Dateiname `flexisip-passwd` bleibt (cme-web schreibt, Kamailio liest).
