@@ -6,6 +6,5 @@ __pycache__
 README.md
 .env.example
 softphone
-flexisip
 push-relay
 tests

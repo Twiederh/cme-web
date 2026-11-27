@@ -39,12 +39,6 @@ jobs:
             context: ./kamailio
           - name: cme-rtpengine
             context: ./rtpengine
-          - name: cme-flexisip
-            context: ./flexisip
-            args: |
-              FLEXISIP_VERSION=2.6.2
-              LINPHONESDK_VERSION=5.5.16
-              NJOBS=4
     steps:
       - uses: actions/checkout@v4
 

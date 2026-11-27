@@ -17,7 +17,6 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 | cme-web (Flask) | `cme_web.py`, `phoneapp.py`, `sharedline.py`, … | Weboberfläche, Provisionierung der Apps (`/client/v1/...`), Shared-Line-Agent |
 | Kamailio | `kamailio/` (Template `kamailio.cfg.template` → `/run/kamailio/kamailio.cfg`) | Registrar und Proxy für die Apps (TCP 5062), Push über push-relay, Weg zur CME über UDP 5064 (Contact des MOB-Pools) |
 | rtpengine | `rtpengine/` | Medien-Anker: SRTP (SDES) zu den iOS-Geräten, RTP zur CME, Ports 40000–40199 |
-| Flexisip (alt) | `flexisip/` | abgelöst durch Kamailio + rtpengine (27.11.), Image wird noch gebaut |
 | push-relay | `push-relay/relay.py` | APNs-Versand; läuft mit Host-Netz auf 127.0.0.1:8092 |
 | asterisk, recorder, whisper | jeweilige Ordner | Voicemail/Aufnahme/Transkription |
 | Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | baresip über `third_party/` (CMESIP.xcframework, C-Schicht `cmesip`), gemeinsamer `CMEPhone/Core/SIPManager.swift`; iOS mit CallKit und eigenem PushKit |
@@ -129,8 +128,8 @@ python3 tests/test_relay.py
 - [x] Mac-App auf baresip (27.11., Build 311): ein- und ausgehend, Halten, Übernehmen, Voicemail per 302 getestet. Noch ohne Video und lokale Aufnahme.
 - [x] iOS-App auf baresip (27.11., Build 316): Push, ein- und ausgehend, SRTP, Halten, Übernehmen, lokale Aufnahme getestet.
 - [ ] Video (iOS + Mac). TLS für die Apps (SDES-Schlüssel). App-Store-Frage ist mit baresip (BSD) entschärft.
-- [ ] sipgate-Dial-Peers 1/2 ohne `media-class 8999`: der cme-recorder sieht sipgate-Gespräche nicht (nur Giganetz 3/4).
-- [ ] `flexisip/` und das Flexisip-Image entfernen, wenn Kamailio sich bewährt hat.
+- [x] sipgate-Dial-Peers 1/2 mit `media-class 8999` (27.11.), der cme-recorder sieht jetzt auch sipgate-Gespräche.
+- [x] `flexisip/` und das Flexisip-Image entfernt (27.11.). Der Dateiname `flexisip-passwd` bleibt (cme-web schreibt, Kamailio liest).
 - [ ] Testen nach Deploy des push-relay: Annehmen am iPhone und kein Weiterklingeln nach Annahme am Mac. Ursache war, dass der Relay die Call-ID im VoIP-Push auf die oberste Ebene legte. liblinphone sucht sie wie bei Flexisip in `aps` (`relay.voip_payload`). Ohne sie legt liblinphone einen zweiten Anruf an. Annehmen beendete dann den echten (603 Decline), der Push-Anruf klingelte ~10 s nach.
 - [ ] Aufräumen: Testkonfiguration auf der CME, veraltete Swift-APIs, Passwörter erneuern, die im Chat standen.
 - [ ] Entscheidung App Store / Android / Windows. liblinphone ist GPLv3 bzw. proprietär lizenziert, was für den App Store ein Problem ist. Optionen: Lizenzpreis bei Belledonne anfragen oder auf baresip (BSD) wechseln.
