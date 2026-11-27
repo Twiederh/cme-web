@@ -1,0 +1,181 @@
+diff --git a/include/re_sip.h b/include/re_sip.h
+index b0aaac8..c9bafde 100644
+--- a/include/re_sip.h
++++ b/include/re_sip.h
+@@ -386,6 +386,9 @@ void sip_contact_set(struct sip_contact *contact, const char *uri,
+ 		     const struct sa *addr, enum sip_transp tp);
+ int  sip_contact_print(struct re_printf *pf,
+ 		       const struct sip_contact *contact);
++int  sip_contact_set_params(const char *uri_params, const char *hdr_params);
++const char *sip_contact_uri_params(void);
++const char *sip_contact_hdr_params(void);
+ 
+ 
+ /* dialog */
+diff --git a/include/re_sipsess.h b/include/re_sipsess.h
+index b228be5..f7536c2 100644
+--- a/include/re_sipsess.h
++++ b/include/re_sipsess.h
+@@ -74,6 +74,7 @@ int  sipsess_answer(struct sipsess *sess, uint16_t scode, const char *reason,
+ int  sipsess_reject(struct sipsess *sess, uint16_t scode, const char *reason,
+ 		    const char *fmt, ...);
+ int  sipsess_modify(struct sipsess *sess, struct mbuf *desc);
++int  sipsess_set_reinvite_hdrs(struct sipsess *sess, const char *hdrs);
+ int  sipsess_info(struct sipsess *sess, const char *ctype, struct mbuf *body,
+ 		  sip_resp_h *resph, void *arg);
+ int  sipsess_set_close_headers(struct sipsess *sess, const char *hdrs, ...);
+diff --git a/src/sip/contact.c b/src/sip/contact.c
+index 6703384..59d9df2 100644
+--- a/src/sip/contact.c
++++ b/src/sip/contact.c
+@@ -12,6 +12,40 @@
+ #include <re_sa.h>
+ #include <re_msg.h>
+ #include <re_sip.h>
++#include <re_mem.h>
++
++
++/* CME Phone: Parameter für jeden eigenen Contact (eine App, ein Konto).
++ * uri_params stehen in <...> (z.B. pn-prid=...), hdr_params dahinter (z.B. +u.sip!devicename...). */
++static char *g_uri_params;
++static char *g_hdr_params;
++
++
++int sip_contact_set_params(const char *uri_params, const char *hdr_params)
++{
++	int err = 0;
++
++	g_uri_params = mem_deref(g_uri_params);
++	g_hdr_params = mem_deref(g_hdr_params);
++	if (uri_params && *uri_params)
++		err |= str_dup(&g_uri_params, uri_params);
++	if (hdr_params && *hdr_params)
++		err |= str_dup(&g_hdr_params, hdr_params);
++
++	return err;
++}
++
++
++const char *sip_contact_uri_params(void)
++{
++	return g_uri_params;
++}
++
++
++const char *sip_contact_hdr_params(void)
++{
++	return g_hdr_params;
++}
+ 
+ 
+ /**
+@@ -48,10 +82,18 @@ int sip_contact_print(struct re_printf *pf, const struct sip_contact *contact)
+ 		return 0;
+ 
+ 	if (contact->uri && strchr(contact->uri, ':'))
+-		return re_hprintf(pf, "Contact: <%s>\r\n", contact->uri);
++		return re_hprintf(pf, "Contact: <%s%s%s>%s%s\r\n", contact->uri,
++				  g_uri_params ? ";" : "",
++				  g_uri_params ? g_uri_params : "",
++				  g_hdr_params ? ";" : "",
++				  g_hdr_params ? g_hdr_params : "");
+ 	else
+-		return re_hprintf(pf, "Contact: <sip:%s@%J%s>\r\n",
++		return re_hprintf(pf, "Contact: <sip:%s@%J%s%s%s>%s%s\r\n",
+ 				  contact->uri,
+ 				  contact->addr,
+-				  sip_transp_param(contact->tp));
++				  sip_transp_param(contact->tp),
++				  g_uri_params ? ";" : "",
++				  g_uri_params ? g_uri_params : "",
++				  g_hdr_params ? ";" : "",
++				  g_hdr_params ? g_hdr_params : "");
+ }
+diff --git a/src/sipreg/reg.c b/src/sipreg/reg.c
+index a7cd5fa..e02b473 100644
+--- a/src/sipreg/reg.c
++++ b/src/sipreg/reg.c
+@@ -308,13 +308,17 @@ static int send_handler(enum sip_transp tp, struct sa *src,
+ 		sa_set_port(src, reg->srcport);
+ 
+ 	reg->laddr = *src;
+-	err = mbuf_printf(mb, "Contact: <sip:%s@%J%s%s%s>;expires=%u%s%s",
++	err = mbuf_printf(mb, "Contact: <sip:%s@%J%s%s%s%s%s>;expires=%u%s%s%s%s",
+ 			  reg->cuser, &reg->laddr, sip_transp_param(reg->tp),
+ 			  reg->cparams ? ";" : "",
+ 			  reg->cparams ? reg->cparams : "",
++			  sip_contact_uri_params() ? ";" : "",
++			  sip_contact_uri_params() ? sip_contact_uri_params() : "",
+ 			  reg->expires,
+ 			  reg->params ? ";" : "",
+-			  reg->params ? reg->params : "");
++			  reg->params ? reg->params : "",
++			  sip_contact_hdr_params() ? ";" : "",
++			  sip_contact_hdr_params() ? sip_contact_hdr_params() : "");
+ 
+ 	if (reg->regid > 0)
+ 		err |= mbuf_printf(mb, ";reg-id=%d", reg->regid);
+diff --git a/src/sipsess/modify.c b/src/sipsess/modify.c
+index ce33605..9858692 100644
+--- a/src/sipsess/modify.c
++++ b/src/sipsess/modify.c
+@@ -154,10 +154,11 @@ int sipsess_reinvite(struct sipsess *sess, bool reset_ls)
+ 	err = sip_drequestf(&sess->req, sess->sip, true, "INVITE",
+ 			    sess->dlg, 0, sess->auth,
+ 			    send_handler, reinvite_resp_handler, sess,
+-			    "%s%s%s"
++			    "%s%s%s%s"
+ 			    "Content-Length: %zu\r\n"
+ 			    "\r\n"
+ 			    "%b",
++			    sess->reinvite_hdrs ? sess->reinvite_hdrs : "",
+ 			    sess->desc ? "Content-Type: " : "",
+ 			    sess->desc ? sess->ctype : "",
+ 			    sess->desc ? "\r\n" : "",
+diff --git a/src/sipsess/sess.c b/src/sipsess/sess.c
+index 0165241..24bccb6 100644
+--- a/src/sipsess/sess.c
++++ b/src/sipsess/sess.c
+@@ -152,6 +152,7 @@ static void destructor(void *arg)
+ 	mem_deref(sess->cuser);
+ 	mem_deref(sess->ctype);
+ 	mem_deref(sess->close_hdrs);
++	mem_deref(sess->reinvite_hdrs);
+ 	mem_deref(sess->hdrs);
+ 	mem_deref(sess->desc);
+ 	mem_deref(sess->sock);
+@@ -394,3 +395,22 @@ enum sdp_neg_state sipsess_sdp_neg_state(const struct sipsess *sess)
+ {
+ 	return sess ? sess->neg_state : SDP_NEG_NONE;
+ }
++
++
++/**
++ * Set extra headers for the next re-INVITEs (CME Phone: Call-Info remotecc)
++ *
++ * @param sess SIP Session
++ * @param hdrs Headers incl. CRLF, NULL to clear
++ *
++ * @return 0 if success, otherwise errorcode
++ */
++int sipsess_set_reinvite_hdrs(struct sipsess *sess, const char *hdrs)
++{
++	if (!sess)
++		return EINVAL;
++
++	sess->reinvite_hdrs = mem_deref(sess->reinvite_hdrs);
++
++	return hdrs ? str_dup(&sess->reinvite_hdrs, hdrs) : 0;
++}
+diff --git a/src/sipsess/sipsess.h b/src/sipsess/sipsess.h
+index 591bf03..82d4393 100644
+--- a/src/sipsess/sipsess.h
++++ b/src/sipsess/sipsess.h
+@@ -21,6 +21,7 @@ struct sipsess {
+ 	char *cuser;
+ 	char *ctype;
+ 	char *close_hdrs;
++	char *reinvite_hdrs;
+ 	struct mbuf *hdrs;
+ 	struct mbuf *desc;
+ 	sipsess_desc_h *desch;

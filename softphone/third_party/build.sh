@@ -71,14 +71,14 @@ build_slice() {
   # Die OPENSSL_*-Platzhalter braucht nur das Konfigurieren der Testsuite (retest, wird nicht gebaut);
   # im iOS-SDK gibt es kein OpenSSL, CMake bricht sonst ab.
   cmake -S $SRC/re -B $B/re ${common[@]} -DLIBRE_BUILD_SHARED=OFF -DLIBRE_BUILD_STATIC=ON \
-    -DUSE_OPENSSL=OFF -DUSE_MBEDTLS=OFF -DUSE_UNIXSOCK=OFF \
+    -DUSE_OPENSSL=OFF -DUSE_MBEDTLS=OFF \
     -DOPENSSL_INCLUDE_DIR=$P/include -DOPENSSL_CRYPTO_LIBRARY=$P/lib/libg722.a -DOPENSSL_SSL_LIBRARY=$P/lib/libg722.a \
     > $B/re.log 2>&1 || { tail -30 $B/re.log; exit 1; }
   cmake --build $B/re -j $JOBS >> $B/re.log 2>&1 || { grep -E "error" $B/re.log | head -20; exit 1; }
   cmake --install $B/re >> $B/re.log 2>&1
 
   # baresip statisch mit den Modulen im Programm (static.c)
-  cmake -S $SRC/baresip -B $B/baresip ${common[@]} -DSTATIC=ON -DMODULES="$mods" \
+  cmake -S $SRC/baresip -B $B/baresip ${common[@]} -DSTATIC=ON -DMODULES="$mods" -DUSE_OPENSSL=OFF \
     -DLIBG722_INCLUDE_DIR=$P/include -DLIBG722_LIBRARY=$P/lib/libg722.a \
     -DRE_INCLUDE_DIR=$P/include/re -DRE_LIBRARY=$P/lib/libre.a \
     -DOPUS_INCLUDE_DIR=$P/include -DOPUS_LIBRARY=$P/lib/libopus.a \
@@ -88,17 +88,26 @@ build_slice() {
   cmake --build $B/baresip -j $JOBS --target baresip >> $B/baresip.log 2>&1 \
     || { grep -E "error" $B/baresip.log | head -20; exit 1; }
 
-  # C-Schicht der App
+  local d1=$(sed -n 's/^C_DEFINES = //p' $B/re/CMakeFiles/re-objs.dir/flags.make | tr ' ' '\n' | grep -E "^-DHAVE_|^-DUSE_" | sort)
+  local d2=$(sed -n 's/^C_DEFINES = //p' $B/baresip/CMakeFiles/baresip.dir/flags.make | tr ' ' '\n' | grep -E "^-DHAVE_|^-DUSE_" | sort)
+  if [ "$d1" != "$d2" ]; then
+    echo "FEHLER: libre und baresip mit unterschiedlichen Definitionen:"; diff <(echo "$d1") <(echo "$d2"); exit 1
+  fi
+
+  # C-Schicht der App – mit denselben Definitionen wie libre (sonst stimmt z.B. struct sa nicht überein)
+  local redefs=(${=$(sed -n 's/^C_DEFINES = //p' $B/re/CMakeFiles/re-objs.dir/flags.make | tr ' ' '\n' | grep -v '"')})
   if [ -d $TP/cmesip ]; then
     ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 \
-      -I$P/include/re -I$P/include -I$SRC/baresip/include -DHAVE_INTTYPES_H \
+      -I$P/include/re -I$P/include -I$SRC/baresip/include ${redefs[@]} \
       -c $TP/cmesip/cmesip.c -o $B/cmesip.o
+    ${=cc} -arch $arch -isysroot $sysroot $minflag -O2 -std=c11 \
+      -I$P/include/re -I$P/include ${redefs[@]} -c $TP/cmesip/tls_stub.c -o $B/tls_stub.o
   fi
 
   # alles in eine Bibliothek
   local libs=($P/lib/libre.a $P/lib/libg722.a $P/lib/libopus.a $B/baresip/libbaresip.a)
   libs+=($(find $B/baresip/modules -name '*.a'))
-  [ -f $B/cmesip.o ] && libs+=($B/cmesip.o)
+  [ -f $B/cmesip.o ] && libs+=($B/cmesip.o $B/tls_stub.o)
   xcrun libtool -static -o $B/libcmesip.a ${libs[@]} 2>/dev/null
   echo "    $(du -h $B/libcmesip.a | cut -f1) $B/libcmesip.a"
 }

@@ -19,3 +19,15 @@ get re       https://github.com/baresip/re.git      v4.13.0  b827bca
 get baresip  https://github.com/baresip/baresip.git v4.13.0  8a4f18c
 get libg722  https://github.com/sippy/libg722.git   v_1_2_0  64c49ac
 get opus     https://github.com/xiph/opus.git       v1.6.1   22244de
+
+# Eigene Erweiterungen (patches/): Contact-Parameter für Push/Gerätename, eigene Header im re-INVITE
+for p in re baresip; do
+  f=patches/$p-cmephone.patch
+  if git -C src/$p apply --check ../../$f 2>/dev/null; then
+    git -C src/$p apply ../../$f && echo "$p: Patch eingespielt"
+  elif git -C src/$p apply --reverse --check ../../$f 2>/dev/null; then
+    echo "$p: Patch schon drin"
+  else
+    echo "FEHLER: $f passt nicht zu src/$p"; exit 1
+  fi
+done
