@@ -94,6 +94,9 @@ modparam("registrar", "default_expires", 600)
 modparam("registrar", "min_expires", 60)
 modparam("registrar", "max_expires", 604800)
 modparam("registrar", "received_avp", "$avp(RECEIVED)")
+# Kein GRUU: liblinphone nimmt sonst sip:<nr>@cme.local;gr=... als Contact – Anfragen der CME an die App
+# (UPDATE nach Annahme, BYE beim Übernehmen) gingen dann an cme.local (nicht auflösbar, 478)
+modparam("registrar", "gruu_enabled", 0)
 modparam("nathelper", "received_avp", "$avp(RECEIVED)")
 
 modparam("auth", "nonce_expire", 600)
