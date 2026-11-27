@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import linphonesw
 
 /// Anrufliste der Apps: Softphone-Gespräche (iOS, iPadOS, visionOS, Mac), auf dem Mac zusätzlich das Tischtelefon.
 /// Für Rückruf, Wahlwiederholung und – auf iPad/Vision Pro ohne Telefon-App – als einzige Anrufliste.
@@ -79,21 +78,16 @@ final class CallHistory: ObservableObject {
 
     // MARK: Softphone (Aufruf aus SIPManager-Callback)
 
-    func softphone(call: Call, state: Call.State) {
-        let id = call.callLog?.callId ?? ""
-        switch state {
-        case .Connected, .StreamsRunning:
-            connected.insert(id)
-        case .Released:
-            let incoming = call.dir == .Incoming
-            let wasConnected = connected.remove(id) != nil
-            let number = call.remoteAddress?.username ?? ""
-            let dir: Entry.Direction = incoming ? (wasConnected ? .incoming : .missed) : .outgoing
-            add(Entry(date: call.callLog.map { Date(timeIntervalSince1970: TimeInterval($0.startDate)) } ?? Date(),
-                      number: number, name: call.remoteAddress?.displayName ?? "",
-                      direction: dir, viaDeskPhone: false, duration: call.callLog?.duration ?? 0))
-        default: break
-        }
+    /// Gespräch angenommen (Connected/StreamsRunning)
+    func softphoneConnected(id: String) {
+        connected.insert(id)
+    }
+
+    /// Gespräch beendet (Released)
+    func softphoneEnded(id: String, incoming: Bool, number: String, name: String, start: Date, duration: Int) {
+        let wasConnected = connected.remove(id) != nil
+        let dir: Entry.Direction = incoming ? (wasConnected ? .incoming : .missed) : .outgoing
+        add(Entry(date: start, number: number, name: name, direction: dir, viaDeskPhone: false, duration: duration))
     }
 
     #if os(macOS)

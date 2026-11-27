@@ -1,5 +1,6 @@
-# Eigenes Xcode-Projekt für macOS (CMEPhoneMac.xcodeproj), weil das Linphone-SDK
-# für iOS und macOS als zwei getrennte Swift-Pakete mit gleichem Produktnamen kommt.
+# Eigenes Xcode-Projekt für macOS (CMEPhoneMac.xcodeproj).
+# SIP über baresip: third_party/build/CMESIP.xcframework (third_party/fetch.sh + build.sh),
+# SIPManager der Mac-App in CMEPhoneMac/Core (iOS nutzt noch liblinphone, CMEPhone/Core/SIPManager.swift).
 #   xcodegen generate --spec project-mac.yml
 name: CMEPhoneMac
 options:
@@ -18,11 +19,6 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     CME_BUILD_INFO: "Xcode"
 
-packages:
-  linphonesw:
-    url: https://gitlab.linphone.org/BC/public/linphone-sdk-swift-macos
-    branch: stable
-
 targets:
   CMEPhoneMac:
     type: application
@@ -34,9 +30,16 @@ targets:
         excludes:
           - CallKitProvider.swift        # iOS: CallKit
           - LocalPushController.swift    # iOS: Local Push
+          - SIPManager.swift             # iOS: liblinphone (Mac: CMEPhoneMac/Core/SIPManager.swift)
     dependencies:
-      - package: linphonesw
-        product: linphonesw
+      - framework: third_party/build/CMESIP.xcframework
+        embed: false
+      - sdk: CoreAudio.framework
+      - sdk: AudioToolbox.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: Security.framework
+      - sdk: libz.tbd
+      - sdk: libresolv.tbd
       - sdk: UserNotifications.framework
       - sdk: Contacts.framework
     info:

@@ -41,6 +41,16 @@ git diff --quiet HEAD -- . 2>/dev/null || BUILD_HASH="$BUILD_HASH+"
 BUILD_INFO="Build $BUILD_NO · $BUILD_HASH · $(date '+%d.%m. %H:%M')"
 say "$BUILD_INFO"
 
+# SIP-Bibliothek der Mac-App (baresip, third_party/): nur bauen, wenn sie fehlt oder die C-Schicht neuer ist
+XCF=third_party/build/CMESIP.xcframework
+if [ "${ONLY:-}" != "ios" ]; then
+  if [ ! -d $XCF/macos-arm64 ] || [ -n "$(find third_party/cmesip third_party/patches -newer $XCF -type f 2>/dev/null)" ]; then
+    say "--- SIP-Bibliothek (baresip) bauen"
+    { zsh third_party/fetch.sh && SLICES="${CMESIP_SLICES:-macos}" zsh third_party/build.sh; } > build-logs/cmesip.log 2>&1 \
+      && say "SIP-Bibliothek OK" || { say "SIP-Bibliothek FEHLER (siehe build-logs/cmesip.log)"; exit 1; }
+  fi
+fi
+
 say "--- Projekte erzeugen"
 # iOS-Spec ohne bzw. mit Local Push (Blöcke "# >>> LOCALPUSH" … "# <<< LOCALPUSH" in project.yml):
 # ohne Freigabe von Apple muss die Local-Push-Extension ganz raus, sonst lehnt TestFlight den Upload ab.

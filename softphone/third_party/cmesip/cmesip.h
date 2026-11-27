@@ -32,7 +32,9 @@ enum cmesip_event {
 	CMESIP_CALL_MENC,           /* text: Verschlüsselung, z.B. "srtp" */
 	CMESIP_CALL_DTMF,           /* text: Taste */
 	CMESIP_LOG,                 /* text: Logzeile */
-	CMESIP_TRACE                /* text: SIP-Nachricht; peer: "tx"/"rx" + Gegenstelle */
+	CMESIP_TRACE,               /* text: SIP-Nachricht; peer: "tx"/"rx" + Gegenstelle */
+	CMESIP_NOTIFY,              /* call_id: Abo-Nummer, peer: Event, text: Body */
+	CMESIP_SUB_CLOSED           /* call_id: Abo-Nummer, peer: Event, text: Grund */
 };
 
 /* ev: enum cmesip_event; call_id/peer/text können NULL sein */
@@ -50,8 +52,10 @@ bool cmesip_running(void);
  * "<sip:+49...@cme.local>;auth_user=...;auth_pass=...;outbound=\"sip:gw:5062;transport=tcp\";regint=600"
  * uri_params: hängt an jeden Contact in <...> (z.B. "pn-provider=apns;pn-prid=...;pn-param=...")
  * hdr_params: hängt hinter jeden Contact (z.B. "+u.sip!devicename.ccm.cisco.com=\"SIPMacMini\"")
+ * reg_hdr: zusätzlicher Header nur für REGISTER ("Name: Wert") oder NULL
  * Mit regint > 0 meldet sich das Konto gleich an. */
-int  cmesip_set_account(const char *aor, const char *uri_params, const char *hdr_params);
+int  cmesip_set_account(const char *aor, const char *uri_params, const char *hdr_params,
+			const char *reg_hdr);
 int  cmesip_register(void);
 int  cmesip_unregister(void);
 void cmesip_remove_account(void);
@@ -74,6 +78,24 @@ int  cmesip_call_info(const char *call_id, char *buf, size_t size);
 int  cmesip_call_count(void);
 /* SIP-Nachrichten als CMESIP_TRACE-Ereignisse melden (für das Log der App) */
 int  cmesip_set_trace(bool on);
+
+/* Abo (SUBSCRIBE) über das Konto. from_uri: eigener From (NULL = Konto), hdrs: zusätzliche Header inkl. CRLF.
+ * NOTIFYs kommen als CMESIP_NOTIFY (200 OK schickt cmesip selbst), das Ende als CMESIP_SUB_CLOSED.
+ * Ergebnis: Abo-Nummer > 0 oder -Fehler. */
+int  cmesip_subscribe(const char *uri, const char *event, const char *from_uri, unsigned expires,
+		      const char *hdrs);
+/* Abo beenden (0 = alle) */
+void cmesip_unsubscribe(int id);
+
+/* Eingehenden Anruf per 302 umleiten (z.B. an die Voicemail) */
+int  cmesip_redirect(const char *call_id, const char *uri);
+/* Blind Transfer (REFER) */
+int  cmesip_transfer(const char *call_id, const char *uri);
+
+/* Audiogeräte des Audiomoduls (Namen, je Zeile einer) */
+int  cmesip_audio_devices(bool input, char *buf, size_t size);
+/* Geräte setzen (NULL = unverändert, "" = Systemstandard); gilt auch für laufende Gespräche */
+int  cmesip_set_audio_devices(const char *input, const char *output);
 
 #ifdef __cplusplus
 }

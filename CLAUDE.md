@@ -20,7 +20,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 | Flexisip (alt) | `flexisip/` | abgelöst durch Kamailio + rtpengine (27.11.), Image wird noch gebaut |
 | push-relay | `push-relay/relay.py` | APNs-Versand; läuft mit Host-Netz auf 127.0.0.1:8092 |
 | asterisk, recorder, whisper | jeweilige Ordner | Voicemail/Aufnahme/Transkription |
-| Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | liblinphone-basiert, CallKit auf iOS |
+| Softphone | `softphone/` (`CMEPhone` = iOS, `CMEPhoneMac` = Menüleisten-App, `Shared`) | iOS: liblinphone mit CallKit. Mac: baresip über `third_party/` (CMESIP.xcframework, C-Schicht `cmesip`), eigener `CMEPhoneMac/Core/SIPManager.swift` |
 
 **Deployment:**
 - GitHub Actions bauen die Images nach `ghcr.io/twiederh/...`.
@@ -112,6 +112,8 @@ python3 tests/test_relay.py
 - Build-Nummer = Anzahl der Commits. Uncommittete Builds tragen dieselbe Nummer mit `+` am Hash, also vor dem Testen committen. Die App zeigt sie an (iOS: Startbildschirm unten).
 - Der Mac-Build wird immer signiert (`MACSIGN=1`). Unsigniert fehlt die Sandbox, dann sind die Einstellungen in `~/Library/Containers/de.wiederhol.cmephone.mac` nicht sichtbar.
 - Das Skript beendet die laufende Mac-App, installiert sie nach `/Applications/CMEPhone.app` und startet sie neu. Ein Bundle im laufenden Betrieb zu ersetzen bringt die App zum Absturz.
+
+**baresip (`softphone/third_party/`):** `fetch.sh` lädt re, baresip, libg722 und opus mit festen Commits und spielt `patches/` ein. `build.sh` baut daraus `build/CMESIP.xcframework`. `build.command` startet beides selbst, wenn das Framework fehlt oder `cmesip/` bzw. `patches/` neuer sind. Test der C-Schicht: `zsh third_party/tests/run_call_test.sh`. Mit TCP steht im Contact der Port der Verbindung, nicht 5060. Ob CME Anrufe darüber zustellt, ist noch zu prüfen.
 
 **Swift-Stolperstein:** linphonesw hat eine eigene Klasse `Range`, die das Swift-`Range` überdeckt. Deshalb im Code `Swift.Range` schreiben.
 

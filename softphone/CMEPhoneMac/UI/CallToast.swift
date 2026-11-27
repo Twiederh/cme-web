@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import Combine
-import linphonesw
 
 /// Call-Toast unten rechts (wie die Anrufanzeige von macOS/FaceTime):
 /// Bild, Name, Nummernart bzw. Dauer und runde Knöpfe.
@@ -122,7 +121,7 @@ final class ToastController: ObservableObject {
     /// Nur ausblenden (der Anruf läuft weiter, z.B. Tischtelefon klingelt).
     private func hide() { panel?.orderOut(nil) }
 
-    private static func isRinging(_ s: linphonesw.Call.State) -> Bool {
+    private static func isRinging(_ s: SIPManager.CallState) -> Bool {
         switch s {
         // EarlyUpdating/EarlyUpdatedByRemote: CME schickt schon beim Klingeln ein UPDATE – der Anruf ist noch nicht
         // angenommen (sonst zeigte der Toast "Halten" und eine laufende Gesprächsdauer, bevor jemand abgenommen hat)

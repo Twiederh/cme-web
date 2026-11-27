@@ -140,6 +140,6 @@ private struct CameraPreviewView: NSViewRepresentable {
 
     @MainActor private static var deviceId: String {
         let s = PhoneSettings.shared.videoDeviceId
-        return s.isEmpty ? (SIPManager.shared.core?.videoDevice ?? "") : s
+        return s.isEmpty ? (SIPManager.shared.currentVideoDevice) : s
     }
 }

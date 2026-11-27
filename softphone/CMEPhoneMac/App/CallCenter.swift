@@ -1,11 +1,10 @@
 import Foundation
 import AppKit
-import linphonesw
 
 /// macOS-Gegenstück zu CallKitProvider (CallKit gibt es auf macOS nicht).
 /// Gleiche Methodennamen, damit der gemeinsame SIPManager unverändert bleibt.
 /// Angezeigt werden Anrufe im Call-Toast unten rechts (ToastController beobachtet SIPManager.calls);
-/// den Klingelton spielt liblinphone.
+/// den Klingelton spielt SIPManager.
 @MainActor
 final class CallCenter: NSObject, ObservableObject {
     static let shared = CallCenter()
@@ -20,7 +19,6 @@ final class CallCenter: NSObject, ObservableObject {
         NSApp.requestUserAttention(.criticalRequest)
         completion?()
     }
-    func reportOutgoingStarted(callId: String, call: Call) {}
     func reportOutgoingConnected(callId: String) {}
     func reportEnded(callId: String, failed: Bool) {}
     func forget(callId: String) {}

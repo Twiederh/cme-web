@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
   printf("%c trace %d\n", role, cmesip_set_trace(true));
   char aor[256]; snprintf(aor, sizeof aor, "<sip:%c@LAN_IP:%s>;regint=0;mediaenc=%s;audio_codecs=G722/16000/1,PCMA/8000/1,opus/48000/2",
       role, port, role == 'A' ? "srtp-mand" : "srtp");
-  printf("%c account %d\n", role, cmesip_set_account(aor, NULL, role == 'C' ? "+u.sip!devicename.ccm.cisco.com=\"MOBtest\"" : NULL));
+  printf("%c account %d\n", role, cmesip_set_account(aor, NULL, role == 'C' ? "+u.sip!devicename.ccm.cisco.com=\"MOBtest\"" : NULL, NULL));
   if (role == 'B') {
     wait_for(&estab, 8000); if (estab == 2) { printf("B answer %d\n", cmesip_answer(cid)); }
     wait_for(&closed, 12000);

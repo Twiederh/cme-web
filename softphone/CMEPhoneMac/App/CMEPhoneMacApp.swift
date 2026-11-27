@@ -72,7 +72,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             let settings = PhoneSettings.shared
             SIPManager.shared.addCallStateHandler { call, state in
-                MainActor.assumeIsolated { CallHistory.shared.softphone(call: call, state: state) }
+                MainActor.assumeIsolated {
+                    switch state {
+                    case .StreamsRunning: CallHistory.shared.softphoneConnected(id: call.id)
+                    case .Released:
+                        CallHistory.shared.softphoneEnded(
+                            id: call.id, incoming: call.isIncoming, number: call.remote, name: call.displayName,
+                            start: Date().addingTimeInterval(-TimeInterval(call.duration)), duration: call.duration)
+                    default: break
+                    }
+                }
             }
             SIPManager.shared.start()
             SIPManager.shared.applySavedAudioDevices()

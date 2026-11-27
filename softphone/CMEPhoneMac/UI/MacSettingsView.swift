@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import linphonesw
 
 struct MacSettingsView: View {
     /// Seiten als Seitenleiste im Fenster (TabView landete in der Titelleiste hinter »)
@@ -212,13 +211,7 @@ private struct MediaTab: View {
     }
 
     private func reload() {
-        sip.core?.reloadSoundDevices()
-        var seen = Set<String>()
-        devices = sip.audioDevices.compactMap { d in
-            guard seen.insert(d.id).inserted else { return nil }
-            return (d.id, Self.cleanName(d.deviceName), d.hasCapability(capability: .CapabilityRecord),
-                    d.hasCapability(capability: .CapabilityPlay))
-        }
+        devices = sip.audioDevices.map { d in (d.id, Self.cleanName(d.id), d.canRecord, d.canPlay) }
         cameras = sip.videoDevices
     }
 

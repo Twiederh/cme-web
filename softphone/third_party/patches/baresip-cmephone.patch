@@ -1,5 +1,5 @@
 diff --git a/include/baresip.h b/include/baresip.h
-index e1d5ed2..c439289 100644
+index e1d5ed2..e9a5abd 100644
 --- a/include/baresip.h
 +++ b/include/baresip.h
 @@ -238,6 +238,7 @@ void call_hangupf(struct call *call, uint16_t scode, const char *reason,
@@ -10,6 +10,14 @@ index e1d5ed2..c439289 100644
  void call_set_audio_ldir(struct call *call, enum sdp_dir dir);
  void call_set_video_ldir(struct call *call, enum sdp_dir dir);
  int  call_set_video_dir(struct call *call, enum sdp_dir dir);
+@@ -1004,6 +1005,7 @@ void ua_presence_status_set(struct ua *ua, enum presence_status status);
+ void ua_set_catchall(struct ua *ua, bool enabled);
+ int ua_add_xhdr_filter(struct ua *ua, const char *hdr_name);
+ int  ua_set_custom_hdrs(struct ua *ua, struct list *custom_hdrs);
++int  ua_set_reg_hdr(struct ua *ua, const char *name, const char *value);
+ int  ua_add_custom_hdr(struct ua *ua, const struct pl *name,
+ 		       const struct pl *value);
+ int  ua_rm_custom_hdr(struct ua *ua, struct pl *name);
 diff --git a/src/call.c b/src/call.c
 index 9c14665..90c1f80 100644
 --- a/src/call.c
@@ -38,3 +46,46 @@ index 9c14665..90c1f80 100644
  int call_hold(struct call *call, bool hold)
  {
  	struct le *le;
+diff --git a/src/ua.c b/src/ua.c
+index 4d8441c..da6dc8a 100644
+--- a/src/ua.c
++++ b/src/ua.c
+@@ -245,6 +245,38 @@ static int start_register(struct ua *ua, bool fallback)
+ }
+ 
+ 
++/**
++ * Extra header only for the REGISTER requests of a User-Agent
++ * (CME Phone: Cisco "Supported: ...,X-cisco-sis-7.0.0,..." like Jabber)
++ *
++ * @param ua    User-Agent
++ * @param name  Header name, NULL to clear
++ * @param value Header value
++ *
++ * @return 0 if success, otherwise errorcode
++ */
++int ua_set_reg_hdr(struct ua *ua, const char *name, const char *value)
++{
++	struct list hdrs = LIST_INIT;
++	struct le *le;
++	int err = 0;
++
++	if (!ua)
++		return EINVAL;
++
++	if (name)
++		err = custom_hdrs_add(&hdrs, name, "%s", value ? value : "");
++	if (err)
++		return err;
++
++	LIST_FOREACH(&ua->regl, le)
++		reg_set_custom_hdrs(le->data, &hdrs);
++
++	list_flush(&hdrs);
++	return 0;
++}
++
++
+ /**
+  * Start registration of a User-Agent
+  *

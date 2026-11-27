@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import linphonesw
 
 /// Schnittstelle für die Fernsteuerung eines Tischtelefons.
 /// Heute: Cisco XML Execute (funktioniert mit CME + SIP-Telefonen).
@@ -81,10 +80,9 @@ final class DeskPhoneController: ObservableObject {
 
     var backend: DeskPhoneBackend
     private let settings = PhoneSettings.shared
-    private var event: Event?
-    private var eventDelegate: EventDelegateStub?
+    private var subId: Int?
+    private var retry: DispatchWorkItem?
     private var lastNotifyBody = ""
-    private var delegate: CoreDelegate?
 
     private init() {
         backend = CiscoXMLBackend()
@@ -138,85 +136,50 @@ final class DeskPhoneController: ObservableObject {
     func startMonitoring() {
         stopMonitoring()
         let sip = SIPManager.shared
-        guard let core = sip.core, !settings.deskPhoneExtension.isEmpty else {
+        guard !settings.deskPhoneExtension.isEmpty else {
             subscriptionState = "Keine Nebenstelle für das Tischtelefon eingestellt"
             return
         }
-        if delegate == nil {
-            let d = CoreDelegateStub(
-                onSubscriptionStateChanged: { [weak self] _, ev, state in
-                    MainActor.assumeIsolated {
-                        guard let self, ev === self.event else { return }
-                        self.subscriptionState = "\(state)"
-                        if state == .Error || state == .Expiring {
-                            sip.log("Statusabo: \(state) – erneuere in 30 s")
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { self.startMonitoring() }
-                        }
-                    }
-                },
-                onNotifyReceived: { [weak self] _, ev, _, body in
-                    MainActor.assumeIsolated {
-                        guard let self, self.isCurrent(ev) else { return }
-                        self.received(body, via: "Core")
-                    }
-                }
-            )
-            delegate = d
-            sip.addCoreDelegate(d)
-        }
-        do {
-            // CME liefert für SIP-Telefone nur presence (frei/belegt); "dialog" nimmt er an, schickt aber nie NOTIFYs.
-            let pkg = "presence"
-            let resource = try Factory.Instance.createAddress(addr: "sip:\(settings.deskPhoneExtension)@\(settings.sipHost)")
-            let ev = try core.createSubscribe(resource: resource, event: pkg, expires: 3600)
-            ev.addCustomHeader(name: "Accept", value: "application/pidf+xml")
-            let evDelegate = EventDelegateStub(
-                onNotifyReceived: { [weak self] ev, body in
-                    MainActor.assumeIsolated {
-                        guard let self, self.isCurrent(ev) else { return }
-                        self.received(body, via: "Event")
-                    }
-                }
-            )
-            ev.addDelegate(delegate: evDelegate)
-            eventDelegate = evDelegate
-            event = ev
-            try ev.sendSubscribe(body: nil)
-            subscriptionState = "Abo gesendet (\(pkg))"
-        } catch {
-            subscriptionState = "Abo fehlgeschlagen: \(error)"
-        }
+        // CME liefert für SIP-Telefone nur presence (frei/belegt); "dialog" nimmt er an, schickt aber nie NOTIFYs.
+        let pkg = "presence"
+        subId = sip.subscribe(
+            uri: "sip:\(settings.deskPhoneExtension)@\(settings.sipHost)", event: pkg, expires: 3600,
+            headers: ["Accept": "application/pidf+xml"],
+            onNotify: { [weak self] body in
+                self?.subscriptionState = "Active"
+                self?.received(body)
+            },
+            onClosed: { [weak self] why in
+                guard let self else { return }
+                self.subId = nil
+                self.subscriptionState = "Beendet (\(why))"
+                sip.log("Statusabo: beendet (\(why)) – erneuere in 30 s")
+                let item = DispatchWorkItem { MainActor.assumeIsolated { self.startMonitoring() } }
+                self.retry = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: item)
+            })
+        subscriptionState = subId != nil ? "Abo gesendet (\(pkg))" : "Abo fehlgeschlagen"
     }
 
     func stopMonitoring() {
-        event?.terminate()
-        event = nil
-        eventDelegate = nil
+        retry?.cancel(); retry = nil
+        if let id = subId { SIPManager.shared.unsubscribe(id) }
+        subId = nil
         lastNotifyBody = ""
         status = .unknown
     }
 
-    /// Swift-Wrapper können für dasselbe C-Objekt verschiedene Instanzen liefern –
-    /// deshalb über den C-Zeiger vergleichen.
-    private func isCurrent(_ ev: Event) -> Bool {
-        guard let cur = event else { return false }
-        return ev === cur || ev.getCobject == cur.getCobject
-    }
-
-    /// NOTIFY kann über Core- und Event-Delegate doppelt ankommen – gleiche Inhalte nur einmal auswerten.
-    private func received(_ body: Content?, via: String) {
-        let text = body?.utf8Text ?? ""
+    private func received(_ text: String) {
         if text == lastNotifyBody, !text.isEmpty { return }
         lastNotifyBody = text
-        let type = body.map { "\($0.type)/\($0.subtype)" } ?? "ohne Inhalt"
         guard !text.isEmpty else {
-            SIPManager.shared.log("Statusabo: NOTIFY \(type) (\(via))")
+            SIPManager.shared.log("Statusabo: NOTIFY ohne Inhalt")
             return
         }
         let new = DialogInfoParser.parse(text)
         if new.state == .unknown {
             let snippet = text.replacingOccurrences(of: "\n", with: " ").prefix(300)
-            SIPManager.shared.log("Statusabo: NOTIFY \(type) nicht auswertbar: \(snippet)")
+            SIPManager.shared.log("Statusabo: NOTIFY nicht auswertbar: \(snippet)")
         }
         handle(new)
     }
