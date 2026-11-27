@@ -636,7 +636,8 @@ int cmesip_redirect(const char *call_id, const char *uri)
 		struct call *call = find_call(call_id);
 		if (!call)
 			return ENOENT;
-		call_hangupf(call, 302, "Moved Temporarily", "Contact: <%s>\r\nContent-Length: 0\r\n\r\n", uri);
+		/* ua_hangupf: meldet CALL_CLOSED und gibt das Gespräch frei (call_hangupf allein tut das nicht) */
+		ua_hangupf(call_get_ua(call), call, 302, "Moved Temporarily", "Contact: <%s>\r\nContent-Length: 0\r\n\r\n", uri);
 		return 0;
 	});
 }
