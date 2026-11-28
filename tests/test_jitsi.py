@@ -148,4 +148,13 @@ cfgf.write_text(PCFG.replace('    muc_room_locking', '    token_verification_all
 r3 = subprocess.run(["sh", "-s"], input=scr, text=True, capture_output=True, env=env)
 check("ALLOW=neu" in r3.stdout and '{ "jigasi@auth.jitsi.example.de", "other@x.de" }' in cfgf.read_text(),
       "vorhandene Liste ergänzt")
+# Jicofo: trusted-domains
+jf = d2 / "jicofo.conf"
+jf.write_text('jicofo {\n  xmpp: {\n    client: {\n      username: "focus"\n    }\n    trusted-domains: [ "recorder.jitsi.example.de" ]\n  }\n}\n')
+js = J.jicofo_trust_script("auth.jitsi.example.de").replace("/etc/jitsi/jicofo/jicofo.conf", str(jf))
+r4 = subprocess.run(["sh", "-s"], input=js, text=True, capture_output=True, env=env)
+check("TRUST=neu" in r4.stdout and 'trusted-domains: [ "auth.jitsi.example.de", "recorder.jitsi.example.de" ]' in jf.read_text(),
+      f"Jicofo trusted-domains ergänzt {r4.stderr}")
+r5 = subprocess.run(["sh", "-s"], input=js, text=True, capture_output=True, env=env)
+check("TRUST=schon" in r5.stdout, "zweiter Lauf ändert Jicofo nicht")
 print("alles ok")

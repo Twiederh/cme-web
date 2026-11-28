@@ -339,6 +339,26 @@ echo ALLOW=neu
 """
 
 
+def jicofo_trust_script(auth_domain: str) -> str:
+    """sh-Skript (als root): Domain des Jigasi-Kontos in jicofo.xmpp.trusted-domains, damit Jicofo die Konferenz auch
+    für Jigasi ohne Token eröffnet (Gäste warten dann wegen muc_wait_for_host in der Lobby). Ausgabe TRUST=schon/neu."""
+    if not RE_DOMAIN.fullmatch(auth_domain):
+        raise JitsiError("Domain des Jigasi-Kontos ungültig.")
+    return f"""set -e
+F=/etc/jitsi/jicofo/jicofo.conf
+test -f "$F" || {{ echo "Keine Jicofo-Konfiguration $F"; exit 1; }}
+if grep -q 'trusted-domains:.*"{auth_domain}"' "$F"; then echo TRUST=schon; exit 0; fi
+cp -p "$F" "$F.cme-web-$(date +%Y%m%d-%H%M%S)"
+if grep -q 'trusted-domains: *\\[' "$F"; then
+  sed -i.cme 's/trusted-domains: *\\[/trusted-domains: [ "{auth_domain}",/' "$F" && rm -f "$F.cme"
+else
+  sed -i '0,/^ *xmpp: *{{/s//  xmpp: {{\\n    trusted-domains: [ "{auth_domain}" ]/' "$F"
+fi
+systemctl restart jicofo
+echo TRUST=neu
+"""
+
+
 # ---------------- Flask ----------------
 
 def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
@@ -481,7 +501,8 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
                          "| grep -o 'authentication = \"[a-z_]*\"' || true; "
                          f"sudo -n awk '/^Component /{{c=0}} /^Component \"conference.{m['domain']}\" \"muc\"/{{c=1}} "
                          "c && /\"token_verification\"/{print \"TV=1\"} c && /token_verification_allowlist/{print \"AL=\" $0}' "
-                         f"/etc/prosody/conf.d/{m['domain']}.cfg.lua 2>/dev/null || true")
+                         f"/etc/prosody/conf.d/{m['domain']}.cfg.lua 2>/dev/null || true; "
+                         "sudo -n grep -h 'trusted-domains' /etc/jitsi/jicofo/jicofo.conf 2>/dev/null | sed 's/^/TD=/' || true")
             lines = st.splitlines()
             m["services"] = dict(zip(["jigasi", "prosody", "jicofo", "videobridge"], lines[:4]))
             info = "\n".join(lines[4:])
@@ -493,7 +514,9 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
             jid = props.get(XMPP_ACC + "USER_ID", "").lower()
             al = "\n".join(l for l in lines if l.startswith("AL="))
             m["token_rooms"] = {"verification": "TV=1" in info, "jigasi": jid,
-                                "allowed": bool(jid) and f'"{jid}"' in al.lower()}
+                                "allowed": bool(jid) and f'"{jid}"' in al.lower(),
+                                "trusted": bool(jid) and any(f'"{jid.split("@")[-1]}"' in l.lower()
+                                                             for l in lines if l.startswith("TD="))}
             out["jigasi"] = m
         except JitsiError as e:
             out["error"] = str(e)
@@ -584,7 +607,8 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
             if not m["domain"] or not jid:
                 raise JitsiError("Domain von Jitsi oder Jigasi-Konto (acc-xmpp-1.USER_ID) nicht erkannt.")
             out = ssh("sudo -n sh -s", stdin=prosody_allow_script(m["domain"], jid), timeout=90)
-        return jsonify(ok=True, changed="ALLOW=neu" in out)
+            out += ssh("sudo -n sh -s", stdin=jicofo_trust_script(jid.split("@", 1)[1]), timeout=60)
+        return jsonify(ok=True, changed="=neu" in out)
 
     @app.post("/api/jitsi/prosody-cert")
     def jitsi_prosody_cert():

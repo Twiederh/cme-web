@@ -54,11 +54,11 @@
         laufende Konferenzen brechen dabei ab.</div>
       <div class="msg" id="m-jt-le"></div>
       ${g.token_rooms && g.token_rooms.verification ? `<div style="margin-top:6px">Räume mit Token-Pflicht (token_verification):
-        ${g.token_rooms.allowed ? badge("ok", `Jigasi (${g.token_rooms.jigasi}) darf ohne Token hinein`)
+        ${g.token_rooms.allowed && g.token_rooms.trusted ? badge("ok", `Jigasi (${g.token_rooms.jigasi}) darf ohne Token hinein und Räume eröffnen`)
           : `${badge("warn", "Jigasi wird abgewiesen")} <button class="small" id="jt-allow">Jigasi freischalten</button>`}</div>
       <div class="hint">Trägt das Jigasi-Konto in <span class="mono">token_verification_allowlist</span> der Konferenz-Komponente von Prosody ein
-        (mit Sicherung). Prosody, Jicofo, Videobridge und Jigasi starten dabei neu. Ist der Raum noch leer, braucht es weiterhin
-        einen Gastgeber mit Token, bevor Telefon-Anrufer hineinkommen.</div>
+        und seine Domain in <span class="mono">trusted-domains</span> von Jicofo (beides mit Sicherung). Prosody, Jicofo, Videobridge
+        und Jigasi starten dabei neu. Ist noch kein Gastgeber im Raum, warten Telefon-Anrufer in der Lobby.</div>
       <div class="msg" id="m-jt-allow"></div>` : ""}
 
       <h3>Jigasi</h3>
