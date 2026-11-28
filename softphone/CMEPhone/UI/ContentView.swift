@@ -108,7 +108,7 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 Button {
                     addressMode.toggle()
-                    if addressMode { addressFocused = true } else { addressFocused = false; number = Self.digits(number) }
+                    if addressMode { addressFocused = true } else { addressFocused = false; number = DialInput.digits(number) }
                 } label: { Image(systemName: addressMode ? "circle.grid.3x3" : "keyboard").font(.title3) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .accessibilityLabel(addressMode ? "Ziffernfeld" : "Adresse eingeben")
@@ -123,7 +123,7 @@ struct ContentView: View {
                             .focused($addressFocused)
                             .onSubmit { dial(number) }
                             .onChange(of: number) { _, v in
-                                let f = Self.uriChars(v)
+                                let f = DialInput.uriChars(v)
                                 if f != v { number = f }
                             }
                             .multilineTextAlignment(.center)
@@ -155,7 +155,7 @@ struct ContentView: View {
 
             Button {
                 // Leer + Anrufen = Wahlwiederholung (wie am Telefon: Nummer erst anzeigen)
-                if number.isEmpty { number = lastDialed; if Self.isAddress(lastDialed) { addressMode = true }; return }
+                if number.isEmpty { number = lastDialed; if DialInput.isAddress(lastDialed) { addressMode = true }; return }
                 dial(number)
             } label: {
                 Image(systemName: "phone.fill").font(.title).foregroundStyle(.white)
@@ -179,33 +179,18 @@ struct ContentView: View {
         }
     }
 
-    /// Zeichen einer Rufnummer
-    static func digits(_ s: String) -> String { s.filter { "0123456789*#+".contains($0) } }
-
-    /// Zeichen, die in einer Adresse wie name@domain vorkommen dürfen (klein geschrieben, ohne sip:)
-    static func uriChars(_ s: String) -> String {
-        var v = s.lowercased()
-        for p in ["sips:", "sip:"] where v.hasPrefix(p) { v.removeFirst(p.count) }
-        return String(v.unicodeScalars.filter {
-            ("a"..."z").contains($0) || ("0"..."9").contains($0) || "@.-_+%*#".unicodeScalars.contains($0)
-        }.map(Character.init))
-    }
-
-    /// Adresse, sobald Buchstaben oder @ drin sind, sonst Rufnummer
-    private static func isAddress(_ s: String) -> Bool { s.contains { $0 == "@" || $0.isLetter } }
-
     private func paste() {
         let raw = UIPasteboard.general.string ?? ""
-        let s = Self.isAddress(raw.lowercased().replacingOccurrences(of: "sip:", with: "")) ? Self.uriChars(raw) : Self.digits(raw)
+        let s = DialInput.clean(raw)
         guard !s.isEmpty else { return }
         number = s
-        if Self.isAddress(s) { addressMode = true }
+        if DialInput.isAddress(s) { addressMode = true }
     }
 
     private func dial(_ n: String, video: Bool = false) {
-        let address = Self.isAddress(n)
-        let n = address ? Self.uriChars(n) : Self.digits(n)
-        guard !n.isEmpty, !n.hasPrefix("@"), !n.hasSuffix("@") else { return }
+        let address = DialInput.isAddress(n)
+        let n = address ? DialInput.uriChars(n) : DialInput.digits(n)
+        guard DialInput.isDialable(n) else { return }
         lastDialed = n
         number = ""
         addressFocused = false

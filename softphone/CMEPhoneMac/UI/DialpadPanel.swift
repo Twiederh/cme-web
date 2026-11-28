@@ -14,14 +14,15 @@ struct DialpadView: View {
     var body: some View {
         VStack(spacing: 14) {
             HStack(spacing: 4) {
-                TextField("Nummer", text: $number)
+                TextField("Nummer oder name@domain", text: $number)
                     .textFieldStyle(.plain)
                     .font(.system(size: 26, weight: .regular, design: .rounded))
                     .multilineTextAlignment(.center)
                     .focused($focused)
                     .onSubmit(call)
                     .onChange(of: number) { _, v in
-                        let f = v.filter { "0123456789*#+".contains($0) }
+                        // Rufnummer oder Adresse (URI-Wahl); Tippen auf der Mac-Tastatur, Einfügen
+                        let f = DialInput.clean(v)
                         if f != v { number = f }
                     }
                 if !number.isEmpty {
@@ -88,7 +89,7 @@ struct DialpadView: View {
     private func call() {
         // Leer + Anrufen = Wahlwiederholung (wie am Telefon: Nummer erst anzeigen)
         if number.isEmpty, let last = history.lastDialed { number = last.number; return }
-        guard !number.isEmpty else { return }
+        guard DialInput.isDialable(number) else { return }
         URLRouter.dial(number)
         number = ""
         StatusBarController.shared.close()
