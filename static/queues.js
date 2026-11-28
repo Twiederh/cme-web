@@ -18,7 +18,7 @@
     <div id="queue-body"><div class="empty">Lädt …</div></div>
     ${h2("Wartemusik", "c-moh")}<div id="moh-body"></div>`;
 
-  const numName = (num) => { const n = Q.numbers.find(x => x.number === num); return n && n.name ? `${num} (${n.name})` : num; };
+  const numName = (num) => { const n = (Q.dial_targets || Q.numbers).find(x => x.number === num); return n && n.name ? `${num} (${n.name})` : num; };
   const fmtSecs = (s) => s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`;
   const FB_LABEL = { hangup: "Auflegen", voicemail: "Voicemail", dial: "Durchstellen zu", ivr: "Sprachmenü" };
   const STATE_DE = { "Not in use": "frei", "In use": "im Gespräch", "Busy": "besetzt", "Ringing": "klingelt",
@@ -64,11 +64,19 @@
     if (editing !== null) openEditor(editing);
   }
 
+  function dialList() {   // Vorschläge einmal im body, damit sie beim Neuzeichnen nicht verschwinden
+    let dl = document.getElementById("queues-dial");
+    if (!dl) { dl = document.createElement("datalist"); dl.id = "queues-dial"; document.body.appendChild(dl); }
+    dl.innerHTML = (Q.dial_targets || Q.numbers).map(n =>
+      `<option value="${esc(n.number)}">${esc(n.number)}${n.name ? " – " + esc(n.name) : ""}</option>`).join("");
+    return "";
+  }
+
   function fbTarget(action, value) {
     if (action === "voicemail") return `<select name="fb_target">${Q.mailboxes.map(b =>
       `<option value="${esc(b)}" ${b === value ? "selected" : ""}>${esc(b)}</option>`).join("") || '<option value="">(kein Postfach)</option>'}</select>`;
-    if (action === "dial") return `<select name="fb_target">${Q.numbers.map(n =>
-      `<option value="${esc(n.number)}" ${n.number === value ? "selected" : ""}>${esc(n.number)}${n.name ? " – " + esc(n.name) : ""}</option>`).join("")}</select>`;
+    if (action === "dial") return `<input name="fb_target" list="queues-dial" value="${esc(value)}" placeholder="Rufnummer"
+      title="Jede Nummer, die die CME wählen kann (Telefone, Jitsi-Räume, Dial-Peers)">${dialList()}`;
     if (action === "ivr") return `<select name="fb_target">${Q.ivrs.map(i =>
       `<option value="${esc(i.id)}" ${i.id === value ? "selected" : ""}>${esc(i.name)}</option>`).join("") || '<option value="">(kein Sprachmenü)</option>'}</select>`;
     return `<span class="muted">–</span>`;

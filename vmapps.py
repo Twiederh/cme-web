@@ -227,17 +227,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             return []
 
     def dial_targets() -> list[dict]:
-        """Vorschlaege fuers Durchstellen: Rufnummern der Telefone und Jitsi-Raeume.
-        Durchstellen geht aber an jede Nummer, die die CME waehlen kann."""
-        out = [{"number": n["number"], "name": n.get("name", "")} for n in ctx["numbers"]()]
-        try:
-            rooms = json.loads((cfgdir / "cme-jitsi.json").read_text()).get("rooms", [])
-        except (FileNotFoundError, ValueError):
-            rooms = []
-        have = {n["number"] for n in out}
-        out += [{"number": r["number"], "name": f"Jitsi {r.get('room', '')}"} for r in rooms
-                if r.get("number") and r["number"] not in have]
-        return out
+        import queues
+        return queues.dial_targets(ctx["numbers"](), cfgdir)
 
     def check_free(number: str, d: dict, own: str) -> None:
         taken = {f["number"]: f"Fax {f['number']}" for f in d["fax"]}

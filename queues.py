@@ -38,6 +38,21 @@ STRATEGIES = {
     "fewestcalls": "Wer die wenigsten Anrufe hatte",
     "random": "Zufällig",
 }
+
+
+def dial_targets(numbers: list[dict], cfgdir: Path) -> list[dict]:
+    """Vorschläge fürs Durchstellen: Rufnummern der Telefone und Jitsi-Räume.
+    Durchstellen geht aber an jede Nummer, die die CME wählen kann."""
+    out = [{"number": n["number"], "name": n.get("name", "")} for n in numbers]
+    try:
+        rooms = json.loads((cfgdir / "cme-jitsi.json").read_text()).get("rooms", [])
+    except (FileNotFoundError, ValueError):
+        rooms = []
+    have = {n["number"] for n in out}
+    out += [{"number": r["number"], "name": f"Jitsi {r.get('room', '')}"} for r in rooms
+            if r.get("number") and r["number"] not in have]
+    return out
+
 FALLBACKS = ["voicemail", "dial", "ivr", "hangup"]
 QUEUE_DESC = "Warteschlange (Asterisk)"
 MAX_MUSIC = 60 * 1024 * 1024
@@ -278,8 +293,8 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
             raise QueueError("Ungültiges Ziel nach Ablauf der Wartezeit.")
         if kind == "voicemail" and target not in ctx["settings"]()["mailboxes"]:
             raise QueueError("Postfach für das Ausweichziel auswählen.")
-        if kind == "dial" and target not in dns:
-            raise QueueError("Telefon für das Ausweichziel auswählen.")
+        if kind == "dial" and not RE_NUM.match(target):
+            raise QueueError("Rufnummer für das Ausweichziel eintragen.")
         if kind == "ivr" and target not in {str(i["id"]) for i in apps().get("ivrs", [])}:
             raise QueueError("Sprachmenü für das Ausweichziel auswählen.")
         if kind == "hangup":
@@ -357,7 +372,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> None:
         boxes = list(ctx["settings"]()["mailboxes"])
         ivrs = [{"id": str(i["id"]), "name": i["name"]} for i in apps().get("ivrs", [])]
         return jsonify(ok=True, enabled=True, queues=d["queues"], music=d["music"], numbers=ctx["numbers"](),
-                       mailboxes=boxes, ivrs=ivrs, strategies=STRATEGIES)
+                       dial_targets=dial_targets(ctx["numbers"](), cfgdir), mailboxes=boxes, ivrs=ivrs, strategies=STRATEGIES)
 
     @app.post("/api/queues")
     def q_add():
