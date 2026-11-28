@@ -27,8 +27,24 @@
       <td><input data-i="${i}" data-k="room" value="${esc(r.room)}" placeholder="raumname" class="mono"></td>
       <td><input data-i="${i}" data-k="name" value="${esc(r.name)}" placeholder="${dom ? "leer = nicht von draußen" : "Zugang von außen ist aus"}"
             class="mono" ${dom ? "" : "disabled"}>${r.name && dom ? `<div class="muted mono">${esc(r.name)}@${esc(dom)}</div>` : ""}</td>
+      <td><input data-i="${i}" data-k="notify" value="${esc(Array.isArray(r.notify) ? r.notify.join(", ") : (r.notify || ""))}"
+            placeholder="z. B. 201, name@domain" class="mono"></td>
       <td><button class="small danger" data-del="${i}">Entfernen</button></td></tr>`).join("")
-      || `<tr><td colspan="4" class="empty">Noch keine Räume.</td></tr>`;
+      || `<tr><td colspan="5" class="empty">Noch keine Räume.</td></tr>`;
+  }
+
+  function lobbyBox() {
+    const L = J.lobby || {};
+    const last = L.last && L.last.room ? `<span class="muted">zuletzt: ${esc(L.last.name)} in ${esc(L.last.room)} (${esc(L.last.time)})</span>` : "";
+    return `<div style="margin-top:6px">Lobby-Mitteilungen:
+        ${L.installed ? badge("ok", "Prosody meldet Gäste in der Lobby") : `${badge("neutral", "nicht eingerichtet")}
+          <button class="small" id="jt-lobby" ${L.url ? "" : "disabled"}>In Prosody einrichten</button>`}
+        ${L.mail ? "" : badge("warn", "E-Mail-Versand nicht eingerichtet")} ${last}</div>
+      <div class="hint">Wartet jemand in der Lobby eines Raums, gehen Mitteilungen an die Einträge in der Spalte „Benachrichtigen“:
+        Nebenstellen bekommen sie in der App (iPhone/iPad per Push, Mac als Mitteilung), E-Mail-Adressen per Mail. Ein Tippen öffnet den Raum.
+        Prosody meldet sich dafür bei ${L.url ? `<span class="mono">${esc(L.url)}</span>` : "cme-web (CME_PUBLIC_URL fehlt)"}.
+        Das Einrichten startet Prosody, Jicofo, Videobridge und Jigasi neu.</div>
+      <div class="msg" id="m-jt-lobby"></div>`;
   }
 
   function render() {
@@ -60,6 +76,7 @@
         und seine Domain in <span class="mono">trusted-domains</span> von Jicofo (beides mit Sicherung). Prosody, Jicofo, Videobridge
         und Jigasi starten dabei neu. Ist noch kein Gastgeber im Raum, warten Telefon-Anrufer in der Lobby.</div>
       <div class="msg" id="m-jt-allow"></div>` : ""}
+      ${lobbyBox()}
 
       <h3>Jigasi</h3>
       <div>Weg: ${g.via_kamailio ? badge("ok", `über Kamailio (${J.host_ip}:${J.conf_port})`)
@@ -113,7 +130,7 @@
       ${jig}
 
       <h3>Räume</h3>
-      <table><thead><tr><th>Rufnummer (CME)</th><th>Raum in Jitsi</th><th>Name von draußen</th><th></th></tr></thead>
+      <table><thead><tr><th>Rufnummer (CME)</th><th>Raum in Jitsi</th><th>Name von draußen</th><th>Benachrichtigen (Lobby)</th><th></th></tr></thead>
         <tbody id="jt-rooms">${roomRows()}</tbody></table>
       <div style="margin:8px 0"><button class="small" id="jt-add">Raum hinzufügen</button></div>
       <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -177,6 +194,15 @@
       const r = await post("/api/jitsi/prosody-allow", {});
       showMsg($("#m-jt-allow"), r.ok, r.ok ? (r.changed ? "Jigasi ist freigeschaltet." : "Jigasi war schon freigeschaltet.") : r.error);
       if (r.ok) setTimeout(load, 4000); else al.disabled = false;
+    };
+    const lb = $("#jt-lobby");
+    if (lb) lb.onclick = async () => {
+      if (!confirm("Prosody, Jicofo, Videobridge und Jigasi werden neu gestartet, laufende Konferenzen brechen ab. Weiter?")) return;
+      lb.disabled = true;
+      showMsg($("#m-jt-lobby"), true, "Läuft …");
+      const r = await post("/api/jitsi/lobby-install", {});
+      showMsg($("#m-jt-lobby"), r.ok, r.ok ? "Prosody meldet jetzt Gäste in der Lobby." : r.error);
+      if (r.ok) setTimeout(load, 4000); else lb.disabled = false;
     };
     const le = $("#jt-le");
     if (le) le.onclick = async () => {

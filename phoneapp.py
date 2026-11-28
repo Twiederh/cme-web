@@ -883,9 +883,55 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             for t in targets:
                 queue_push(t["token"], t.get("env", "prod"), payload, "", alert=False)
 
+    # Ereignisse für die Apps (z.B. „jemand wartet in der Lobby“): iOS per Push, Mac per Long-Poll auf /client/v1/events
+    events: list[dict] = []
+    events_cv = threading.Condition()
+    event_seq = [int(time.time() * 1000)]       # wächst auch über Neustarts, die App merkt sich den letzten Stand
+
+    def notify_event(ext: str, ev: dict) -> None:
+        """Ereignis an alle Apps der Nebenstelle: Mac (Long-Poll) und iPhone/iPad (Alert-Push)"""
+        with events_cv:
+            event_seq[0] = max(event_seq[0] + 1, int(time.time() * 1000))
+            events.append({"id": event_seq[0], "ext": tail(ext), "time": time.time(), **ev})
+            del events[:-100]
+            events_cv.notify_all()
+        if ev.get("type") == "lobby":
+            targets = [v["apns"] for v in mobiles().values()
+                       if tail(v.get("number", "")) == tail(ext) and v.get("apns", {}).get("token")]
+            payload = {"aps": {"alert": {"title": f"Lobby {ev.get('room', '')}",
+                                         "body": f"{ev.get('name', 'Jemand')} wartet – tippen zum Öffnen"},
+                               "sound": "default", "category": "JITSI_LOBBY", "thread-id": "lobby"},
+                       "lobby": {"room": ev.get("room", ""), "name": ev.get("name", ""), "url": ev.get("url", "")}}
+            for t in targets:
+                queue_push(t["token"], t.get("env", "prod"), payload)
+            print(f"Softphone: Lobby {ev.get('room')} -> {ext} ({len(targets)} Mobilgerät(e))", flush=True)
+
+    @app.get("/client/v1/events")
+    def client_events():
+        """Long-Poll: neue Ereignisse der Nebenstelle seit `since`; wartet bis zu `wait` s (max. 25)"""
+        ext = tail(ext_arg())
+        try:
+            since = int(request.args.get("since", "0"))
+            wait = min(max(float(request.args.get("wait", "25")), 0), 25)
+        except ValueError:
+            raise AppError("since/wait ungültig.")
+
+        def mine():
+            return [e for e in events if e["id"] > since and e["ext"] == ext and time.time() - e["time"] < 600]
+        with events_cv:
+            if since <= 0:                       # erster Aufruf: nur den Stand holen, nichts Altes melden
+                return jsonify(ok=True, events=[], last=event_seq[0])
+            found = mine()
+            if not found and wait:
+                events_cv.wait_for(lambda: bool(mine()), timeout=wait)
+                found = mine()
+            return jsonify(ok=True, events=[{k: v for k, v in e.items() if k != "ext"} for e in found],
+                           last=max([since, event_seq[0]]))
+
     # fuer sharedline.py: Mobilgeraete-Pools anmelden, Passwoerter der Apps pruefen, gehaltene Gespräche melden
     app.config["PHONEAPP_MOBILE"] = {"prefix": MOBILE_PREFIX, "pools": app_pools, "credentials": device_credentials,
-                                     "account": mobile_account, "notify_held": notify_held}
+                                     "account": mobile_account, "notify_held": notify_held,
+                                     "notify_event": notify_event}
 
     if not demo:
         write_flexisip_passwd()

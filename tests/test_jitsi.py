@@ -157,4 +157,59 @@ check("TRUST=neu" in r4.stdout and 'trusted-domains: [ "auth.jitsi.example.de", 
       f"Jicofo trusted-domains ergänzt {r4.stderr}")
 r5 = subprocess.run(["sh", "-s"], input=js, text=True, capture_output=True, env=env)
 check("TRUST=schon" in r5.stdout, "zweiter Lauf ändert Jicofo nicht")
+# Lobby-Mitteilungen: Benachrichtigen-Liste und Modul auf der Lobby-Komponente
+check(J.check_notify("201, a.b@example.de;201  +4961874191283") == ["201", "a.b@example.de", "+4961874191283"], "Benachrichtigen geprüft")
+try:
+    J.check_notify("201, kein mail")
+    check(False, "Benachrichtigen: Unsinn")
+except J.JitsiError:
+    check(True, "Benachrichtigen: Unsinn abgelehnt")
+r = J.check_rooms([{"number": "8801", "room": "team", "name": "", "notify": "201"}])
+check(r[0]["notify"] == ["201"], "Raum mit Benachrichtigen")
+LCFG = PCFG + """Component "lobby.jitsi.example.de" "muc"
+    storage = "memory"
+    modules_enabled = {
+        "muc_rate_limit";
+    }
+    muc_room_locking = false
+Component "metadata.jitsi.example.de" "room_metadata_component"
+"""
+lf = d2 / "jitsi.example.de.cfg.lua"
+lf.write_text(LCFG)
+mod = d2 / "mod.lua"
+SEC = "A" * 24
+
+
+def lscr(url, cfg=lf):
+    return J.prosody_lobby_script("jitsi.example.de", url, SEC).replace(
+        "/etc/prosody/conf.d/jitsi.example.de.cfg.lua", str(cfg)).replace(
+        "/usr/share/jitsi-meet/prosody-plugins/mod_cme_lobby_notify.lua", str(mod))
+
+
+U = "https://cme.example.de/hooks/jitsi/lobby"
+r6 = subprocess.run(["sh", "-s"], input=lscr(U), text=True, capture_output=True, env=env)
+new = lf.read_text()
+lob = new[new.index('Component "lobby.'):new.index('Component "metadata')]
+check(r6.returncode == 0 and "LOBBY=neu" in r6.stdout, f"Lobby-Modul eingerichtet {r6.stdout}{r6.stderr}")
+check(f'cme_lobby_notify_url = "{U}"' in lob and f'cme_lobby_notify_secret = "{SEC}"' in lob
+      and lob.count('"cme_lobby_notify";') == 1 and '"muc_rate_limit";' in lob, "nur in der Lobby-Komponente")
+check("muc-occupant-joined" in mod.read_text(), "Lua-Modul abgelegt")
+r7 = subprocess.run(["sh", "-s"], input=lscr(U), text=True, capture_output=True, env=env)
+check("LOBBY=schon" in r7.stdout and lf.read_text() == new, "zweiter Lauf ändert nichts")
+r8 = subprocess.run(["sh", "-s"], input=lscr("https://neu.example.de/hooks/jitsi/lobby"), text=True, capture_output=True, env=env)
+lob = lf.read_text()
+check("LOBBY=neu" in r8.stdout and lob.count("cme_lobby_notify_url") == 1 and "neu.example.de" in lob
+      and lob.count('"cme_lobby_notify";') == 1, "neue Adresse ersetzt die alte")
+lf2 = d2 / "ohne.cfg.lua"
+lf2.write_text(PCFG + 'Component "lobby.jitsi.example.de" "muc"\n    storage = "memory"\n')
+subprocess.run(["sh", "-s"], input=lscr(U, lf2), text=True, capture_output=True, env=env)
+subprocess.run(["sh", "-s"], input=lscr("https://x.example.de/h", lf2), text=True, capture_output=True, env=env)
+o = lf2.read_text()
+check(o.count("modules_enabled") == 2 and o.count('"cme_lobby_notify";') == 1 and "x.example.de" in o,
+      "Lobby ohne modules_enabled")
+try:
+    J.prosody_lobby_script("jitsi.example.de", "https://x/'; rm -rf /", SEC)
+    check(False, "Adresse mit Sonderzeichen")
+except J.JitsiError:
+    check(True, "Adresse mit Sonderzeichen abgelehnt")
 print("alles ok")

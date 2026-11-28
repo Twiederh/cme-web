@@ -14,6 +14,9 @@ final class HeldCallNotifications: NSObject, ObservableObject {
     @Published private(set) var held: [SIPManager.HeldLineCall] = []
     nonisolated static let category = "HELD_CALL"
     nonisolated static let takeOverAction = "TAKEOVER"
+    /// „Anna wartet in der Lobby von team“ (cme-web, Tab Jitsi → Benachrichtigen): Tippen öffnet den Raum
+    nonisolated static let lobbyCategory = "JITSI_LOBBY"
+    nonisolated static let openAction = "OPEN"
 
     /// Zuletzt von iOS vergebener Push-Token (hex) – wird bei jeder Einstellungs-Aktualisierung an cme-web gemeldet.
     private(set) var token = ""
@@ -32,7 +35,10 @@ final class HeldCallNotifications: NSObject, ObservableObject {
         center.delegate = self
         let take = UNNotificationAction(identifier: Self.takeOverAction, title: "Übernehmen", options: [.foreground])
         center.setNotificationCategories([
-            UNNotificationCategory(identifier: Self.category, actions: [take], intentIdentifiers: [], options: [])
+            UNNotificationCategory(identifier: Self.category, actions: [take], intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: Self.lobbyCategory,
+                                   actions: [UNNotificationAction(identifier: Self.openAction, title: "Raum öffnen", options: [.foreground])],
+                                   intentIdentifiers: [], options: [])
         ])
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         application.registerForRemoteNotifications()
@@ -133,6 +139,12 @@ extension HeldCallNotifications: UNUserNotificationCenterDelegate {
         if content.categoryIdentifier == HeldCallNotifications.category, take,
            let h = Self.held(from: content.userInfo) {
             Task { @MainActor in HeldCallNotifications.shared.takeOver(h) }
+        }
+        if content.categoryIdentifier == HeldCallNotifications.lobbyCategory,
+           action == HeldCallNotifications.openAction || action == UNNotificationDefaultActionIdentifier,
+           let s = (content.userInfo["lobby"] as? [String: Any])?["url"] as? String,
+           let url = URL(string: s), url.scheme == "https" {
+            Task { @MainActor in UIApplication.shared.open(url) }
         }
         completionHandler()
     }

@@ -71,6 +71,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         sigterm = src
         MainActor.assumeIsolated {
             let settings = PhoneSettings.shared
+            LobbyWatcher.shared.start()
             SIPManager.shared.addCallStateHandler { call, state in
                 MainActor.assumeIsolated {
                     switch state {

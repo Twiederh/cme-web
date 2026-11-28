@@ -38,7 +38,7 @@ from flask import Flask, jsonify, redirect, request, send_from_directory, sessio
 
 # /ipphone/: XML-Dienste fuer die Telefone; nur ueber den eigenen Telefon-Port erreichbar (vvm.py prueft das)
 # /client/: Schnittstelle fuer CME Phone (eigene Anmeldung mit App-Schluessel, phoneapp.py)
-OPEN_PATHS = ("/login", "/healthz", "/api/auth/info", "/auth/", "/ipphone/", "/client/")
+OPEN_PATHS = ("/login", "/healthz", "/api/auth/info", "/auth/", "/ipphone/", "/client/", "/hooks/")   # /hooks/: eigener Schlüssel
 
 
 def _split(value: str) -> list[str]:

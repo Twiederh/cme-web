@@ -109,6 +109,33 @@ enum ClientAPI {
         return try await load(try request("/client/v1/info", query: q), as: Info.self)
     }
 
+    /// Ereignis der Nebenstelle (Mac: Long-Poll), z.B. „jemand wartet in der Lobby“ eines Jitsi-Raums
+    struct AppEvent: Decodable, Sendable {
+        var id: Int
+        var type: String
+        var room: String?
+        var name: String?
+        var url: String?
+    }
+    struct EventsResponse: Decodable, Sendable { var events: [AppEvent]; var last: Int }
+
+    private static let pollSession: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 40   // cme-web hält die Anfrage bis zu 25 s offen
+        cfg.httpCookieStorage = nil
+        cfg.waitsForConnectivity = false
+        return URLSession(configuration: cfg)
+    }()
+
+    /// Neue Ereignisse seit `since` (0: nur den aktuellen Stand holen); wartet serverseitig bis zu `wait` s.
+    static func events(ext: String, since: Int, wait: Int = 25) async throws -> EventsResponse {
+        let req = try request("/client/v1/events", query: ["ext": ext, "since": String(since), "wait": String(wait)])
+        let (data, resp) = try await pollSession.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw APIError.http(code, "") }
+        do { return try JSONDecoder().decode(EventsResponse.self, from: data) } catch { throw APIError.invalid }
+    }
+
     static func calls(ext: String) async throws -> [RecCall] {
         try await load(try request("/client/v1/calls", query: ["ext": ext]), as: CallsResponse.self).calls
     }

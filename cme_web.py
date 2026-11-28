@@ -1727,7 +1727,7 @@ def main():
     print(f"Oeffne http://{args.listen}:{args.web_port}", flush=True)
     try:
         from waitress import serve
-        serve(app, host=args.listen, port=args.web_port, threads=8)
+        serve(app, host=args.listen, port=args.web_port, threads=16)   # + Long-Polls der Mac-Apps
     except ImportError:
         app.run(host=args.listen, port=args.web_port, threaded=True, debug=False)
 

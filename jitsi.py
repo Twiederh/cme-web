@@ -22,6 +22,7 @@ import re
 import secrets
 import socket
 import threading
+import time
 from pathlib import Path
 
 from flask import jsonify, request, send_file
@@ -212,8 +213,115 @@ def check_rooms(rooms: list) -> list[dict]:
             raise JitsiError(f"„{num or name}“ ist doppelt.")
         nums.add(num)
         names.add(name)
-        out.append({"number": num, "room": room, "name": name})
+        notify = check_notify(r.get("notify", ""))
+        out.append({"number": num, "room": room, "name": name, **({"notify": notify} if notify else {})})
     return out
+
+
+RE_EMAIL = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,200}\.[A-Za-z]{2,}$")
+RE_EXT = re.compile(r"^\+?[0-9]{2,32}$")
+
+
+def check_notify(v) -> list[str]:
+    """„Benachrichtigen“ eines Raums: Nebenstellen (Push an iPhone/iPad/Mac) und E-Mail-Adressen, durch Komma getrennt"""
+    items = v if isinstance(v, list) else re.split(r"[,;\s]+", str(v or ""))
+    out = []
+    for x in (str(i).strip() for i in items):
+        if not x:
+            continue
+        if not (RE_EMAIL.match(x) or RE_EXT.match(x)):
+            raise JitsiError(f"Benachrichtigen: „{x}“ ist weder Nebenstelle noch E-Mail-Adresse.")
+        if x not in out:
+            out.append(x)
+    return out[:10]
+
+
+LOBBY_MODULE = "cme_lobby_notify"
+LOBBY_LUA = """-- cme-web (Tab Jitsi): meldet, wenn jemand die Lobby eines Raums betritt (Moderatoren benachrichtigen).
+-- Auf der Lobby-Komponente geladen. Ziel und Schlüssel: cme_lobby_notify_url, cme_lobby_notify_secret.
+local http = require "net.http";
+local json = require "util.json";
+local jid = require "util.jid";
+local url = module:get_option_string("cme_lobby_notify_url");
+local secret = module:get_option_string("cme_lobby_notify_secret", "");
+
+module:hook("muc-occupant-joined", function(event)
+    local room, occupant, stanza = event.room, event.occupant, event.stanza;
+    if not url or not room or not occupant then return; end
+    local node = jid.node(occupant.bare_jid or "");
+    if node == "focus" then return; end
+    local name = stanza and stanza:get_child_text("nick", "http://jabber.org/protocol/nick");
+    if not name or name == "" then name = jid.resource(occupant.nick) or ""; end
+    local body = json.encode({ event = "lobby", room = jid.node(room.jid), name = name,
+        sip = (occupant.bare_jid or ""):match("^jigasi@") ~= nil });
+    http.request(url, { method = "POST", body = body,
+        headers = { ["Content-Type"] = "application/json", ["X-CME-Secret"] = secret } },
+        function(_, code)
+            if code ~= 200 then module:log("warn", "cme-web antwortet %s", tostring(code)); end
+        end);
+end);
+"""
+
+
+def prosody_lobby_script(domain: str, url: str, secret: str) -> str:
+    """sh-Skript (root): Modul ablegen, auf der Lobby-Komponente laden, Ziel/Schlüssel setzen, Prosody neu starten.
+    Ausgabe LOBBY=neu bzw. LOBBY=schon."""
+    if not RE_DOMAIN.fullmatch(domain) or not re.fullmatch(r"https?://[A-Za-z0-9.:/_-]{1,200}", url) \
+            or not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", secret):
+        raise JitsiError("Domain, Adresse von cme-web oder Schlüssel ungültig.")
+    comp = re.escape(f"lobby.{domain}")
+    return f"""set -e
+F=/etc/prosody/conf.d/{domain}.cfg.lua
+M=/usr/share/jitsi-meet/prosody-plugins/mod_{LOBBY_MODULE}.lua
+test -f "$F" || {{ echo "Keine Prosody-Konfiguration $F"; exit 1; }}
+grep -q '^Component "lobby.{domain}" "muc"' "$F" || {{ echo "Komponente lobby.{domain} fehlt in $F"; exit 1; }}
+cat > "$M.new" <<'CME_LUA'
+{LOBBY_LUA}CME_LUA
+CH=0
+cmp -s "$M.new" "$M" 2>/dev/null && rm -f "$M.new" || {{ mv "$M.new" "$M"; chmod 644 "$M"; CH=1; }}
+HAVE=$(awk '/^Component /{{c=0}} /^Component "{comp}" "muc"/{{c=1}} c && /cme_lobby_notify_(url|secret)|"{LOBBY_MODULE}"/' "$F")
+if [ "$(printf '%s' "$HAVE" | grep -c .)" != 3 ] || ! printf '%s' "$HAVE" | grep -qF '{url}' || ! printf '%s' "$HAVE" | grep -qF '{secret}'; then
+  cp -p "$F" "$F.cme-web-$(date +%Y%m%d-%H%M%S)"
+  NM=$(awk '/^Component /{{c=0}} /^Component "{comp}" "muc"/{{c=1}} c && /modules_enabled *= *[{{]/{{print 1}}' "$F")
+  awk -v u='{url}' -v s='{secret}' -v nm="$NM" '
+    /^Component /{{c=0}}
+    /^Component "{comp}" "muc"/{{c=1; print; print "    cme_lobby_notify_url = \\"" u "\\""; print "    cme_lobby_notify_secret = \\"" s "\\"";
+      if (nm == "") {{ print "    modules_enabled = {{"; print "        \\"{LOBBY_MODULE}\\";"; print "    }}" }}; next}}
+    c && /cme_lobby_notify_(url|secret)|-- cme-web: Lobby/{{next}}
+    c && /^[ \t]*"{LOBBY_MODULE}";[ \t]*$/{{next}}
+    c && /modules_enabled *= *[{{]/{{print; print "        \\"{LOBBY_MODULE}\\";"; next}}
+    {{print}}' "$F" > "$F.new"
+  chmod --reference="$F" "$F.new"; chown --reference="$F" "$F.new"; mv "$F.new" "$F"
+  CH=1
+fi
+if [ $CH = 1 ]; then
+  systemctl restart prosody; sleep 3; systemctl restart jicofo jitsi-videobridge2 jigasi 2>/dev/null || true
+  echo LOBBY=neu
+else
+  echo LOBBY=schon
+fi
+"""
+
+
+def send_mail(to: list[str], subject: str, text: str) -> None:
+    """Mail über den SMTP-Zugang des Stacks (VM_SMTP_*, wie Voicemail und Fax)"""
+    import smtplib
+    from email.message import EmailMessage
+    host = os.environ.get("VM_SMTP_HOST", "").strip()
+    user = os.environ.get("VM_SMTP_USER", "").strip()
+    pw = os.environ.get("VM_SMTP_PASSWORD", "")
+    sender = os.environ.get("VM_SMTP_FROM", "").strip() or user
+    if not host or not user or not to:
+        raise JitsiError("E-Mail-Versand ist nicht eingerichtet (VM_SMTP_HOST, VM_SMTP_USER).")
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = sender, ", ".join(to), subject
+    msg.set_content(text)
+    port = int(os.environ.get("VM_SMTP_PORT", "587") or 587)
+    with (smtplib.SMTP_SSL(host, port, timeout=20) if port == 465 else smtplib.SMTP(host, port, timeout=20)) as s:
+        if port != 465:
+            s.starttls()
+        s.login(user, pw)
+        s.send_message(msg)
 
 
 def conf_file(jigasi_ip: str, sip_port: int, rooms: list[dict], muc: str) -> str:
@@ -376,7 +484,7 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
 
     def settings() -> dict:
         s = {"host": "", "user": "thomas", "port": 22, "rooms": [], "dialout": True, "codec": "3", "muc": "",
-             "jigasi_ip": "", "sip_port": 5060}
+             "jigasi_ip": "", "sip_port": 5060, "domain": ""}
         try:
             s.update(json.loads(store.read_text()))
         except (FileNotFoundError, ValueError):
@@ -464,7 +572,7 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
 
     def remember(s: dict, m: dict) -> None:
         """Aus der Jigasi-Konfiguration, was Kamailio braucht (MUC, SIP-Port, IP)"""
-        s.update(muc=m["muc"], sip_port=m["sip_port"], jigasi_ip=resolve(s["host"]))
+        s.update(muc=m["muc"], sip_port=m["sip_port"], jigasi_ip=resolve(s["host"]), domain=m.get("domain", ""))
         save(s)
         write_conf(s)
 
@@ -481,7 +589,9 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
         s = settings()
         out = {"ok": True, "settings": {k: s[k] for k in ("host", "user", "port", "rooms", "dialout", "codec")},
                "pubkey": pubkey(), "host_ip": host_ip, "conf_port": conf_port,
-               "public_domain": os.environ.get("SIP_PUBLIC_DOMAIN", "").strip(), "jigasi": None, "error": None}
+               "public_domain": os.environ.get("SIP_PUBLIC_DOMAIN", "").strip(), "jigasi": None, "error": None,
+               "lobby": {"installed": False, "mail": bool(os.environ.get("VM_SMTP_HOST") and os.environ.get("VM_SMTP_USER")),
+                         "url": lobby_url(), "last": last_lobby}}
         peers = parse_peers(router.show("show running-config | section dial-peer voice"))
         out["cme_peers"] = [{"tag": t, **{k: p[k] for k in ("desc", "pattern", "target")}} for t, p in sorted(peers.items())
                             if p["desc"].startswith(PEER_DESC) or (s.get("jigasi_ip") and s["jigasi_ip"] in p["target"])
@@ -502,7 +612,9 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
                          f"sudo -n awk '/^Component /{{c=0}} /^Component \"conference.{m['domain']}\" \"muc\"/{{c=1}} "
                          "c && /\"token_verification\"/{print \"TV=1\"} c && /token_verification_allowlist/{print \"AL=\" $0}' "
                          f"/etc/prosody/conf.d/{m['domain']}.cfg.lua 2>/dev/null || true; "
-                         "sudo -n grep -h 'trusted-domains' /etc/jitsi/jicofo/jicofo.conf 2>/dev/null | sed 's/^/TD=/' || true")
+                         "sudo -n grep -h 'trusted-domains' /etc/jitsi/jicofo/jicofo.conf 2>/dev/null | sed 's/^/TD=/' || true; "
+                         f"sudo -n awk '/^Component /{{c=0}} /^Component \"lobby.{m['domain']}\" \"muc\"/{{c=1}} "
+                         f"c && /\"{LOBBY_MODULE}\";/{{print \"LOBBY=1\"}}' /etc/prosody/conf.d/{m['domain']}.cfg.lua 2>/dev/null || true")
             lines = st.splitlines()
             m["services"] = dict(zip(["jigasi", "prosody", "jicofo", "videobridge"], lines[:4]))
             info = "\n".join(lines[4:])
@@ -513,6 +625,7 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
             # Konferenz-Komponente mit token_verification: darf Jigasi ohne Token in die Räume?
             jid = props.get(XMPP_ACC + "USER_ID", "").lower()
             al = "\n".join(l for l in lines if l.startswith("AL="))
+            out["lobby"]["installed"] = "LOBBY=1" in info
             m["token_rooms"] = {"verification": "TV=1" in info, "jigasi": jid,
                                 "allowed": bool(jid) and f'"{jid}"' in al.lower(),
                                 "trusted": bool(jid) and any(f'"{jid.split("@")[-1]}"' in l.lower()
@@ -609,6 +722,78 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
             out = ssh("sudo -n sh -s", stdin=prosody_allow_script(m["domain"], jid), timeout=90)
             out += ssh("sudo -n sh -s", stdin=jicofo_trust_script(jid.split("@", 1)[1]), timeout=60)
         return jsonify(ok=True, changed="=neu" in out)
+
+    # ---- Lobby: Moderatoren benachrichtigen ----
+    last_lobby: dict = {}
+    seen: dict[str, float] = {}
+
+    def lobby_url() -> str:
+        base = os.environ.get("CME_PUBLIC_URL", "").strip().rstrip("/") or \
+            (f"https://{os.environ['CME_DOMAIN']}" if os.environ.get("CME_DOMAIN") else "")
+        return f"{base}/hooks/jitsi/lobby" if base else ""
+
+    def lobby_secret() -> str:
+        s = settings()
+        if not s.get("lobby_secret"):
+            s["lobby_secret"] = secrets.token_urlsafe(24)
+            save(s)
+        return s["lobby_secret"]
+
+    @app.post("/api/jitsi/lobby-install")
+    def jitsi_lobby_install():
+        url = lobby_url()
+        if not url:
+            raise JitsiError("Adresse von cme-web für Jitsi unbekannt (CME_PUBLIC_URL bzw. CME_DOMAIN).")
+        with lock:
+            m = model(parse_props(read_props()), host_ip, conf_port)
+            if not m["domain"]:
+                raise JitsiError("Domain von Jitsi nicht erkannt.")
+            out = ssh("sudo -n sh -s", stdin=prosody_lobby_script(m["domain"], url, lobby_secret()), timeout=90)
+        return jsonify(ok=True, changed="LOBBY=neu" in out)
+
+    @app.post("/hooks/jitsi/lobby")
+    def jitsi_lobby_hook():
+        """Prosody (mod_cme_lobby_notify): jemand wartet in der Lobby -> Moderatoren des Raums benachrichtigen"""
+        s = settings()
+        got = request.headers.get("X-CME-Secret", "")
+        if not s.get("lobby_secret") or not secrets.compare_digest(got.encode(), s["lobby_secret"].encode()):
+            return jsonify(ok=False), 403
+        d = request.get_json(force=True, silent=True) or {}
+        room = str(d.get("room", "")).strip().lower()[:80]
+        name = re.sub(r"[\x00-\x1f]", "", str(d.get("name", "")).strip())[:80] or "Jemand"
+        if not RE_ROOM.match(room):
+            return jsonify(ok=False), 400
+        key = f"{room}|{name}"
+        now = time.time()
+        for k in [k for k, v in seen.items() if now - v > 300]:
+            seen.pop(k, None)
+        if now - seen.get(key, 0) < 60:          # derselbe Gast mehrfach (Reconnect): nur einmal melden
+            return jsonify(ok=True, dup=True)
+        seen[key] = now
+        r = next((x for x in s.get("rooms", []) if x.get("room") == room), None)
+        targets = (r or {}).get("notify", [])
+        dom = s.get("domain", "")
+        link = f"https://{dom}/{room}" if dom else ""
+        via = " (Telefon)" if d.get("sip") else ""
+        last_lobby.update(room=room, name=name, time=time.strftime("%d.%m. %H:%M"), targets=len(targets))
+        print(f"Jitsi: {name}{via} wartet in der Lobby von {room} -> {', '.join(targets) or 'niemand eingetragen'}", flush=True)
+        exts = [x for x in targets if RE_EXT.match(x)]
+        mails = [x for x in targets if RE_EMAIL.match(x)]
+        if exts:
+            notify = (app.config.get("PHONEAPP_MOBILE") or {}).get("notify_event")
+            for e in exts:
+                if notify:
+                    notify(e, {"type": "lobby", "room": room, "name": name + via, "url": link})
+        if mails:
+            def mail():
+                try:
+                    send_mail(mails, f"Jitsi: {name} wartet in der Lobby von {room}",
+                              f"{name}{via} wartet in der Lobby des Raums „{room}“.\n\n"
+                              + (f"Zum Raum: {link}\n" if link else "") + "\n-- cme-web")
+                except Exception as e:  # noqa: BLE001
+                    print(f"Jitsi: E-Mail an {', '.join(mails)} fehlgeschlagen: {e}", flush=True)
+            threading.Thread(target=mail, daemon=True).start()
+        return jsonify(ok=True)
 
     @app.post("/api/jitsi/prosody-cert")
     def jitsi_prosody_cert():

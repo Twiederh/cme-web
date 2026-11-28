@@ -95,6 +95,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 **Jitsi (Jigasi)**
 - CME ↔ Kamailio ↔ Jigasi über UDP 5068 (`CONF_PORT`). Kamailio setzt `Jitsi-Conference-Room` aus htable `conf` (Datei `conferences` von cme-web), Jigasi läuft ohne Registrar mit Proxy Kamailio und wird an seiner IP erkannt.
 - CME: je Raum ein Dial-Peer (Beschreibung „Jitsi-Konferenz …“) zu 192.168.1.110:5068, Jigasi → CME über `voice class uri JITSI` (pattern `192\.168\.1\.110:5068`).
+- **Lobby-Mitteilungen:** Prosody-Modul `mod_cme_lobby_notify.lua` (Text in `jitsi.LOBBY_LUA`, Knopf „In Prosody einrichten“) auf der Komponente `lobby.<domain>` meldet `muc-occupant-joined` per POST an `<CME_PUBLIC_URL>/hooks/jitsi/lobby` (Header `X-CME-Secret` = `lobby_secret` in `cme-jitsi.json`, `/hooks/` ist in `auth.OPEN_PATHS`). Ziele je Raum in „Benachrichtigen“: Nebenstellen → `phoneapp.notify_event` (iOS Alert-Push, Kategorie `JITSI_LOBBY`, Mac Long-Poll `/client/v1/events` → `LobbyWatcher.swift`), E-Mail über `VM_SMTP_*`. Gleicher Gast im selben Raum höchstens einmal pro 60 s.
 - Jitsi verlangt JWT (`authentication = "token"`), Jigasi muss mit `jigasi@auth.<domain>` in den Raum (`org.jitsi.jigasi.xmpp.acc.*`). Prosodys eigenes Zertifikat war selbstsigniert und abgelaufen (Jigasi: „unable to find valid certification path“), Abhilfe: Let's-Encrypt-Zertifikat über den Renewal-Hook `prosody-cme-web.sh`.
 
 **APNs**

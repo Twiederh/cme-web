@@ -44,6 +44,10 @@ services:
       VM_AMI_SECRET: ${VM_AMI_SECRET:-}
       VM_AMI_HOST: asterisk
       VM_SMTP_USER: ${VM_SMTP_USER:-}
+      VM_SMTP_HOST: ${VM_SMTP_HOST:-smtp.mail.me.com}   # Lobby-Mitteilungen per E-Mail (jitsi.py)
+      VM_SMTP_PORT: ${VM_SMTP_PORT:-587}
+      VM_SMTP_PASSWORD: ${VM_SMTP_PASSWORD:-}
+      VM_SMTP_FROM: ${VM_SMTP_FROM:-}
       VM_REC_DIR: /data/recordings
       # Visual Voicemail: Port, unter dem die Telefone cme-web erreichen (siehe ports)
       CME_PHONE_URL_PORT: ${CME_PHONE_PORT:-8081}
