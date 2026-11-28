@@ -27,7 +27,7 @@ final class CallKitProvider: NSObject {
         config.supportsVideo = true
         config.maximumCallGroups = 2
         config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.phoneNumber, .generic]
+        config.supportedHandleTypes = [.phoneNumber, .emailAddress, .generic]
         config.includesCallsInRecents = true
         config.iconTemplateImageData = nil
         provider = CXProvider(configuration: config)
@@ -100,7 +100,8 @@ final class CallKitProvider: NSObject {
 
     func startOutgoing(number: String, video: Bool) {
         let uuid = UUID()
-        let handle = CXHandle(type: .phoneNumber, value: number)
+        // URI-Wahl (name@domain) als E-Mail-Handle, sonst zeigt CallKit sie wie eine Rufnummer
+        let handle = CXHandle(type: number.contains("@") ? .emailAddress : .phoneNumber, value: number)
         let action = CXStartCallAction(call: uuid, handle: handle)
         action.isVideo = video
         controller.request(CXTransaction(action: action)) { [weak self] error in

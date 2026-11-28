@@ -13,6 +13,8 @@ struct ContentView: View {
     @ObservedObject private var heldCalls = HeldCallNotifications.shared
     @State private var showLog = false
     @State private var number = ""
+    @State private var addressMode = false          // URI-Wahl: Textfeld mit E-Mail-Tastatur statt Ziffernfeld
+    @FocusState private var addressFocused: Bool
     @State private var showDTMF = false
     @State private var showInfo = false
     @State private var dtmf = ""
@@ -104,9 +106,34 @@ struct ContentView: View {
     private var dialpad: some View {
         VStack(spacing: 14) {
             HStack(spacing: 6) {
-                Text(number.isEmpty ? " " : number)
-                    .font(.system(size: 34, weight: .regular, design: .rounded))
-                    .lineLimit(1).minimumScaleFactor(0.5)
+                Button {
+                    addressMode.toggle()
+                    if addressMode { addressFocused = true } else { addressFocused = false; number = Self.digits(number) }
+                } label: { Image(systemName: addressMode ? "circle.grid.3x3" : "keyboard").font(.title3) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel(addressMode ? "Ziffernfeld" : "Adresse eingeben")
+                Group {
+                    if addressMode {
+                        TextField("name@domain", text: $number)
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textContentType(.emailAddress)
+                            .submitLabel(.go)
+                            .focused($addressFocused)
+                            .onSubmit { dial(number) }
+                            .onChange(of: number) { _, v in
+                                let f = Self.uriChars(v)
+                                if f != v { number = f }
+                            }
+                            .multilineTextAlignment(.center)
+                            .font(.system(size: 26, weight: .regular, design: .rounded))
+                    } else {
+                        Text(number.isEmpty ? " " : number)
+                            .font(.system(size: 34, weight: .regular, design: .rounded))
+                            .lineLimit(1).minimumScaleFactor(0.5)
+                    }
+                }
                     .frame(maxWidth: .infinity)
                     .contextMenu {
                         Button { paste() } label: { Label("Einfügen", systemImage: "doc.on.clipboard") }
@@ -122,11 +149,13 @@ struct ContentView: View {
             }
             .frame(height: 44)
 
-            DialKeypad(shape: .circle, keySize: CGSize(width: 78, height: 78), spacing: 18) { number.append($0) }
+            if !addressMode {
+                DialKeypad(shape: .circle, keySize: CGSize(width: 78, height: 78), spacing: 18) { number.append($0) }
+            }
 
             Button {
                 // Leer + Anrufen = Wahlwiederholung (wie am Telefon: Nummer erst anzeigen)
-                if number.isEmpty { number = lastDialed; return }
+                if number.isEmpty { number = lastDialed; if Self.isAddress(lastDialed) { addressMode = true }; return }
                 dial(number)
             } label: {
                 Image(systemName: "phone.fill").font(.title).foregroundStyle(.white)
@@ -150,16 +179,37 @@ struct ContentView: View {
         }
     }
 
+    /// Zeichen einer Rufnummer
+    static func digits(_ s: String) -> String { s.filter { "0123456789*#+".contains($0) } }
+
+    /// Zeichen, die in einer Adresse wie name@domain vorkommen dürfen (klein geschrieben, ohne sip:)
+    static func uriChars(_ s: String) -> String {
+        var v = s.lowercased()
+        for p in ["sips:", "sip:"] where v.hasPrefix(p) { v.removeFirst(p.count) }
+        return String(v.unicodeScalars.filter {
+            ("a"..."z").contains($0) || ("0"..."9").contains($0) || "@.-_+%*#".unicodeScalars.contains($0)
+        }.map(Character.init))
+    }
+
+    /// Adresse, sobald Buchstaben oder @ drin sind, sonst Rufnummer
+    private static func isAddress(_ s: String) -> Bool { s.contains { $0 == "@" || $0.isLetter } }
+
     private func paste() {
-        let s = (UIPasteboard.general.string ?? "").filter { "0123456789*#+".contains($0) }
-        if !s.isEmpty { number = s }
+        let raw = UIPasteboard.general.string ?? ""
+        let s = Self.isAddress(raw.lowercased().replacingOccurrences(of: "sip:", with: "")) ? Self.uriChars(raw) : Self.digits(raw)
+        guard !s.isEmpty else { return }
+        number = s
+        if Self.isAddress(s) { addressMode = true }
     }
 
     private func dial(_ n: String, video: Bool = false) {
-        let n = n.filter { "0123456789*#+".contains($0) }
-        guard !n.isEmpty else { return }
+        let address = Self.isAddress(n)
+        let n = address ? Self.uriChars(n) : Self.digits(n)
+        guard !n.isEmpty, !n.hasPrefix("@"), !n.hasSuffix("@") else { return }
         lastDialed = n
         number = ""
+        addressFocused = false
+        addressMode = false
         CallKitProvider.shared.startOutgoing(number: n, video: video)
     }
 
