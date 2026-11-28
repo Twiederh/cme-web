@@ -31,6 +31,8 @@ org.jitsi.jigasi.SIP_PORT=5060
 net.java.sip.communicator.impl.protocol.jabber.acc-xmpp-1.USER_ID=jigasi@auth.jitsi.example.de
 net.java.sip.communicator.impl.protocol.jabber.acc-xmpp-1.PASSWORD=geheim
 net.java.sip.communicator.impl.protocol.jabber.acc-xmpp-1.DOMAIN_BASE=jitsi.example.de
+#base64 AES keyLength:256 or 128
+net.java.sip.communicator.impl.protocol.jabber.acc-xmpp-1.PASSWORD=
 """
 p = J.parse_props(PROPS)
 m = J.model(p, "192.168.1.110", 5068)

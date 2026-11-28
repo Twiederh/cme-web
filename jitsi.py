@@ -56,14 +56,18 @@ class JitsiError(ValueError):
 # ---------------- sip-communicator.properties ----------------
 
 def parse_props(text: str) -> dict[str, str]:
-    """Schlüssel -> Wert (ohne Kommentare). Fortsetzungszeilen kommen in Jigasis Datei nicht vor."""
+    """Schlüssel -> Wert (ohne Kommentare). Fortsetzungszeilen kommen in Jigasis Datei nicht vor.
+    Ein leerer Wert überschreibt keinen früheren: Die Beispieldatei von Jigasi hat z.B. acc-xmpp-1.PASSWORD
+    oben mit dem Passwort des Installers und weiter unten noch einmal leer."""
     out = {}
     for line in text.splitlines():
         t = line.strip()
         if not t or t.startswith(("#", "!")) or "=" not in t:
             continue
         k, _, v = t.partition("=")
-        out[k.strip()] = v.strip()
+        k, v = k.strip(), v.strip()
+        if v or k not in out:
+            out[k] = v
     return out
 
 
