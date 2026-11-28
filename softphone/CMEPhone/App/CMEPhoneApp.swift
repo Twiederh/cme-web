@@ -49,6 +49,7 @@ enum CallRouter {
 
     /// "+49 711 1234-5" -> "+4971112345"; sip:21@... -> 21
     static func clean(_ s: String) -> String {
+        if DialInput.isAddress(s) { return DialInput.uriChars(s) }   // URI-Wahl (name@domain) aus „Zuletzt“/Siri
         var v = s
         if v.lowercased().hasPrefix("sip:") { v = String(v.dropFirst(4)) }
         if let at = v.firstIndex(of: "@") { v = String(v[..<at]) }

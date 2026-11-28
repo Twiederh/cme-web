@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Combine
 import AVFoundation
 import Network
@@ -972,7 +973,7 @@ final class SIPManager: ObservableObject {
                 entries[id] = c; order.append(id); entry = c
             }
             newState = .IncomingReceived
-            callKit.reportIncoming(callId: id, handle: Self.user(of: e.peer), displayName: e.text, hasVideo: false)
+            callKit.reportIncoming(callId: id, handle: Self.party(of: e.peer), displayName: e.text, hasVideo: false)
         case CMESIP_CALL_OUTGOING:
             newState = .OutgoingProgress
             callKit.reportOutgoingStarted(callId: id)
@@ -1034,6 +1035,18 @@ final class SIPManager: ObservableObject {
         callStateHandlers.forEach { $0(info, state) }
     }
 
+    /// Gegenstelle für Anzeige und Anrufliste: Rufnummer bzw. bei Namen die ganze Adresse (konferenz@example.de),
+    /// damit die Wahl aus der Anrufliste wieder dorthin geht
+    static func party(of uri: String) -> String {
+        let u = user(of: uri)
+        guard u.contains(where: { $0.isLetter }) else { return u }
+        var s = uri
+        if let r = s.range(of: "<") { s = String(s[r.upperBound...]) }
+        guard let at = s.firstIndex(of: "@") else { return u }
+        let host = s[s.index(after: at)...].prefix { !";>:".contains($0) }
+        return host.isEmpty ? u : "\(u)@\(host)".lowercased()
+    }
+
     private static func user(of uri: String) -> String {
         var s = uri
         if let r = s.range(of: "<") { s = String(s[r.upperBound...]) }
@@ -1078,7 +1091,7 @@ final class SIPManager: ObservableObject {
             details.append("Gegenstelle: \(c.remoteURI)")
             var state = c.state
             if c.heldLocal, state == .StreamsRunning || state == .PausedByRemote { state = .Paused }
-            return CallInfo(id: id, remote: Self.user(of: c.remoteURI), displayName: c.displayName, state: state,
+            return CallInfo(id: id, remote: Self.party(of: c.remoteURI), displayName: c.displayName, state: state,
                             isIncoming: c.incoming, hasVideo: c.established != nil && cmesip_call_video(id), isPaused: c.heldLocal,
                             audioCodec: codec, videoCodec: "–", duration: duration, isRecording: recordingCalls.contains(id),
                             mediaDetails: details)
@@ -1103,8 +1116,16 @@ final class SIPManager: ObservableObject {
         let df = DateFormatter(); df.dateFormat = "HH:mm:ss"
         lastLog.append("\(df.string(from: Date())) \(line)")
         if lastLog.count > 500 { lastLog.removeFirst(lastLog.count - 500) }
-        NSLog("[CMEPhone] %@", line)
+        #if os(macOS)
+        // im Systemprotokoll lesbar (NSLog erscheint dort als <private>): log stream --predicate 'subsystem == "de.wiederhol.cmephone"'
+        Self.osLog.notice("\(line, privacy: .public)")
+        #else
+        NSLog("[CMEPhone] %@", line)   // devicectl --console zeigt stderr
+        #endif
     }
+    #if os(macOS)
+    private static let osLog = Logger(subsystem: "de.wiederhol.cmephone", category: "sip")
+    #endif
 }
 
 #if os(iOS)

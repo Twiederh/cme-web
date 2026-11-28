@@ -46,7 +46,7 @@ final class CallKitProvider: NSObject {
         if let existing = uuidByCallId[callId] {
             // Ggf. Anzeige aktualisieren (Push kannte evtl. nur die Nummer)
             let update = CXCallUpdate()
-            update.remoteHandle = CXHandle(type: .phoneNumber, value: handle)
+            update.remoteHandle = CXHandle(type: handle.contains("@") ? .emailAddress : .phoneNumber, value: handle)
             if let displayName, !displayName.isEmpty { update.localizedCallerName = displayName }
             update.hasVideo = hasVideo
             provider.reportCall(with: existing, updated: update)
@@ -59,7 +59,7 @@ final class CallKitProvider: NSObject {
         callIdByUUID[uuid] = callId
 
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .phoneNumber, value: handle)
+        update.remoteHandle = CXHandle(type: handle.contains("@") ? .emailAddress : .phoneNumber, value: handle)
         update.localizedCallerName = (displayName?.isEmpty == false) ? displayName : handle
         update.hasVideo = hasVideo
         update.supportsDTMF = true
