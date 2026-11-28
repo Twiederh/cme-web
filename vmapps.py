@@ -226,6 +226,19 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
         except (FileNotFoundError, ValueError):
             return []
 
+    def dial_targets() -> list[dict]:
+        """Vorschlaege fuers Durchstellen: Rufnummern der Telefone und Jitsi-Raeume.
+        Durchstellen geht aber an jede Nummer, die die CME waehlen kann."""
+        out = [{"number": n["number"], "name": n.get("name", "")} for n in ctx["numbers"]()]
+        try:
+            rooms = json.loads((cfgdir / "cme-jitsi.json").read_text()).get("rooms", [])
+        except (FileNotFoundError, ValueError):
+            rooms = []
+        have = {n["number"] for n in out}
+        out += [{"number": r["number"], "name": f"Jitsi {r.get('room', '')}"} for r in rooms
+                if r.get("number") and r["number"] not in have]
+        return out
+
     def check_free(number: str, d: dict, own: str) -> None:
         taken = {f["number"]: f"Fax {f['number']}" for f in d["fax"]}
         taken.update({i["number"]: f"IVR {i['name']}" for i in d["ivrs"] if i.get("number")})
@@ -294,7 +307,7 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             i["greeting"] = (sounds / f"ivr-{i['id']}.wav").exists()
         boxes = [{"number": n, "id": ctx["mbid"](n)} for n in ctx["settings"]()["mailboxes"]]
         return jsonify(ok=True, enabled=True, mail=ctx["mail_ready"], fax=d["fax"], received=received(), sent=sent_list(),
-                       ivrs=d["ivrs"], numbers=ctx["numbers"](), mailboxes=boxes, keys=KEYS, tts=tts_info(),
+                       ivrs=d["ivrs"], numbers=ctx["numbers"](), dial_targets=dial_targets(), mailboxes=boxes, keys=KEYS, tts=tts_info(),
                        queues=[{"id": q["id"], "name": q["name"]} for q in queue_list()],
                        confs=[{"id": str(r["id"]), "name": r["name"], "number": r["number"]} for r in conf_list()])
 
@@ -553,7 +566,6 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             raise AppError("Wartezeit und Wiederholungen muessen Zahlen sein.")
         if not 1 <= timeout <= 30 or not 1 <= repeats <= 5:
             raise AppError("Wartezeit 1-30 s, Wiederholungen 1-5.")
-        dns = {n["number"] for n in ctx["numbers"]()}
         boxes = set(ctx["settings"]()["mailboxes"])
         ivr_ids = {i["id"] for i in d["ivrs"]}
 
@@ -567,8 +579,6 @@ def register(app, router, apply, demo: bool, ctx: dict) -> dict:
             if kind == "dial":
                 if not RE_NUM.match(target):
                     raise AppError(f"{where}: Zielnummer fehlt.")
-                if target not in dns:
-                    raise AppError(f"{where}: {target} ist keine interne Rufnummer.")
             elif kind == "ivr":
                 if not target.isdigit() or int(target) not in ivr_ids:
                     raise AppError(f"{where}: Untermenue auswaehlen.")

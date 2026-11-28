@@ -17,7 +17,7 @@
 
   const fmtTime = (t) => t ? new Date(t * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–";
   const peerBadge = (x) => x.dialpeer ? `<span class="muted">Dial-Peer ${esc(x.dialpeer)}</span>` : badge("warn", "kein Dial-Peer");
-  const numName = (num) => { const n = A.numbers.find(x => x.number === num); return n && n.name ? `${num} (${n.name})` : num; };
+  const numName = (num) => { const n = (A.dial_targets || A.numbers).find(x => x.number === num); return n && n.name ? `${num} (${n.name})` : num; };
 
   // ---------------- Fax ----------------
 
@@ -145,9 +145,17 @@
       <div class="body" style="border-top:1px solid var(--line)" id="ivr-editor" hidden></div>`;
   }
 
+  function dialList() {   // Vorschläge einmal im body, damit sie beim Neuzeichnen einer Zeile nicht verschwinden
+    let dl = document.getElementById("vmapps-dial");
+    if (!dl) { dl = document.createElement("datalist"); dl.id = "vmapps-dial"; document.body.appendChild(dl); }
+    dl.innerHTML = (A.dial_targets || A.numbers).map(n =>
+      `<option value="${esc(n.number)}">${esc(n.number)}${n.name ? " – " + esc(n.name) : ""}</option>`).join("");
+    return "";
+  }
+
   function targetField(action, value, ownId) {
-    if (action === "dial") return `<select name="target">${A.numbers.map(n =>
-      `<option value="${esc(n.number)}" ${n.number === value ? "selected" : ""}>${esc(n.number)}${n.name ? " – " + esc(n.name) : ""}</option>`).join("")}</select>`;
+    if (action === "dial") return `<input name="target" list="vmapps-dial" value="${esc(value)}" placeholder="Rufnummer"
+      title="Jede Nummer, die die CME wählen kann (Telefone, Jitsi-Räume, Dial-Peers)" style="width:100%">${dialList()}`;
     if (action === "ivr") return `<select name="target">${A.ivrs.filter(i => i.id !== ownId).map(i =>
       `<option value="${i.id}" ${String(i.id) === value ? "selected" : ""}>${esc(i.name)}</option>`).join("")
       || '<option value="">(kein anderes Menü)</option>'}</select>`;
