@@ -89,6 +89,7 @@ def tail(n: str) -> str:
 
 RE_ALIAS = re.compile(r"^[a-z0-9._+-]{1,64}$")
 RE_ALIAS_NUM = re.compile(r"^\+?[0-9]{2,32}$")
+RE_SIPDOM = re.compile(r"^(?=.{4,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
 def _write(path: Path, text: str, mode: int = 0o600) -> None:
@@ -122,7 +123,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         s = {"token": "", "gateway_host": os.environ.get("SIP_GW_NAME", "").strip() or host_ip,
              "gateway_port": int(os.environ.get("SIP_GW_PORT", "5062") or 5062),
              "localpush_port": int(os.environ.get("RELAY_LOCALPUSH_PORT", "5072") or 5072),
-             "ssids": ""}
+             "ssids": "", "sip_domains": []}
         try:
             s.update(json.loads(store.read_text()))
         except (FileNotFoundError, ValueError):
@@ -228,9 +229,16 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
     # CME Phone (Mobilgerät), sonst die erste, die kein Fax ist. Volume softphone-data, in Kamailio nur lesbar.
     aliases_path = data / "sip-aliases"
 
-    def write_sip_aliases() -> None:
+    def sip_domains() -> list[str]:
+        """SIP_PUBLIC_DOMAIN und die weiteren Domains (Tab Softphone): name@<jede davon> erreicht denselben Alias"""
         dom = os.environ.get("SIP_PUBLIC_DOMAIN", "").strip().lower()
-        lines = ["version:1"]
+        return [dom] + [d for d in settings().get("sip_domains", []) if d != dom] if dom else []
+
+    def write_sip_aliases() -> None:
+        doms = sip_domains()
+        dom = doms[0] if doms else ""
+        lines = ["version:1"] + [f"@d {d}" for d in doms[1:]]
+        seen: set[str] = set()
         if dom:
             try:
                 users = json.loads((cfgdir / "cme-users.json").read_text()).get("users", {})
@@ -245,7 +253,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
                 local, _, d = str(key).lower().rpartition("@")
                 nums = [n for n in u.get("numbers", []) if n not in faxnums and RE_ALIAS_NUM.match(n)]
                 nums = [n for n in nums if n in apps] + [n for n in nums if n not in apps]
-                if d == dom and RE_ALIAS.match(local) and nums:
+                if d in doms and RE_ALIAS.match(local) and nums and local not in seen:
+                    seen.add(local)
                     lines.append(f"{local} {nums[0]}")
         try:
             _write(aliases_path, "\n".join(lines) + "\n", 0o644)
@@ -361,7 +370,8 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
             "env": m.get("env", "auto"), "uploaded": m.get("uploaded", "")},
             token=s["token"], secret=lp_secret(), url=cme_url(), bundle_id=bundle_id,
             gateway_host=s["gateway_host"], gateway_port=s["gateway_port"], localpush_port=s["localpush_port"],
-            ssids=s.get("ssids", ""), cme_host=os.environ.get("CME_HOST", ""), prefix=DEVICE_PREFIX,
+            ssids=s.get("ssids", ""), sip_domains=s.get("sip_domains", []),
+            public_domain=os.environ.get("SIP_PUBLIC_DOMAIN", "").strip().lower(), cme_host=os.environ.get("CME_HOST", ""), prefix=DEVICE_PREFIX,
             exec_user=s.get("exec_user", "cmephone"), exec_password=s.get("exec_password", ""), auth_url=auth_url())
 
     @app.post("/api/phoneapp/apns")
@@ -415,10 +425,23 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         if not (1 <= port <= 65535 and 1 <= lport <= 65535):
             raise AppError("Ungültiger Port.")
         ssids = ",".join(x.strip() for x in str(d.get("ssids", "")).split(",") if x.strip())[:500]
+        doms = []
+        if "sip_domains" in d:
+            for x in re.split(r"[,;\s]+", str(d.get("sip_domains") or "").lower()):
+                x = x.strip().rstrip(".")
+                if not x:
+                    continue
+                if not RE_SIPDOM.match(x):
+                    raise AppError(f"„{x}“ ist kein gültiger Domainname.")
+                if x not in doms and x != os.environ.get("SIP_PUBLIC_DOMAIN", "").strip().lower():
+                    doms.append(x)
         with lock:
             s = settings()
             s.update(gateway_host=host, gateway_port=port, localpush_port=lport, ssids=ssids)
+            if "sip_domains" in d:
+                s["sip_domains"] = doms[:20]
             save(s)
+        write_sip_aliases()
         return jsonify(ok=True)
 
     @app.get("/api/phoneapp/devices")
@@ -736,7 +759,7 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         # Adressen <name>@SIP_PUBLIC_DOMAIN (Konferenzräume, Aliasse): Apps, die direkt an der CME hängen (Mac),
         # schicken sie an Kamailio (TCP EXT_SIP_PORT) – intern zeigt der SRV-Eintrag der Domain auf CUCM/CME
         uri = {"domain": os.environ.get("SIP_PUBLIC_DOMAIN", "").strip().lower(),
-               "ext_port": int(os.environ.get("EXT_SIP_PORT", "5060") or 5060)}
+               "ext_port": int(os.environ.get("EXT_SIP_PORT", "5060") or 5060), "domains": sip_domains()}
         tls = (os.environ.get("SIP_GW_TLS", "").strip() or ("1" if os.environ.get("SIP_PUBLIC_DOMAIN", "").strip() else "0")) == "1"
         if app_tls and tls and name and s["gateway_host"].lower() == name.lower():
             return {"host": s["gateway_host"], "port": int(os.environ.get("EXT_TLS_PORT", "5061") or 5061),

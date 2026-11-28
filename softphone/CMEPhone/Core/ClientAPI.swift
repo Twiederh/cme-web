@@ -8,6 +8,8 @@ enum ClientAPI {
             var host: String; var port: Int; var transport: String
             /// SIP_PUBLIC_DOMAIN und der TCP-Port von Kamailio für Anrufe von draußen (fehlt bei älterem cme-web)
             var domain: String?; var ext_port: Int?
+            /// SIP_PUBLIC_DOMAIN und weitere Domains (Aliasse), die Kamailio annimmt
+            var domains: [String]?
         }
         struct LocalPush: Decodable { var host: String; var port: Int; var secret: String; var ssids: [String] }
         struct Recording: Decodable { var available: Bool; var mode: String }

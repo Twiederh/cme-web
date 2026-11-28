@@ -87,6 +87,7 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 - **Von außen** (seit 27.11., nur wenn `SIP_PUBLIC_DOMAIN` gesetzt ist und ein Zertifikat da ist; im Template `#!ifdef WITH_EXT`):
   - Kamailio hört auf TCP 5060, TLS 5061 und UDP 5067 (Router: UDP 5060 → 5067, advertise 5060) unter `SIP_GW_NAME`. Anfragen der CME an Anrufer draußen gehen über den Socket, der zum Transport des nächsten Hops passt (sonst protocol/port mismatch bei re-INVITE/BYE).
   - Anrufe an `<name>@<SIP_PUBLIC_DOMAIN>` werden über `sip-aliases` (`phoneapp.write_sip_aliases`, Quelle: E-Mail-Adressen im Tab Benutzer) auf eine Rufnummer abgebildet. Sie gehen über UDP 5066 an die CME, dort ist ein eigener Dial-Peer nötig (README Abschnitt 7).
+  - Weitere Domains (Tab Softphone, „Weitere SIP-Domains“, `sip_domains`): `name@<weitere Domain>` wird wie `name@SIP_PUBLIC_DOMAIN` behandelt. In `sip-aliases` steht `@d <domain>`, in der htable `alias` der Schlüssel `@d=<domain>` (db_text, kein `:`). Die Apps bekommen die Liste als `gateway.domains`. Im DNS der Domain müssen SRV-Einträge auf `SIP_GW_NAME` zeigen. Das Zertifikat lautet nur auf `SIP_GW_NAME`.
   - rtpengine hat dafür die Schnittstelle `ext` (öffentliche IP im SDP, `direction=ext`).
   - Das Zertifikat kommt aus Traefiks `acme.json` (DNS-Challenge bei All-Inkl).
   - Intern zeigt `sip-gw.wiederhol.de` auf docker01, und `_sip._tcp.wiederhol.de` im internen DNS zeigt auf CUCM/vcube.

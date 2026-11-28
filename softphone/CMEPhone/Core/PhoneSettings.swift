@@ -102,6 +102,8 @@ final class PhoneSettings: ObservableObject {
     @Published var gatewayPort: Int { didSet { save() } }
     /// Öffentliche SIP-Domain (Räume/Aliasse <name>@domain) und TCP-Port von Kamailio dafür
     @Published var publicDomain: String { didSet { save() } }
+    /// Weitere Domains mit denselben Aliassen (cme-web, Tab Softphone)
+    @Published var otherDomains: [String] { didSet { save() } }
     @Published var extSipPort: Int { didSet { save() } }
     @Published var transport: SIPTransport { didSet { save() } }
 
@@ -183,6 +185,7 @@ final class PhoneSettings: ObservableObject {
         gatewayHost = d.string(forKey: "gatewayHost") ?? "sip-gw.wiederhol.de"
         gatewayPort = d.object(forKey: "gatewayPort") as? Int ?? 5062
         publicDomain = d.string(forKey: "publicDomain") ?? ""
+        otherDomains = d.stringArray(forKey: "otherDomains") ?? []
         extSipPort = d.object(forKey: "extSipPort") as? Int ?? 5060
         transport = SIPTransport(rawValue: d.string(forKey: "transport") ?? "") ?? .tcp
         localPushEnabled = d.object(forKey: "localPushEnabled") as? Bool ?? true
@@ -301,6 +304,7 @@ final class PhoneSettings: ObservableObject {
             gatewayPort = info.gateway.port
             transport = SIPTransport(rawValue: info.gateway.transport) ?? .tcp
             if let dom = info.gateway.domain { publicDomain = dom }
+            if let doms = info.gateway.domains { otherDomains = doms.filter { $0 != publicDomain } }
             if let p = info.gateway.ext_port, p > 0 { extSipPort = p }
         }
         if !info.localpush.host.isEmpty {
@@ -370,6 +374,7 @@ final class PhoneSettings: ObservableObject {
         d.set(gatewayHost, forKey: "gatewayHost")
         d.set(gatewayPort, forKey: "gatewayPort")
         d.set(publicDomain, forKey: "publicDomain")
+        d.set(otherDomains, forKey: "otherDomains")
         d.set(extSipPort, forKey: "extSipPort")
         d.set(transport.rawValue, forKey: "transport")
         d.set(localPushEnabled, forKey: "localPushEnabled")

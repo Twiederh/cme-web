@@ -13,6 +13,7 @@ Exit 0 = geschrieben (oder unverändert), 1 = Eingabe fehlt/ungültig (alte Tabe
 Mit --aliases <datei> <db_text-verzeichnis>: Adressen für Anrufe von draußen (cme-web, phoneapp.write_sip_aliases)
     version:1
     <name> <rufnummer>
+    @d <domain>               weitere Domain (Schlüssel "@d=<domain>"): name@<domain> wie name@SIP_PUBLIC_DOMAIN
 in die Tabelle sip_alias (htable "alias", Schlüssel = Name in Kleinbuchstaben).
 
 Mit --conf <datei> <db_text-verzeichnis>: Konferenzräume in Jitsi (cme-web, jitsi.write_conf)
@@ -32,6 +33,7 @@ HEADER = "key_name(str) key_type(int) value_type(int) key_value(str) expires(int
 
 
 ALIAS = re.compile(r"^([a-z0-9._+-]{1,64}) (\+?[0-9]{2,32})$")
+ALIAS_DOM = re.compile(r"^@d ([a-z0-9.-]{4,200})$")   # weitere Domain: name@<domain> wie name@SIP_PUBLIC_DOMAIN
 
 
 def write_tables(dbdir: Path, tables) -> bool:
@@ -61,6 +63,9 @@ def aliases(src: Path, dbdir: Path) -> int:
         m = ALIAS.match(raw.strip().lower())
         if m:
             data[m.group(1)] = m.group(2)
+        m = ALIAS_DOM.match(raw.strip().lower())
+        if m:
+            data["@d=" + m.group(1)] = "1"
     print("changed" if write_tables(dbdir, [("sip_alias", data)]) else "unchanged")
     return 0
 

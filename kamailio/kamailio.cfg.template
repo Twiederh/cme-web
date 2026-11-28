@@ -472,7 +472,9 @@ route[FROM_OUTSIDE] {
 		sl_send_reply("200", "OK");
 		exit;
 	}
-	if (($rd == "${PUBLIC_DOMAIN}" || $rd == "${EXT_NAME}") && $rU != $null) {
+	# weitere Domains (Tab Softphone, sip-aliases "@d <domain>"): name@<domain> wie name@${PUBLIC_DOMAIN}
+	$var(dk) = "@d=" + $(rd{s.tolower});
+	if (($rd == "${PUBLIC_DOMAIN}" || $rd == "${EXT_NAME}" || $sht(alias=>$var(dk)) != $null) && $rU != $null) {
 		$var(ck) = "=" + $(rU{s.tolower});
 		if ($sht(conf=>$var(ck)) != $null) {
 			route(FROM_EXT_CONF);

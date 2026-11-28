@@ -126,6 +126,13 @@ telephony-service
           <div><label>Local-Push-Port (TCP)</label><input name="localpush_port" type="number" value="${esc(j.localpush_port)}"></div>
           <div><label>WLAN-Namen (SSIDs) für Local Push, kommagetrennt</label><input name="ssids" value="${esc(j.ssids)}" placeholder="Zuhause, Zuhause-5G"></div>
         </div>
+        <div><label>Weitere SIP-Domains (Aliasse von ${j.public_domain ? `<span class="mono">${esc(j.public_domain)}</span>` : "SIP_PUBLIC_DOMAIN"}), kommagetrennt</label>
+          <input name="sip_domains" value="${esc((j.sip_domains || []).join(", "))}" placeholder="example.net, example.org" class="mono"
+            ${j.public_domain ? "" : "disabled"}></div>
+        <div class="hint">Kamailio nimmt Anrufe an <span class="mono">name@&lt;weitere Domain&gt;</span> wie an
+          <span class="mono">name@${esc(j.public_domain || "SIP_PUBLIC_DOMAIN")}</span> an (Aliasse aus dem Tab Benutzer, Jitsi-Räume).
+          Im DNS der Domain müssen <span class="mono">_sips._tcp</span>/<span class="mono">_sip._tcp</span>/<span class="mono">_sip._udp</span>
+          auf das Gateway zeigen. Kamailio übernimmt die Liste in spätestens 20 s.</div>
         <div class="kv"><span class="muted">Local-Push-Secret</span><span><span class="mono">${secretTxt(j.secret)}</span>
           <button class="small" type="button" data-act="renew" data-what="secret">Neu erzeugen</button></span></div>
         <div class="hint">Die Ports müssen zum Stack passen (<span class="mono">SIP_GW_PORT</span>, <span class="mono">RELAY_LOCALPUSH_PORT</span>).
@@ -218,7 +225,8 @@ telephony-service
     if (f.id === "f-pa-set") {
       j = await api("/api/phoneapp/settings", { method: "POST", body: JSON.stringify({
         gateway_host: f.gateway_host.value, gateway_port: f.gateway_port.value,
-        localpush_port: f.localpush_port.value, ssids: f.ssids.value }) });
+        localpush_port: f.localpush_port.value, ssids: f.ssids.value,
+        ...(f.sip_domains.disabled ? {} : { sip_domains: f.sip_domains.value }) }) });
     } else if (f.id === "f-pa-apns") {
       const fd = new FormData(f);
       if (!f.keyfile.files.length) fd.delete("keyfile");

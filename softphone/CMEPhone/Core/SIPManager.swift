@@ -573,8 +573,8 @@ final class SIPManager: ObservableObject {
         }
         let hostPart = uri[uri.index(after: at)...]
         let host = hostPart.prefix { $0 != ";" && $0 != ":" && $0 != ">" }.lowercased()
-        guard !dom.isEmpty, host == dom, !hostPart.contains(";") else { return uri }
-        let r = "\(uri[..<at])@\(dom):\(settings.extSipPort);maddr=\(settings.gatewayHost);transport=tcp"
+        guard !dom.isEmpty, host == dom || settings.otherDomains.contains(host), !hostPart.contains(";") else { return uri }
+        let r = "\(uri[..<at])@\(host):\(settings.extSipPort);maddr=\(settings.gatewayHost);transport=tcp"
         log("Wahl \(uri) über Kamailio (\(settings.gatewayHost):\(settings.extSipPort) TCP)")
         return r
     }
