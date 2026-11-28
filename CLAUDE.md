@@ -89,13 +89,14 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
   - Anrufe an `<name>@<SIP_PUBLIC_DOMAIN>` werden über `sip-aliases` (`phoneapp.write_sip_aliases`, Quelle: E-Mail-Adressen im Tab Benutzer) auf eine Rufnummer abgebildet. Sie gehen über UDP 5066 an die CME, dort ist ein eigener Dial-Peer nötig (README Abschnitt 7).
   - Weitere Domains (Tab Softphone, „Weitere SIP-Domains“, `sip_domains`): `name@<weitere Domain>` wird wie `name@SIP_PUBLIC_DOMAIN` behandelt. In `sip-aliases` steht `@d <domain>`, in der htable `alias` der Schlüssel `@d=<domain>` (db_text, kein `:`). Die Apps bekommen die Liste als `gateway.domains`. Im DNS der Domain müssen SRV-Einträge auf `SIP_GW_NAME` zeigen. Das Zertifikat lautet nur auf `SIP_GW_NAME`.
   - rtpengine hat dafür die Schnittstelle `ext` (öffentliche IP im SDP, `direction=ext`).
-  - Das Zertifikat kommt aus Traefiks `acme.json` (DNS-Challenge bei All-Inkl).
+  - Das Zertifikat kommt aus `/data/push/tls` (cme-web, Tab Softphone → „Zertifikat für das SIP-Gateway“, `acme.py` mit lego per DNS-Challenge, Anbieter und Zugangsdaten wie im Nginx Proxy Manager, Verlängerung 30 Tage vor Ablauf). Fehlt es, kommt es aus Traefiks `acme.json`. Kamailio übernimmt ein neues binnen 20 s (`tls.reload`), braucht beim Start aber schon eins (sonst kein `WITH_EXT`).
   - Intern zeigt `sip-gw.wiederhol.de` auf docker01, und `_sip._tcp.wiederhol.de` im internen DNS zeigt auf CUCM/vcube.
 - **Test-Stolperstein:** Ruft ein Gerät derselben Nummer (iPad → -283) an, gehört der Anruf zum MOB-Pool. Die CME schickt dem MOB-Pool dann keine dialog-NOTIFYs, es gibt also keinen Push beim Halten. Zum Testen von einer anderen Nummer anrufen.
 
 **Jitsi (Jigasi)**
 - CME ↔ Kamailio ↔ Jigasi über UDP 5068 (`CONF_PORT`). Kamailio setzt `Jitsi-Conference-Room` aus htable `conf` (Datei `conferences` von cme-web), Jigasi läuft ohne Registrar mit Proxy Kamailio und wird an seiner IP erkannt.
 - CME: je Raum ein Dial-Peer (Beschreibung „Jitsi-Konferenz …“) zu 192.168.1.110:5068, Jigasi → CME über `voice class uri JITSI` (pattern `192\.168\.1\.110:5068`).
+- **Warteraum (seit 28.11.):** Jicofo lässt Jigasi ohne Gastgeber nicht in den Raum (`not-authorized`, Auth-Typ XMPP mit loginUrl `jitsi.wiederhol.de`, Jigasi ist `@auth.…`), und Jigasi wiederholt nicht. Deshalb schickt Kamailio jeden Konferenzanruf zuerst an Asterisk (`route TO_CONFWAIT`, `sip:confwait@${ASTERISK_SIP}`, Header `X-CME-Room`). Asterisk (`[cme-confwait]`, Endpunkt `kamailio`, erkannt an 172.16.0.0/12 bzw. HOST_IP) wählt Jigasi über Kamailio an (`route CONF`, Quelle im Docker-Netz mit `X-CME-Room` → `TO_JIGASI`). Klappt es nicht, nimmt Asterisk an, ruft `/hooks/jitsi/confwait` auf (curl, Header-Datei `confwait.hdr`), spielt `conf-waitforleader` und Wartemusik und versucht es alle ~15 s bis ~30 min. Der Wählplan kommt aus `jitsi.confwait_dialplan` (cme-web schreibt `extensions_confwait.conf`, Wartemusik im Tab Jitsi).
 - **Lobby-Mitteilungen:** Prosody-Modul `mod_cme_lobby_notify.lua` (Text in `jitsi.LOBBY_LUA`, Knopf „In Prosody einrichten“) auf der Komponente `lobby.<domain>` meldet `muc-occupant-joined` per POST an `<CME_PUBLIC_URL>/hooks/jitsi/lobby` (Header `X-CME-Secret` = `lobby_secret` in `cme-jitsi.json`, `/hooks/` ist in `auth.OPEN_PATHS`). Ziele je Raum in „Benachrichtigen“: Nebenstellen → `phoneapp.notify_event` (iOS Alert-Push, Kategorie `JITSI_LOBBY`, Mac Long-Poll `/client/v1/events` → `LobbyWatcher.swift`), E-Mail über `VM_SMTP_*`. Gleicher Gast im selben Raum höchstens einmal pro 60 s.
 - Jitsi verlangt JWT (`authentication = "token"`), Jigasi muss mit `jigasi@auth.<domain>` in den Raum (`org.jitsi.jigasi.xmpp.acc.*`). Prosodys eigenes Zertifikat war selbstsigniert und abgelaufen (Jigasi: „unable to find valid certification path“), Abhilfe: Let's-Encrypt-Zertifikat über den Renewal-Hook `prosody-cme-web.sh`.
 
@@ -117,6 +118,8 @@ Sprache im Projekt: Deutsch (UI-Texte, Logs, Commit-Messages).
 python3 tests/test_sharedline.py
 python3 tests/test_phoneapp.py
 python3 tests/test_relay.py
+python3 tests/test_jitsi.py
+python3 tests/test_acme.py      # braucht flask und cryptography (z. B. im cme-web-Container)
 ```
 
 **Apps:** `softphone/build.command`

@@ -28,6 +28,7 @@ done
 [ -e /etc/asterisk/cme/extensions_rec.conf ] || echo "[cme-recnotice]" > /etc/asterisk/cme/extensions_rec.conf
 [ -e /etc/asterisk/cme/extensions_queue.conf ] || printf '[cme-queues]\n[queue-run]\n' > /etc/asterisk/cme/extensions_queue.conf
 [ -e /etc/asterisk/cme/extensions_conf.conf ] || echo "[cme-conf]" > /etc/asterisk/cme/extensions_conf.conf
+[ -e /etc/asterisk/cme/extensions_confwait.conf ] || printf '[cme-confwait]\nexten => confwait,1,Hangup(34)\n' > /etc/asterisk/cme/extensions_confwait.conf
 [ -e /etc/asterisk/cme/confbridge_cme.conf ] || : > /etc/asterisk/cme/confbridge_cme.conf
 for f in queues.conf musiconhold.conf; do
   [ -e "/etc/asterisk/cme/$f" ] || : > "/etc/asterisk/cme/$f"

@@ -303,6 +303,76 @@ fi
 """
 
 
+def _read(p: Path) -> str:
+    try:
+        return p.read_text()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _safe(f) -> None:
+    try:
+        f()
+    except Exception as e:  # noqa: BLE001
+        print(f"Jitsi: {e}", flush=True)
+
+
+RE_MOH = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+def moh_classes(text: str) -> list[dict]:
+    """Wartemusik-Klassen aus cme/musiconhold.conf (cme-web, Tab Voicemail): [{"id", "name"}]"""
+    out, name = [], ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(";"):
+            name = line.lstrip("; ").strip()
+        elif m := re.fullmatch(r"\[([A-Za-z0-9_-]{1,40})\]", line):
+            out.append({"id": m.group(1), "name": name or m.group(1)})
+            name = ""
+    return out
+
+
+def confwait_dialplan(host_ip: str, conf_port: int, moh: str, hdr_file: str, hook_url: str) -> str:
+    """Asterisk-Kontext [cme-confwait]: Kamailio schickt jeden Anruf an einen Jitsi-Raum zuerst hierher.
+    Asterisk wählt Jigasi sofort an (über Kamailio, Raum im Header X-CME-Room). Lehnt Jicofo ab (kein Gastgeber),
+    nimmt Asterisk an, meldet cme-web den Wartenden, spielt Ansage und Wartemusik und versucht es erneut."""
+    if not re.fullmatch(r"[0-9.]{7,15}", host_ip) or (moh and not RE_MOH.match(moh)) \
+            or not re.fullmatch(r"https?://[A-Za-z0-9.:/_-]{1,200}", hook_url) or not re.fullmatch(r"[A-Za-z0-9/._-]{1,200}", hdr_file):
+        raise JitsiError("Warteraum: Adresse, Wartemusik oder Ziel ungültig.")
+    dial = f"PJSIP/kamailio/sip:conf@{host_ip}:{conf_port}"
+    hold = f"MusicOnHold({moh},15)" if moh else "Wait(15)"
+    mopt = f"m({moh})" if moh else ""
+    return f"""; Von cme-web erzeugt (Tab Jitsi) - Aenderungen hier gehen verloren.
+; Warteraum fuer Anrufe an Jitsi-Raeume, solange noch kein Gastgeber im Raum ist.
+[cme-confwait]
+exten => confwait,1,Set(ROOM=${{FILTER(a-z0-9._@,${{TOLOWER(${{PJSIP_HEADER(read,X-CME-Room)}})}})}})
+ same => n,GotoIf($["${{ROOM}}" = ""]?bad)
+ same => n,Set(WHO=${{FILTER(A-Za-z0-9 ._,${{CALLERID(name)}})}})
+ same => n,ExecIf($["${{WHO}}" = ""]?Set(WHO=${{FILTER(0-9+,${{CALLERID(num)}})}}))
+ same => n,Set(TRIES=0)
+ same => n,Dial({dial},20,b(cme-confwait-hdr^s^1(${{ROOM}})))
+ same => n,GotoIf($["${{DIALSTATUS}}" = "ANSWER"]?bye)
+ same => n,Verbose(1,Warteraum: ${{WHO}} wartet auf den Gastgeber von ${{ROOM}} (${{DIALSTATUS}}))
+ same => n,Answer()
+ same => n,System(curl -s -m 5 -H @{hdr_file} --data-urlencode "room=${{ROOM}}" --data-urlencode "name=${{WHO}}" {hook_url} >/dev/null 2>&1 &)
+ same => n,Wait(0.5)
+ same => n(again),ExecIf($[${{TRIES}} % 4 = 0]?Playback(conf-waitforleader))
+ same => n,Set(TRIES=$[${{TRIES}} + 1])
+ same => n,Dial({dial},20,{mopt}b(cme-confwait-hdr^s^1(${{ROOM}})))
+ same => n,GotoIf($["${{DIALSTATUS}}" = "ANSWER"]?bye)
+ same => n,{hold}
+ same => n,GotoIf($[${{TRIES}} < 60]?again)
+ same => n,Playback(vm-goodbye)
+ same => n(bye),Hangup()
+ same => n(bad),Hangup(21)
+
+[cme-confwait-hdr]
+exten => s,1,Set(PJSIP_HEADER(add,X-CME-Room)=${{ARG1}})
+ same => n,Return()
+"""
+
+
 def send_mail(to: list[str], subject: str, text: str) -> None:
     """Mail über den SMTP-Zugang des Stacks (VM_SMTP_*, wie Voicemail und Fax)"""
     import smtplib
@@ -469,7 +539,7 @@ echo TRUST=neu
 
 # ---------------- Flask ----------------
 
-def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
+def register(app, router, apply, demo: bool, cfgdir: Path, ami=None) -> None:
     store = cfgdir / "cme-jitsi.json"
     key_path = cfgdir / "cme-jitsi-ssh"
     known = cfgdir / "cme-jitsi-known_hosts"
@@ -587,7 +657,8 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
     @app.get("/api/jitsi")
     def jitsi_status():
         s = settings()
-        out = {"ok": True, "settings": {k: s[k] for k in ("host", "user", "port", "rooms", "dialout", "codec")},
+        out = {"ok": True, "settings": {**{k: s[k] for k in ("host", "user", "port", "rooms", "dialout", "codec")}, "moh": s.get("moh", "")},
+               "moh": moh_classes(_read(cfgdir / "musiconhold.conf")),
                "pubkey": pubkey(), "host_ip": host_ip, "conf_port": conf_port,
                "public_domain": os.environ.get("SIP_PUBLIC_DOMAIN", "").strip(), "jigasi": None, "error": None,
                "lobby": {"installed": False, "mail": bool(os.environ.get("VM_SMTP_HOST") and os.environ.get("VM_SMTP_USER")),
@@ -701,11 +772,15 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
             raise JitsiError("Codec-Liste: Nummer der voice class codec.")
         if not host_ip:
             raise JitsiError("VM_HOST_IP fehlt – ohne Adresse von Kamailio keine Dial-Peers.")
-        s.update(rooms=rooms, dialout=dialout, codec=codec)
+        moh = str(d.get("moh", s.get("moh", ""))).strip()
+        if moh and not RE_MOH.match(moh):
+            raise JitsiError("Wartemusik ungültig.")
+        s.update(rooms=rooms, dialout=dialout, codec=codec, moh=moh)
         if s["host"] and not s.get("jigasi_ip"):
             s["jigasi_ip"] = resolve(s["host"])
         save(s)
         write_conf(s)
+        _safe(lambda: write_confwait(s))
         lines = cme_lines(rooms, router.show("show running-config | section dial-peer voice"), host_ip, conf_port,
                           s.get("jigasi_ip", ""), dialout, codec)
         res = apply(lines) if lines else {"ok": True, "config": []}
@@ -763,20 +838,38 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
         name = re.sub(r"[\x00-\x1f]", "", str(d.get("name", "")).strip())[:80] or "Jemand"
         if not RE_ROOM.match(room):
             return jsonify(ok=False), 400
+        return jsonify(ok=True, **announce(s, room, name, bool(d.get("sip")), "Lobby"))
+
+    @app.post("/hooks/jitsi/confwait")
+    def jitsi_confwait_hook():
+        """Asterisk (Warteraum): ein Telefon-Anrufer wartet, weil noch kein Gastgeber im Raum ist"""
+        s = settings()
+        got = request.headers.get("X-CME-Secret", "")
+        if not s.get("lobby_secret") or not secrets.compare_digest(got.encode(), s["lobby_secret"].encode()):
+            return jsonify(ok=False), 403
+        room = str(request.form.get("room", "")).strip().lower().split("@")[0][:80]
+        name = re.sub(r"[\x00-\x1f]", "", str(request.form.get("name", "")).strip())[:80] or "Jemand"
+        if not RE_ROOM.match(room):
+            return jsonify(ok=False), 400
+        return jsonify(ok=True, **announce(s, room, name, True, "Warteraum"))
+
+    def announce(s: dict, room: str, name: str, sip: bool, where: str) -> dict:
+        """Moderatoren des Raums benachrichtigen (Apps der Nebenstellen, E-Mail); höchstens 1× pro Minute je Gast"""
         key = f"{room}|{name}"
         now = time.time()
         for k in [k for k, v in seen.items() if now - v > 300]:
             seen.pop(k, None)
         if now - seen.get(key, 0) < 60:          # derselbe Gast mehrfach (Reconnect): nur einmal melden
-            return jsonify(ok=True, dup=True)
+            return {"dup": True}
         seen[key] = now
         r = next((x for x in s.get("rooms", []) if x.get("room") == room), None)
         targets = (r or {}).get("notify", [])
         dom = s.get("domain", "")
         link = f"https://{dom}/{room}" if dom else ""
-        via = " (Telefon)" if d.get("sip") else ""
-        last_lobby.update(room=room, name=name, time=time.strftime("%d.%m. %H:%M"), targets=len(targets))
-        print(f"Jitsi: {name}{via} wartet in der Lobby von {room} -> {', '.join(targets) or 'niemand eingetragen'}", flush=True)
+        via = " (Telefon)" if sip else ""
+        what = "wartet am Telefon auf den Gastgeber" if where == "Warteraum" else "wartet in der Lobby"
+        last_lobby.update(room=room, name=name, time=time.strftime("%d.%m. %H:%M"), targets=len(targets), where=where)
+        print(f"Jitsi: {name}{via} {what} von {room} -> {', '.join(targets) or 'niemand eingetragen'}", flush=True)
         exts = [x for x in targets if RE_EXT.match(x)]
         mails = [x for x in targets if RE_EMAIL.match(x)]
         if exts:
@@ -787,13 +880,42 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
         if mails:
             def mail():
                 try:
-                    send_mail(mails, f"Jitsi: {name} wartet in der Lobby von {room}",
-                              f"{name}{via} wartet in der Lobby des Raums „{room}“.\n\n"
+                    send_mail(mails, f"Jitsi: {name} {what} von {room}",
+                              f"{name}{via} {what} des Raums „{room}“.\n\n"
                               + (f"Zum Raum: {link}\n" if link else "") + "\n-- cme-web")
                 except Exception as e:  # noqa: BLE001
                     print(f"Jitsi: E-Mail an {', '.join(mails)} fehlgeschlagen: {e}", flush=True)
             threading.Thread(target=mail, daemon=True).start()
-        return jsonify(ok=True)
+        return {}
+
+    def write_confwait(s: dict | None = None) -> None:
+        """Dialplan für den Warteraum (Asterisk, cme/extensions_confwait.conf) und Header-Datei für curl"""
+        s = s or settings()
+        if not host_ip:
+            return
+        url = os.environ.get("CONFWAIT_HOOK_URL", "").strip() or "http://cme-web:8080/hooks/jitsi/confwait"
+        classes = [c["id"] for c in moh_classes(_read(cfgdir / "musiconhold.conf"))]
+        moh = s.get("moh") if s.get("moh") in classes else (classes[0] if classes else "")
+        hdr = cfgdir / "confwait.hdr"
+        text = confwait_dialplan(host_ip, conf_port, moh, "/etc/asterisk/cme/confwait.hdr", url)
+        old = _read(cfgdir / "extensions_confwait.conf")
+        hdr_text = f"X-CME-Secret: {lobby_secret()}\n"
+        if _read(hdr) != hdr_text:
+            hdr.write_text(hdr_text)
+            os.chmod(hdr, 0o644)
+        if old != text:
+            tmp = cfgdir / ".extensions_confwait.conf.tmp"
+            tmp.write_text(text)
+            os.chmod(tmp, 0o644)
+            tmp.replace(cfgdir / "extensions_confwait.conf")
+            if ami and not demo:
+                try:
+                    ami.command("dialplan reload")
+                except Exception as e:  # noqa: BLE001
+                    print(f"Jitsi: Warteraum - dialplan reload fehlgeschlagen: {e}", flush=True)
+
+    if not demo:
+        threading.Timer(8, lambda: _safe(write_confwait)).start()
 
     @app.post("/api/jitsi/prosody-cert")
     def jitsi_prosody_cert():

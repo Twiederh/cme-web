@@ -137,6 +137,12 @@
         <label class="check"><input type="checkbox" id="jt-dialout" ${s.dialout ? "checked" : ""}> „Telefon einladen“ aus Jitsi erlauben (Dial-Peer für Jigasi)</label>
         <div><label>voice class codec der Dial-Peers</label><input id="jt-codec" value="${esc(s.codec)}" class="mono" style="max-width:90px"></div>
       </div>
+      <div style="margin:6px 0"><label>Wartemusik im Warteraum</label>
+        <select id="jt-moh">${(J.moh || []).map(c => `<option value="${esc(c.id)}" ${c.id === s.moh ? "selected" : ""}>${esc(c.name)}</option>`).join("")
+          || `<option value="">keine (Stille)</option>`}</select>
+        <div class="hint">Ist noch kein Gastgeber im Raum, nimmt Asterisk Telefon-Anrufer an: Ansage „Die Konferenz beginnt, sobald der
+          Leiter eintrifft“, dann Wartemusik (Klassen aus dem Tab Voicemail). Die Einträge unter „Benachrichtigen“ bekommen eine Mitteilung.
+          Alle 15 s versucht Asterisk den Raum erneut, höchstens etwa 30 Minuten lang.</div></div>
       <button class="primary" id="jt-save-rooms">Räume übernehmen (Kamailio und CME)</button>
       <div class="msg" id="m-jt-rooms"></div>
       <pre id="jt-cfg" class="mono" style="display:none;white-space:pre-wrap;font-size:11.5px"></pre>
@@ -161,7 +167,7 @@
     $("#jt-add").onclick = () => { rooms.push({ number: "", room: "", name: "" }); $("#jt-rooms").innerHTML = roomRows(); bind(); };
     $("#jt-save-rooms").onclick = async () => {
       const btn = $("#jt-save-rooms"); btn.disabled = true;
-      const r = await post("/api/jitsi/rooms", { rooms, dialout: $("#jt-dialout").checked, codec: $("#jt-codec").value });
+      const r = await post("/api/jitsi/rooms", { rooms, dialout: $("#jt-dialout").checked, codec: $("#jt-codec").value, moh: $("#jt-moh").value });
       btn.disabled = false;
       showMsg($("#m-jt-rooms"), r.ok, r.ok ? "Übernommen. Kamailio lädt die Räume in spätestens 20 s." : r.error);
       const pre = $("#jt-cfg");

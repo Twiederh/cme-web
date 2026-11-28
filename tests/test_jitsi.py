@@ -212,4 +212,17 @@ try:
     check(False, "Adresse mit Sonderzeichen")
 except J.JitsiError:
     check(True, "Adresse mit Sonderzeichen abgelehnt")
+# Warteraum (Asterisk)
+dp = J.confwait_dialplan("192.168.1.110", 5068, "cme-abc", "/etc/asterisk/cme/confwait.hdr", "http://cme-web:8080/hooks/jitsi/confwait")
+check("[cme-confwait]" in dp and "PJSIP/kamailio/sip:conf@192.168.1.110:5068" in dp and "MusicOnHold(cme-abc,15)" in dp
+      and "PJSIP_HEADER(add,X-CME-Room)" in dp, "Dialplan Warteraum")
+check("Wait(15)" in J.confwait_dialplan("192.168.1.110", 5068, "", "/x", "http://h/x"), "ohne Wartemusik: Stille")
+for bad in (("1.2.3.4; rm", "m"), ("192.168.1.110", "a;b")):
+    try:
+        J.confwait_dialplan(bad[0], 5068, bad[1], "/x", "http://h/x")
+        check(False, f"Warteraum abgelehnt {bad}")
+    except J.JitsiError:
+        check(True, f"Warteraum abgelehnt {bad}")
+check(J.moh_classes("; Telefonmann\n[cme-5c4f37]\nmode=files\n[cme-x]\n") == [{"id": "cme-5c4f37", "name": "Telefonmann"},
+      {"id": "cme-x", "name": "cme-x"}], "Wartemusik-Klassen")
 print("alles ok")

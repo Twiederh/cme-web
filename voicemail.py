@@ -721,9 +721,13 @@ def register(app, router, apply, demo: bool) -> None:
     import phoneapp
     phoneapp.register(app, router, demo, cfgdir)
 
+    # Let's-Encrypt-Zertifikat für das SIP-Gateway (Kamailio), Tab Softphone
+    import acme
+    acme.register(app, demo, cfgdir, Path(os.environ.get("PHONEAPP_DATA_DIR", "/data/push")))
+
     # Konferenzen in Jitsi über Jigasi und Kamailio (Tab Jitsi)
     import jitsi
-    jitsi.register(app, router, apply, demo, cfgdir)
+    jitsi.register(app, router, apply, demo, cfgdir, ami)
 
     # Shared Line fuer Geraete ohne eigenes Abo (z. B. Gigaset): stellvertretende dialog-Abos
     import sharedline

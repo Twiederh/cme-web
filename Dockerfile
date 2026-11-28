@@ -1,3 +1,7 @@
+# lego (ACME-Client mit DNS-Challenge, Tab Softphone → Zertifikat): statisches Go-Programm aus dem offiziellen Image
+FROM goacme/lego:v4.21.0 AS lego
+RUN cp "$(command -v lego || echo /lego)" /lego-bin
+
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -15,6 +19,7 @@ RUN pip install -r requirements.txt \
  && useradd --system --uid 10001 --create-home cme \
  && mkdir -p /data/push && chown cme /data/push
 
+COPY --from=lego /lego-bin /usr/local/bin/lego
 COPY *.py ./
 COPY static ./static
 

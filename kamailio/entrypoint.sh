@@ -35,6 +35,8 @@ CME_EXT_PORT="${CME_EXT_PORT:-5066}"
 ALIASES="${ALIASES_FILE:-/data/push/sip-aliases}"
 # Konferenzen in Jitsi über Jigasi (cme-web, Tab Jitsi): CME und Jigasi kommen über diesen Port
 CONF_PORT="${CONF_PORT:-5068}"
+# Warteraum für Konferenzen (Asterisk, Port im Stack veröffentlicht)
+ASTERISK_SIP="${ASTERISK_SIP:-${HOST_IP}:5060}"
 CONFERENCES="${CONFERENCES_FILE:-/data/push/conferences}"
 ACME_JSON="${ACME_JSON:-/data/acme/acme.json}"
 TLSDIR=/run/kamailio/tls
@@ -66,7 +68,9 @@ fi
 python3 /usr/local/bin/passwd2htable.py --aliases "$ALIASES" "$DBDIR" >/dev/null || true
 python3 /usr/local/bin/passwd2htable.py --conf "$CONFERENCES" "$DBDIR" >/dev/null || true
 
-# Zertifikat: eigene Dateien in TLS_CERT_DIR (cert.pem, key.pem) oder aus der acme.json von Traefik
+# Zertifikat: eigene Dateien in TLS_CERT_DIR (cert.pem, key.pem; Standard: von cme-web per Let's Encrypt im Volume
+# softphone-data) oder aus der acme.json von Traefik
+TLS_CERT_DIR="${TLS_CERT_DIR:-/data/push/tls}"
 cert_update() {
   if [ -n "${TLS_CERT_DIR:-}" ] && [ -f "$TLS_CERT_DIR/cert.pem" ] && [ -f "$TLS_CERT_DIR/key.pem" ]; then
     mkdir -p "$TLSDIR"
@@ -111,7 +115,7 @@ sed -e "s|\${HOST_IP}|${HOST_IP}|g" -e "s|\${HOST_IP_RE}|${HOST_IP_RE}|g" -e "s|
     -e "s|\${USRLOC_DB_MODE}|${USRLOC_DB_MODE}|g" -e "s|\${PUBLIC_DOMAIN}|${PUBLIC_DOMAIN:-invalid}|g" \
     -e "s|\${EXT_NAME}|${EXT_NAME:-invalid}|g" -e "s|\${EXT_TCP_PORT}|${EXT_TCP_PORT}|g" -e "s|\${EXT_TLS_PORT}|${EXT_TLS_PORT}|g" \
     -e "s|\${EXT_ADV_TCP}|${EXT_ADV_TCP}|g" -e "s|\${EXT_ADV_TLS}|${EXT_ADV_TLS}|g" -e "s|\${CME_EXT_PORT}|${CME_EXT_PORT}|g" \
-    -e "s|\${EXT_UDP_PORT}|${EXT_UDP_PORT}|g" -e "s|\${EXT_ADV_UDP}|${EXT_ADV_UDP}|g" -e "s|\${CONF_PORT}|${CONF_PORT}|g" \
+    -e "s|\${EXT_UDP_PORT}|${EXT_UDP_PORT}|g" -e "s|\${EXT_ADV_UDP}|${EXT_ADV_UDP}|g" -e "s|\${CONF_PORT}|${CONF_PORT}|g" -e "s|\${ASTERISK_SIP}|${ASTERISK_SIP}|g" \
     /usr/local/share/kamailio/kamailio.cfg.template > /run/kamailio/kamailio.cfg
 # Zugang von außen einschalten (Präprozessor: #!ifdef WITH_EXT)
 [ "$EXT" = 1 ] && sed -i '1a #!define WITH_EXT' /run/kamailio/kamailio.cfg

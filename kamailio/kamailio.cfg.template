@@ -559,7 +559,7 @@ route[FROM_EXT_CONF] {
 		$var(rtpdir) = " direction=ext direction=int";
 	}
 	xlog("L_INFO", "Konferenz von draußen: $fu an $rU@$rd -> $var(room)\n");
-	route(TO_JIGASI);
+	route(TO_CONFWAIT);
 }
 #!endif
 
@@ -578,6 +578,17 @@ route[CONF] {
 		exit;
 	}
 	$var(rtpdir) = "";
+	# Asterisk (Warteraum, Docker-Netz) wählt Jigasi an, Raum im Header X-CME-Room
+	if ($si =~ "^172\.(1[6-9]|2[0-9]|3[01])\." && is_present_hf("X-CME-Room")) {
+		$var(room) = $(hdr(X-CME-Room){s.trim});
+		remove_hf("X-CME-Room");
+		if (!($var(room) =~ "^[a-z0-9._-]+@[a-z0-9.-]+$")) {
+			sl_send_reply("400", "Bad Room");
+			exit;
+		}
+		xlog("L_INFO", "Konferenz: Warteraum ($fU) -> $var(room)\n");
+		route(TO_JIGASI);
+	}
 	if ($si == "${CME_IP}") {
 		$var(room) = $sht(conf=>$rU);
 		if ($var(room) == $null) {
@@ -586,7 +597,7 @@ route[CONF] {
 			exit;
 		}
 		xlog("L_INFO", "Konferenz: $fU an $rU -> $var(room)\n");
-		route(TO_JIGASI);
+		route(TO_CONFWAIT);
 	}
 	if ($si == $sht(conf=>@ip)) {
 		# Jigasi wählt hinaus ("Telefon einladen" in Jitsi): an die Rufnummer bei der CME
@@ -608,6 +619,24 @@ route[CONF] {
 }
 
 # Anruf an den Raum $var(room) zu Jigasi (Kopfzeile Jitsi-Conference-Room, Medien über rtpengine)
+# Konferenz zuerst an Asterisk (cme-voicemail, Kontext cme-confwait): Asterisk wählt sofort Jigasi an. Ist noch kein
+# Gastgeber im Raum (Jicofo: not-authorized), hört der Anrufer eine Ansage und Wartemusik, cme-web benachrichtigt die
+# Moderatoren, und Asterisk versucht es alle paar Sekunden erneut (zurück über route CONF, Header X-CME-Room).
+route[TO_CONFWAIT] {
+	remove_hf("X-CME-Room");
+	append_hf("X-CME-Room: $var(room)\r\n");
+	record_route();
+	$ru = "sip:confwait@${ASTERISK_SIP}";
+	$du = "sip:${ASTERISK_SIP};transport=udp";
+	if (has_body("application/sdp")) {
+		rtpengine_offer("RTP/AVP rtcp-mux-demux replace-origin replace-session-connection ICE=remove$var(rtpdir)");
+	}
+	force_send_socket(udp:${HOST_IP}:${CONF_PORT});
+	t_on_reply("MANAGE");
+	t_on_failure("FROM_APP");
+	route(RELAY);
+}
+
 route[TO_JIGASI] {
 	remove_hf("Jitsi-Conference-Room");
 	append_hf("Jitsi-Conference-Room: $var(room)\r\n");
