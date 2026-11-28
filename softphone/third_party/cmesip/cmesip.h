@@ -124,5 +124,11 @@ int  cmesip_set_video_device(const char *dev);
 int  cmesip_set_video(const char *call_id, bool on);
 /* Gespräch mit Video? */
 bool cmesip_call_video(const char *call_id);
+/* macOS: Auswahl für die Bildschirmfreigabe (SCContentFilter aus SCContentSharingPicker, als
+ * Unmanaged-Zeiger; cmesip hält ihn selbst fest). NULL = keine. */
+void cmesip_screen_filter(void *filter);
+/* Im Gespräch Bildschirm (on, Auswahl vorher mit cmesip_screen_filter) statt Kamera senden bzw. zurück zur
+ * Kamera. Braucht ein Gespräch mit Video (ENOTSUP sonst). */
+int  cmesip_set_screen(const char *call_id, bool on);
 
 #endif

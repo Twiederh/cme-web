@@ -283,6 +283,7 @@ struct CallToastView: View {
     @EnvironmentObject private var model: ToastController
     @EnvironmentObject private var rec: RecordingController
     @EnvironmentObject private var settings: PhoneSettings
+    @ObservedObject private var screen = ScreenShare.shared
     @State private var hover = false
     @State private var showInfo = false
 
@@ -410,6 +411,15 @@ struct CallToastView: View {
                     RoundKey(symbol: t.video ? "video.slash.fill" : "video.fill", color: Color(white: 0.5),
                              help: t.video ? "Video aus" : "Video einschalten") {
                         SIPManager.shared.setVideo(callId: id, enabled: !t.video)
+                    }
+                }
+                if settings.videoEnabled, t.video, case .softphone(let id) = t.source {
+                    let sharing = screen.isSharing(id)
+                    RoundKey(symbol: sharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle",
+                             color: sharing ? .blue : Color(white: 0.5),
+                             help: sharing ? "Bildschirmfreigabe beenden (wieder Kamera)"
+                                           : "Bildschirm, App oder Fenster statt Kamera senden") {
+                        if sharing { screen.stop() } else { screen.start(callId: id) }
                     }
                 }
                 RoundKey(symbol: rec.isOn ? "stop.fill" : "record.circle",

@@ -9,7 +9,7 @@ T=$(mktemp -d)
 sed "s|LAN_IP|$IP|g" test_call.c > $T/test_call.c
 xcrun clang -I$B/headers $T/test_call.c $B/macos/libcmesip.a -framework CoreAudio -framework AudioToolbox \
   -framework CoreFoundation -framework SystemConfiguration -framework Security -framework Foundation \
-  -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -lz -lresolv -o $T/test_call
+  -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ScreenCaptureKit -lz -lresolv -o $T/test_call
 ($T/test_call B 15070 > $T/b.txt 2>&1 &)
 sleep 1
 RECFILE=$T/rec.wav $T/test_call A 15080 "sip:B@$IP:15070" > $T/a.txt 2>&1
@@ -45,4 +45,7 @@ for vc in H264 H265; do
   rb=$(grep -o 'B video remote=[0-9]*' $T/bv.txt | grep -o '[0-9]*$' || echo 0)
   echo "Video $vc: Bilder bei A $ra, bei B $rb (erwartet je > 10), $(grep -ho 'Kodierer [^,]*' $T/av.txt | head -1)"
   [ "$ra" -gt 10 ] && [ "$rb" -gt 10 ] || { grep -h -i -E "cmevideo|video" $T/av.txt $T/bv.txt | head -20; exit 1; }
+  # Bildschirm statt Kamera: ohne Auswahl ENODEV (19), zurück zur Kamera geht
+  echo "Bildschirm $vc: $(grep -o 'screen .*' $T/av.txt | tr '\n' ' ')"
+  grep -q "screen on (ohne Auswahl) 19" $T/av.txt && grep -q "screen off 0" $T/av.txt || exit 1
 done

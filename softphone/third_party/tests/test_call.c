@@ -40,6 +40,10 @@ int main(int argc, char **argv) {
     char c[256] = ""; printf("A dial %d\n", cmesip_dial(argv[3], NULL, NULL, getenv("VCODEC") != NULL, c, sizeof c)); wait_for(&estab, 6000);
     char info[128] = ""; cmesip_call_info(c, info, sizeof info); printf("A info: %s\n", info);
     if (getenv("RECFILE")) printf("A record %d\n", cmesip_record(c, getenv("RECFILE")));
+    if (getenv("VCODEC")) {   /* Bildschirm ohne Auswahl: ENODEV, zurück zur Kamera: 0 */
+      printf("A screen on (ohne Auswahl) %d\n", cmesip_set_screen(c, true));
+      printf("A screen off %d\n", cmesip_set_screen(c, false));
+    }
     sleep(1); cmesip_hold(c, true, "Call-Info: <urn:x-cisco-remotecc:hold>\r\n"); sleep(1);
     cmesip_hold(c, false, "Call-Info: <urn:x-cisco-remotecc:resume>\r\n"); sleep(1);
     cmesip_hangup(c, 0); sleep(1);

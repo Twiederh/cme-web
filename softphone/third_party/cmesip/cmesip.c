@@ -1066,6 +1066,25 @@ int cmesip_set_video_device(const char *dev)
 }
 
 
+int cmesip_set_screen(const char *call_id, bool on)
+{
+	return run(^int(void) {
+		struct call *call = find_call(call_id);
+		if (!call)
+			return ENOENT;
+		struct video *v = call_video(call);
+		if (!v || !call_has_video(call))
+			return ENOTSUP;
+		const struct config *cfg = conf_config();
+		int err = on ? video_set_source(v, "cmescreen", "")
+			: video_set_source(v, "cmecam", cfg->video.src_dev);
+		if (!err && on)
+			err = call_set_video_dir(call, SDP_SENDRECV);   /* Video war evtl. aus */
+		return err;
+	});
+}
+
+
 int cmesip_set_video(const char *call_id, bool on)
 {
 	return run(^int(void) {

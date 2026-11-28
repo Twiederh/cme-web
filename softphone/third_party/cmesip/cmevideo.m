@@ -3,6 +3,8 @@
  * einen Handler, der CVPixelBuffer an die App gibt (AVSampleBufferDisplayLayer).
  *
  *   vidsrc  "cmecam"   Kamera; Gerät = uniqueID von AVCaptureDevice (leer = Frontkamera bzw. Standard)
+ *   vidsrc  "cmescreen" (nur macOS) Bildschirm, App oder Fenster über ScreenCaptureKit; Auswahl als
+ *                      SCContentFilter aus SCContentSharingPicker (cmesip_screen_filter)
  *   vidisp  "cmedisp"  Bilder der Gegenstelle -> cmesip_video_h(remote=true, ...)
  *   vidcodec H264 (packetization-mode=1, Constrained Baseline 42e01f) und H265 (Main)
  *
@@ -15,6 +17,9 @@
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#if TARGET_OS_OSX
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+#endif
 #include <re.h>
 #include <re_h265.h>
 #include <rem.h>
@@ -276,6 +281,155 @@ static int cam_alloc(struct vidsrc_st **stp, const struct vidsrc *vs, struct vid
 	*stp = st;
 	return 0;
 }
+
+
+/* ---------------------------------------------------------------- Bildschirm (macOS) */
+
+#if TARGET_OS_OSX
+static SCContentFilter *screen_filter;    /* aus dem Auswahldialog der App */
+
+void cmesip_screen_filter(void *filter)
+{
+	@synchronized ([NSObject class]) {
+		screen_filter = (__bridge SCContentFilter *)filter;
+	}
+}
+
+struct scr_st {
+	vidsrc_frame_h *frameh;
+	void *arg;
+	void *stream;     /* SCStream */
+	void *output;     /* CmeScreenOutput */
+	void *queue;
+	volatile bool stop;
+};
+
+@interface CmeScreenOutput : NSObject <SCStreamOutput, SCStreamDelegate>
+@property (nonatomic, assign) struct scr_st *st;
+@end
+
+@implementation CmeScreenOutput
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type
+{
+	struct scr_st *st = self.st;
+	(void)stream;
+	if (type != SCStreamOutputTypeScreen || !st || st->stop || !CMSampleBufferIsValid(sb))
+		return;
+	/* nur vollständige Bilder (ohne Änderung kommen "idle"-Puffer ohne Bild) */
+	CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray(sb, false);
+	if (att && CFArrayGetCount(att) > 0) {
+		NSDictionary *d = (__bridge NSDictionary *)CFArrayGetValueAtIndex(att, 0);
+		NSNumber *s = d[SCStreamFrameInfoStatus];
+		if (s && s.integerValue != SCFrameStatusComplete)
+			return;
+	}
+	CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
+	if (!pb || CVPixelBufferGetPlaneCount(pb) < 2)
+		return;
+	emit(false, pb);
+	CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+	struct vidframe f;
+	memset(&f, 0, sizeof(f));
+	f.fmt = VID_FMT_NV12;
+	f.size.w = (unsigned)CVPixelBufferGetWidth(pb) & ~1u;
+	f.size.h = (unsigned)CVPixelBufferGetHeight(pb) & ~1u;
+	for (int i = 0; i < 2; i++) {
+		f.data[i] = CVPixelBufferGetBaseAddressOfPlane(pb, i);
+		f.linesize[i] = (uint16_t)CVPixelBufferGetBytesPerRowOfPlane(pb, i);
+	}
+	st->frameh(&f, tmr_jiffies_usec() * VIDEO_TIMEBASE / 1000000, st->arg);
+	CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+}
+
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error
+{
+	(void)stream;
+	warning("cmevideo: Bildschirmfreigabe beendet: %s\n", error.localizedDescription.UTF8String);
+}
+@end
+
+
+static void scr_destructor(void *arg)
+{
+	struct scr_st *st = arg;
+	st->stop = true;
+	if (st->stream) {
+		SCStream *s = CFBridgingRelease(st->stream);
+		dispatch_semaphore_t done = dispatch_semaphore_create(0);
+		[s stopCaptureWithCompletionHandler:^(NSError *e) { (void)e; dispatch_semaphore_signal(done); }];
+		dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+	}
+	if (st->queue) {
+		dispatch_queue_t q = CFBridgingRelease(st->queue);
+		dispatch_sync(q, ^{});
+	}
+	if (st->output) {
+		CmeScreenOutput *o = CFBridgingRelease(st->output);
+		o.st = NULL;
+	}
+}
+
+
+static int scr_alloc(struct vidsrc_st **stp, const struct vidsrc *vs, struct vidsrc_prm *prm,
+		     const struct vidsz *size, const char *fmt, const char *dev,
+		     vidsrc_frame_h *frameh, vidsrc_packet_h *packeth, vidsrc_error_h *errorh, void *arg)
+{
+	(void)vs; (void)fmt; (void)dev; (void)packeth; (void)errorh; (void)size;
+	SCContentFilter *filter;
+	@synchronized ([NSObject class]) {
+		filter = screen_filter;
+	}
+	if (!stp || !frameh)
+		return EINVAL;
+	if (!filter) {
+		warning("cmevideo: Bildschirm: nichts ausgewählt\n");
+		return ENODEV;
+	}
+	struct scr_st *st = mem_zalloc(sizeof(*st), scr_destructor);
+	if (!st)
+		return ENOMEM;
+	st->frameh = frameh;
+	st->arg = arg;
+	@autoreleasepool {
+		/* Größe: Inhalt in Pixeln, eingepasst in 1920x1080 (Text bleibt lesbar), gerade Kanten */
+		CGRect r = filter.contentRect;
+		double px = filter.pointPixelScale > 0 ? filter.pointPixelScale : 1;
+		double w = r.size.width * px, h = r.size.height * px;
+		if (w < 2 || h < 2) { w = 1280; h = 720; }
+		double k = fmin(1.0, fmin(1920.0 / w, 1080.0 / h));
+		SCStreamConfiguration *c = [[SCStreamConfiguration alloc] init];
+		c.width = ((size_t)(w * k)) & ~(size_t)1;
+		c.height = ((size_t)(h * k)) & ~(size_t)1;
+		c.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+		c.minimumFrameInterval = CMTimeMake(1, (int32_t)(prm && prm->fps > 0 ? prm->fps : 15));
+		c.showsCursor = YES;
+		c.queueDepth = 5;
+		c.preservesAspectRatio = YES;
+		CmeScreenOutput *o = [[CmeScreenOutput alloc] init];
+		o.st = st;
+		SCStream *s = [[SCStream alloc] initWithFilter:filter configuration:c delegate:o];
+		dispatch_queue_t q = dispatch_queue_create("cmevideo.screen", DISPATCH_QUEUE_SERIAL);
+		NSError *e = nil;
+		if (![s addStreamOutput:o type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e]) {
+			warning("cmevideo: Bildschirm: %s\n", e.localizedDescription.UTF8String);
+			mem_deref(st);
+			return EACCES;
+		}
+		st->stream = (void *)CFBridgingRetain(s);
+		st->output = (void *)CFBridgingRetain(o);
+		st->queue = (void *)CFBridgingRetain(q);
+		[s startCaptureWithCompletionHandler:^(NSError *err) {
+			if (err)
+				warning("cmevideo: Bildschirm starten: %s\n", err.localizedDescription.UTF8String);
+		}];
+		info("cmevideo: Bildschirm %zux%zu\n", c.width, c.height);
+	}
+	*stp = (struct vidsrc_st *)(void *)st;
+	return 0;
+}
+#else
+void cmesip_screen_filter(void *filter) { (void)filter; }
+#endif
 
 
 /* ---------------------------------------------------------------- Anzeige */
@@ -1040,6 +1194,9 @@ static struct vidcodec vc_h265 = {
 };
 
 static struct vidsrc *camsrc;
+#if TARGET_OS_OSX
+static struct vidsrc *scrsrc;
+#endif
 static struct vidisp *disp;
 
 
@@ -1050,6 +1207,9 @@ int cmevideo_init(void)
 	vidcodec_register(baresip_vidcodecl(), &vc_h265);
 	vidcodec_register(baresip_vidcodecl(), &vc_h264);
 	err = vidsrc_register(&camsrc, baresip_vidsrcl(), "cmecam", cam_alloc, NULL);
+#if TARGET_OS_OSX
+	err |= vidsrc_register(&scrsrc, baresip_vidsrcl(), "cmescreen", (vidsrc_alloc_h *)scr_alloc, NULL);
+#endif
 	err |= vidisp_register(&disp, baresip_vidispl(), "cmedisp", disp_alloc, NULL, disp_disp, NULL);
 	return err;
 }
@@ -1058,6 +1218,9 @@ int cmevideo_init(void)
 void cmevideo_close(void)
 {
 	camsrc = mem_deref(camsrc);
+#if TARGET_OS_OSX
+	scrsrc = mem_deref(scrsrc);
+#endif
 	disp = mem_deref(disp);
 	vidcodec_unregister(&vc_h264);
 	vidcodec_unregister(&vc_h265);
