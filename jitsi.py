@@ -358,7 +358,8 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
                       pkey=paramiko.Ed25519Key.from_private_key_file(str(key_path)),
                       timeout=10, allow_agent=False, look_for_keys=False)
         except paramiko.AuthenticationException:
-            raise JitsiError("SSH: Anmeldung abgelehnt – den Schlüssel unten in ~/.ssh/authorized_keys eintragen.") from None
+            raise JitsiError(f"SSH: Anmeldung als {s['user']}@{s['host']} abgelehnt – den Schlüssel unten in "
+                             f"~{s['user']}/.ssh/authorized_keys auf {s['host']} eintragen.") from None
         except paramiko.SSHException as e:
             raise JitsiError(f"SSH: {e}") from None
         except OSError as e:
