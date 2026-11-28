@@ -909,10 +909,13 @@ def register(app, router, apply, demo: bool, cfgdir: Path, ami=None) -> None:
             os.chmod(tmp, 0o644)
             tmp.replace(cfgdir / "extensions_confwait.conf")
             if ami and not demo:
-                try:
-                    ami.command("dialplan reload")
-                except Exception as e:  # noqa: BLE001
-                    print(f"Jitsi: Warteraum - dialplan reload fehlgeschlagen: {e}", flush=True)
+                def reload():
+                    try:
+                        ami.command("dialplan reload")
+                    except Exception as e:  # noqa: BLE001
+                        print(f"Jitsi: Warteraum - dialplan reload fehlgeschlagen: {e}", flush=True)
+                reload()
+                threading.Timer(60, reload).start()   # Asterisk startet beim Deploy evtl. erst nach cme-web
 
     if not demo:
         threading.Timer(8, lambda: _safe(write_confwait)).start()

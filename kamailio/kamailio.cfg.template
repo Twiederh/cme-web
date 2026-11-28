@@ -578,8 +578,9 @@ route[CONF] {
 		exit;
 	}
 	$var(rtpdir) = "";
-	# Asterisk (Warteraum, Docker-Netz) wählt Jigasi an, Raum im Header X-CME-Room
-	if ($si =~ "^172\.(1[6-9]|2[0-9]|3[01])\." && is_present_hf("X-CME-Room")) {
+	# Asterisk (Warteraum) wählt Jigasi an, Raum im Header X-CME-Room. Aus dem Docker-Netz kommt Asterisk je nach
+	# Docker-Version mit der Adresse des Hosts (NAT) oder aus 172.16.0.0/12.
+	if (($si == "${HOST_IP}" || $si =~ "^172\.(1[6-9]|2[0-9]|3[01])\.") && is_present_hf("X-CME-Room")) {
 		$var(room) = $(hdr(X-CME-Room){s.trim});
 		remove_hf("X-CME-Room");
 		if (!($var(room) =~ "^[a-z0-9._-]+@[a-z0-9.-]+$")) {
