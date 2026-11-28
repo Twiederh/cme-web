@@ -733,11 +733,15 @@ def register(app, router, demo: bool, cfgdir: Path) -> None:  # noqa: ARG001
         """Gateway für die Apps: TLS (Kamailio, EXT_TLS_PORT), wenn der Zugang von außen an ist und die Apps den
         Namen des Zertifikats (SIP_GW_NAME) nutzen – sonst TCP auf SIP_GW_PORT."""
         name = os.environ.get("SIP_GW_NAME", "").strip()
+        # Adressen <name>@SIP_PUBLIC_DOMAIN (Konferenzräume, Aliasse): Apps, die direkt an der CME hängen (Mac),
+        # schicken sie an Kamailio (TCP EXT_SIP_PORT) – intern zeigt der SRV-Eintrag der Domain auf CUCM/CME
+        uri = {"domain": os.environ.get("SIP_PUBLIC_DOMAIN", "").strip().lower(),
+               "ext_port": int(os.environ.get("EXT_SIP_PORT", "5060") or 5060)}
         tls = (os.environ.get("SIP_GW_TLS", "").strip() or ("1" if os.environ.get("SIP_PUBLIC_DOMAIN", "").strip() else "0")) == "1"
         if app_tls and tls and name and s["gateway_host"].lower() == name.lower():
             return {"host": s["gateway_host"], "port": int(os.environ.get("EXT_TLS_PORT", "5061") or 5061),
-                    "transport": "tls", "tcp_port": s["gateway_port"]}
-        return {"host": s["gateway_host"], "port": s["gateway_port"], "transport": "tcp"}
+                    "transport": "tls", "tcp_port": s["gateway_port"], **uri}
+        return {"host": s["gateway_host"], "port": s["gateway_port"], "transport": "tcp", **uri}
 
     # ---------------- Voicemail und Gesprächsaufnahmen in den Apps ----------------
     # Wie Visual Voicemail am 8845 (vvm.py) und die Benutzerseite (portal.py), aber mit dem App-Schlüssel: nur

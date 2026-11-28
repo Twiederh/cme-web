@@ -560,12 +560,30 @@ final class SIPManager: ObservableObject {
         return id
     }
 
+    /// Adresse unter der eigenen öffentlichen Domain (Jitsi-Raum, Alias): Hängt das Konto direkt an der CME (Mac),
+    /// würde sie per DNS-SRV beim CUCM landen. Deshalb per maddr an Kamailio (TCP, Zugang von draußen); die Adresse
+    /// selbst bleibt unverändert. Über das Gateway (iOS) geht ohnehin alles an Kamailio.
+    private func viaKamailio(_ uri: String) -> String {
+        guard !(settings.useGateway && !settings.jabberMode), !settings.gatewayHost.isEmpty,
+              uri.lowercased().hasPrefix("sip:"), let at = uri.firstIndex(of: "@") else { return uri }
+        var dom = settings.publicDomain.lowercased()
+        if dom.isEmpty, let dot = settings.gatewayHost.firstIndex(of: ".") {   // sip-gw.example.de -> example.de
+            dom = String(settings.gatewayHost[settings.gatewayHost.index(after: dot)...]).lowercased()
+        }
+        let hostPart = uri[uri.index(after: at)...]
+        let host = hostPart.prefix { $0 != ";" && $0 != ":" && $0 != ">" }.lowercased()
+        guard !dom.isEmpty, host == dom, !hostPart.contains(";") else { return uri }
+        let r = "\(uri[..<at])@\(dom):\(settings.extSipPort);maddr=\(settings.gatewayHost);transport=tcp"
+        log("Wahl \(uri) über Kamailio (\(settings.gatewayHost):\(settings.extSipPort) TCP)")
+        return r
+    }
+
     @discardableResult
     func placeCall(to number: String, video: Bool) -> String? {
         let target = number.contains("@") ? number : "sip:\(number)@\(settings.sipHost)"
         let uri = target.hasPrefix("sip") ? target : "sip:\(target)"
         // Videoanruf nur auf Wunsch: ein m=video im Angebot an reine Audio-Gegenstellen (Trunk) vermeiden
-        return dial(uri, from: nil, replaces: nil, remote: uri, name: "", video: video && settings.videoEnabled)
+        return dial(viaKamailio(uri), from: nil, replaces: nil, remote: uri, name: "", video: video && settings.videoEnabled)
     }
 
     func accept(callId: String) {

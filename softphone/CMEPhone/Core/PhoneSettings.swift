@@ -100,6 +100,9 @@ final class PhoneSettings: ObservableObject {
     @Published var useGateway: Bool { didSet { save() } }
     @Published var gatewayHost: String { didSet { save() } }
     @Published var gatewayPort: Int { didSet { save() } }
+    /// Öffentliche SIP-Domain (Räume/Aliasse <name>@domain) und TCP-Port von Kamailio dafür
+    @Published var publicDomain: String { didSet { save() } }
+    @Published var extSipPort: Int { didSet { save() } }
     @Published var transport: SIPTransport { didSet { save() } }
 
     // MARK: Local Push
@@ -179,6 +182,8 @@ final class PhoneSettings: ObservableObject {
         useGateway = d.object(forKey: "useGateway") as? Bool ?? true
         gatewayHost = d.string(forKey: "gatewayHost") ?? "sip-gw.wiederhol.de"
         gatewayPort = d.object(forKey: "gatewayPort") as? Int ?? 5062
+        publicDomain = d.string(forKey: "publicDomain") ?? ""
+        extSipPort = d.object(forKey: "extSipPort") as? Int ?? 5060
         transport = SIPTransport(rawValue: d.string(forKey: "transport") ?? "") ?? .tcp
         localPushEnabled = d.object(forKey: "localPushEnabled") as? Bool ?? true
         localPushSSIDs = d.string(forKey: "localPushSSIDs") ?? ""
@@ -295,6 +300,8 @@ final class PhoneSettings: ObservableObject {
             gatewayHost = info.gateway.host
             gatewayPort = info.gateway.port
             transport = SIPTransport(rawValue: info.gateway.transport) ?? .tcp
+            if let dom = info.gateway.domain { publicDomain = dom }
+            if let p = info.gateway.ext_port, p > 0 { extSipPort = p }
         }
         if !info.localpush.host.isEmpty {
             relayHost = info.localpush.host
@@ -362,6 +369,8 @@ final class PhoneSettings: ObservableObject {
         d.set(useGateway, forKey: "useGateway")
         d.set(gatewayHost, forKey: "gatewayHost")
         d.set(gatewayPort, forKey: "gatewayPort")
+        d.set(publicDomain, forKey: "publicDomain")
+        d.set(extSipPort, forKey: "extSipPort")
         d.set(transport.rawValue, forKey: "transport")
         d.set(localPushEnabled, forKey: "localPushEnabled")
         d.set(localPushSSIDs, forKey: "localPushSSIDs")

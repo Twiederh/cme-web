@@ -4,7 +4,11 @@ import Foundation
 /// Anmeldung mit dem App-Schlüssel aus cme-web (Tab Softphone).
 enum ClientAPI {
     struct Info: Decodable {
-        struct Gateway: Decodable { var host: String; var port: Int; var transport: String }
+        struct Gateway: Decodable {
+            var host: String; var port: Int; var transport: String
+            /// SIP_PUBLIC_DOMAIN und der TCP-Port von Kamailio für Anrufe von draußen (fehlt bei älterem cme-web)
+            var domain: String?; var ext_port: Int?
+        }
         struct LocalPush: Decodable { var host: String; var port: Int; var secret: String; var ssids: [String] }
         struct Recording: Decodable { var available: Bool; var mode: String }
         /// SIP-Zugangsdaten des Pools (CME verlangt sie von Soft-Clients); leer, wenn cme-web keine kennt
