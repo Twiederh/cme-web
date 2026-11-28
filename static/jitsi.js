@@ -80,6 +80,8 @@
           Zertifikat von Prosody nicht prüfen (nur als Notlösung)</label>
         <button class="primary" type="submit">Speichern und Jigasi neu starten</button>
         <button type="button" id="jt-log">Protokoll</button>
+        <button type="button" id="jt-pw" title="Wenn Jigasi „SASLError … not-authorized“ meldet: Passwort in Prosody und Jigasi passen nicht zusammen">
+          Neues Passwort für das Jigasi-Konto</button>
         <div class="msg" id="m-jt"></div>
       </form>
       <pre id="jt-logout" class="mono" style="display:none;max-height:360px;overflow:auto;white-space:pre-wrap;font-size:11.5px"></pre>`;
@@ -150,6 +152,15 @@
       const r = await post("/api/jitsi/jigasi", { kamailio: true });
       showMsg($("#m-jt"), r.ok, r.ok ? "Jigasi läuft jetzt über Kamailio." : r.error);
       if (r.ok) setTimeout(load, 1500); else kam.disabled = false;
+    };
+    const pw = $("#jt-pw");
+    if (pw) pw.onclick = async () => {
+      if (!confirm("Ein neues, zufälliges Passwort für das Jigasi-Konto wird in Prosody und in Jigasi eingetragen, Jigasi startet neu. Weiter?")) return;
+      pw.disabled = true;
+      const r = await post("/api/jitsi/jigasi-password", {});
+      showMsg($("#m-jt"), r.ok, r.ok ? `Neues Passwort für ${r.user} gesetzt, Jigasi startet neu.` : r.error);
+      pw.disabled = false;
+      if (r.ok) setTimeout(load, 3000);
     };
     const le = $("#jt-le");
     if (le) le.onclick = async () => {

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import socket
 import threading
 from pathlib import Path
@@ -490,6 +491,26 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
             m = model(parse_props(new), host_ip, conf_port)
             remember(settings(), m)
         return jsonify(ok=True, changed=new != text, restarted=new != text)
+
+    @app.post("/api/jitsi/jigasi-password")
+    def jitsi_jigasi_password():
+        """Neues Passwort für das Jigasi-Konto (acc-xmpp-1, z.B. jigasi@auth.<domain>): in Prosody setzen und in
+        Jigasis Datei eintragen (acc-xmpp-1.PASSWORD, bei Anmeldung mit dem Konto auch xmpp.acc.PASS). Das Passwort
+        wird zufällig erzeugt und geht nur per SSH (stdin) an den Server, nie in die Oberfläche."""
+        with lock:
+            text = read_props()
+            props = parse_props(text)
+            user = props.get(XMPP_ACC + "USER_ID", "")
+            m = re.fullmatch(r"([a-z0-9._-]{1,64})@([a-z0-9.-]{1,200})", user.lower())
+            if not m:
+                raise JitsiError("Kein Jigasi-Konto (acc-xmpp-1.USER_ID) in der Konfiguration.")
+            pw = secrets.token_urlsafe(18)     # 24 Zeichen aus A-Z a-z 0-9 - _
+            ssh(f"sudo -n sh -c 'prosodyctl register \"$0\" \"$1\" \"$(cat)\"' {m.group(1)} {m.group(2)}", stdin=pw)
+            ch = {XMPP_ACC + "PASSWORD": pw}   # set_props entfernt dabei den leeren Doppeleintrag
+            if props.get(K_XUSER):
+                ch[K_XPASS] = pw
+            write_props(set_props(text, ch))
+        return jsonify(ok=True, user=user)
 
     @app.post("/api/jitsi/rooms")
     def jitsi_rooms():
