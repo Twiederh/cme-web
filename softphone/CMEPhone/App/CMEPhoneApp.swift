@@ -15,8 +15,6 @@ struct CMEPhoneApp: App {
                 .environmentObject(LocalPushController.shared)
                 // Anrufen aus "Zuletzt", Kontakte, Siri (INStartCallIntent)
                 .onContinueUserActivity("INStartCallIntent") { CallRouter.handle(activity: $0) }
-                .onContinueUserActivity("INStartAudioCallIntent") { CallRouter.handle(activity: $0) }
-                .onContinueUserActivity("INStartVideoCallIntent") { CallRouter.handle(activity: $0) }
                 // tel:-Links, wenn CME Phone die Standard-App für Anrufe ist (iOS 18.2+)
                 .onOpenURL { CallRouter.handle(url: $0) }
         }
@@ -32,12 +30,7 @@ enum CallRouter {
         if let i = intent as? INStartCallIntent {
             handle = i.contacts?.first?.personHandle?.value
             video = i.callCapability == .videoCall
-        } else if let i = intent as? INStartAudioCallIntent {
-            handle = i.contacts?.first?.personHandle?.value
-        } else if let i = intent as? INStartVideoCallIntent {
-            handle = i.contacts?.first?.personHandle?.value
-            video = true
-        }
+        }   // INStartAudio-/INStartVideoCallIntent schickt iOS seit 13 nicht mehr (alles kommt als INStartCallIntent)
         guard let number = handle.map(clean), !number.isEmpty else { return }
         CallKitProvider.shared.startOutgoing(number: number, video: video)
     }

@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import UserNotifications
+@preconcurrency import UserNotifications
 
 /// Mitteilung „Thomas Handy – Gehalten, tippen zum Übernehmen“: Hält ein anderes Gerät der Shared Line ein Gespräch
 /// (Tischtelefon, Mac, Gigaset), meldet cme-web das per normalem Push (Kategorie HELD_CALL, Daten unter "held").
@@ -98,12 +98,11 @@ final class HeldCallNotifications: NSObject, ObservableObject {
     }
 
     private func removeNotifications(callId: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getDeliveredNotifications { list in
+        UNUserNotificationCenter.current().getDeliveredNotifications { list in
             let ids = list.filter { n in
                 (n.request.content.userInfo["held"] as? [String: Any])?["callId"] as? String == callId
             }.map { $0.request.identifier }
-            center.removeDeliveredNotifications(withIdentifiers: ids)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
 

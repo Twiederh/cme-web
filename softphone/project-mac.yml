@@ -8,9 +8,16 @@ options:
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
+  xcodeVersion: "27.2"   # LastUpgradeCheck, sonst meldet Xcode "Update to recommended settings"
 
 settings:
   base:
+    # von Xcode empfohlene Einstellungen
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    STRING_CATALOG_GENERATE_SYMBOLS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
     DEVELOPMENT_TEAM: "83BLV56527"
     SWIFT_VERSION: "5.10"
     CODE_SIGN_STYLE: Automatic

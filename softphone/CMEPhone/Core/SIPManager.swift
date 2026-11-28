@@ -810,7 +810,7 @@ final class SIPManager: ObservableObject {
     private func configureAudioSession() {
         let s = AVAudioSession.sharedInstance()
         do {
-            try s.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+            try s.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP, .allowBluetoothA2DP])
         } catch { log("Audio-Sitzung: \(error.localizedDescription)") }
     }
 
