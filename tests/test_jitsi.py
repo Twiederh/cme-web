@@ -116,4 +116,36 @@ hook = J.prosody_hook("/etc/letsencrypt/live/jitsi.example.de", ["jitsi.example.
 check("/etc/prosody/certs/auth.jitsi.example.de.key" in hook and "systemctl restart prosody" in hook, "Renewal-Hook")
 r = subprocess.run(["sh", "-n"], input=hook, text=True, capture_output=True)
 check(r.returncode == 0, f"Hook ist gültiges sh {r.stderr}")
+# Jigasi in token_verification_allowlist (Prosody): mit Attrappen für systemctl/prosodyctl und eigener Datei
+PCFG = """VirtualHost "jitsi.example.de"
+    authentication = "token"
+Component "conference.jitsi.example.de" "muc"
+    modules_enabled = {
+        "token_verification";
+    }
+    admins = { "focus@auth.jitsi.example.de" }
+    muc_room_locking = false
+Component "breakout.jitsi.example.de" "muc"
+    admins = { "focus@auth.jitsi.example.de" }
+"""
+d2 = Path(tempfile.mkdtemp())
+(d2 / "bin").mkdir()
+for b in ("systemctl", "prosodyctl", "sleep", "chown", "chmod"):   # --reference gibt es nur unter Linux
+    (d2 / "bin" / b).write_text("#!/bin/sh\nexit 0\n"); os.chmod(d2 / "bin" / b, 0o755)
+cfgf = d2 / "jitsi.example.de.cfg.lua"
+cfgf.write_text(PCFG)
+scr = J.prosody_allow_script("jitsi.example.de", "jigasi@auth.jitsi.example.de").replace(
+    "/etc/prosody/conf.d/jitsi.example.de.cfg.lua", str(cfgf))
+env = dict(os.environ, PATH=f"{d2 / 'bin'}:{os.environ['PATH']}")
+r1 = subprocess.run(["sh", "-s"], input=scr, text=True, capture_output=True, env=env)
+new = cfgf.read_text()
+check(r1.returncode == 0 and "ALLOW=neu" in r1.stdout, f"Allowlist eingetragen {r1.stdout}{r1.stderr}")
+check(new.count('token_verification_allowlist = { "jigasi@auth.jitsi.example.de" }') == 1
+      and new.index("token_verification_allowlist") < new.index("breakout"), "nur in der Konferenz-Komponente")
+r2 = subprocess.run(["sh", "-s"], input=scr, text=True, capture_output=True, env=env)
+check("ALLOW=schon" in r2.stdout and cfgf.read_text() == new, "zweiter Lauf ändert nichts")
+cfgf.write_text(PCFG.replace('    muc_room_locking', '    token_verification_allowlist = { "other@x.de" }\n    muc_room_locking'))
+r3 = subprocess.run(["sh", "-s"], input=scr, text=True, capture_output=True, env=env)
+check("ALLOW=neu" in r3.stdout and '{ "jigasi@auth.jitsi.example.de", "other@x.de" }' in cfgf.read_text(),
+      "vorhandene Liste ergänzt")
 print("alles ok")

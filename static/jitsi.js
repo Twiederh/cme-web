@@ -53,6 +53,13 @@
         („unable to find valid certification path“). Die Übernahme startet Prosody, Jicofo, Videobridge und Jigasi neu,
         laufende Konferenzen brechen dabei ab.</div>
       <div class="msg" id="m-jt-le"></div>
+      ${g.token_rooms && g.token_rooms.verification ? `<div style="margin-top:6px">Räume mit Token-Pflicht (token_verification):
+        ${g.token_rooms.allowed ? badge("ok", `Jigasi (${g.token_rooms.jigasi}) darf ohne Token hinein`)
+          : `${badge("warn", "Jigasi wird abgewiesen")} <button class="small" id="jt-allow">Jigasi freischalten</button>`}</div>
+      <div class="hint">Trägt das Jigasi-Konto in <span class="mono">token_verification_allowlist</span> der Konferenz-Komponente von Prosody ein
+        (mit Sicherung). Prosody, Jicofo, Videobridge und Jigasi starten dabei neu. Ist der Raum noch leer, braucht es weiterhin
+        einen Gastgeber mit Token, bevor Telefon-Anrufer hineinkommen.</div>
+      <div class="msg" id="m-jt-allow"></div>` : ""}
 
       <h3>Jigasi</h3>
       <div>Weg: ${g.via_kamailio ? badge("ok", `über Kamailio (${J.host_ip}:${J.conf_port})`)
@@ -161,6 +168,15 @@
       showMsg($("#m-jt"), r.ok, r.ok ? `Neues Passwort für ${r.user} gesetzt, Jigasi startet neu.` : r.error);
       pw.disabled = false;
       if (r.ok) setTimeout(load, 3000);
+    };
+    const al = $("#jt-allow");
+    if (al) al.onclick = async () => {
+      if (!confirm("Prosody, Jicofo, Videobridge und Jigasi werden neu gestartet, laufende Konferenzen brechen ab. Weiter?")) return;
+      al.disabled = true;
+      showMsg($("#m-jt-allow"), true, "Läuft …");
+      const r = await post("/api/jitsi/prosody-allow", {});
+      showMsg($("#m-jt-allow"), r.ok, r.ok ? (r.changed ? "Jigasi ist freigeschaltet." : "Jigasi war schon freigeschaltet.") : r.error);
+      if (r.ok) setTimeout(load, 4000); else al.disabled = false;
     };
     const le = $("#jt-le");
     if (le) le.onclick = async () => {

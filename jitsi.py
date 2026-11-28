@@ -43,6 +43,7 @@ PEER_DESC = "Jitsi-Konferenz"
 OUT_DESC = "Jitsi-Konferenz: Jigasi waehlt hinaus"
 URI_CLASS = "JITSI"
 RE_HOST = re.compile(r"^[A-Za-z0-9.\-]{1,253}$")
+RE_DOMAIN = re.compile(r"[a-z0-9][a-z0-9.-]{0,200}")
 RE_USER = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
 RE_NUM = re.compile(r"^[0-9*#]{2,32}$")
 RE_ROOM = re.compile(r"^[a-z0-9._-]{1,80}(@[a-z0-9.-]{1,120})?$")
@@ -305,6 +306,39 @@ def prosody_hook(le_dir: str, hosts: list[str]) -> str:
             "systemctl restart prosody\nsleep 3\nsystemctl restart jicofo jitsi-videobridge2 jigasi 2>/dev/null || true\n")
 
 
+def prosody_allow_script(domain: str, jid: str) -> str:
+    """sh-Skript (als root): Jigasi-Konto in token_verification_allowlist der Konferenz-Komponente eintragen.
+    Mit Sicherung, Prüfung der Konfiguration und Neustart von Prosody, Jicofo, Videobridge und Jigasi.
+    Ausgabe: ALLOW=schon bzw. ALLOW=neu."""
+    if not RE_DOMAIN.fullmatch(domain) or not re.fullmatch(r"[a-z0-9._-]{1,64}@[a-z0-9.-]{1,200}", jid):
+        raise JitsiError("Domain oder Jigasi-Konto ungültig.")
+    comp = re.escape(f"conference.{domain}")
+    return f"""set -e
+F=/etc/prosody/conf.d/{domain}.cfg.lua
+test -f "$F" || {{ echo "Keine Prosody-Konfiguration $F"; exit 1; }}
+grep -q '^Component "conference.{domain}" "muc"' "$F" || {{ echo "Komponente conference.{domain} fehlt in $F"; exit 1; }}
+if awk '/^Component /{{c=0}} /^Component "{comp}" "muc"/{{c=1}} c && /token_verification_allowlist/ && /"{re.escape(jid)}"/{{f=1}} END{{exit !f}}' "$F"; then
+  echo ALLOW=schon; exit 0
+fi
+cp -p "$F" "$F.cme-web-$(date +%Y%m%d-%H%M%S)"
+# Liste schon da (ohne Jigasi): ergänzen, sonst neue Zeile nach admins
+HAS=$(awk '/^Component /{{c=0}} /^Component "{comp}" "muc"/{{c=1}} c && /token_verification_allowlist/{{print 1}}' "$F")
+awk -v jid='{jid}' -v has="$HAS" '
+  /^Component /{{c=0}}
+  /^Component "{comp}" "muc"/{{c=1; print; next}}
+  c && /token_verification_allowlist *= *[{{]/{{sub(/[{{]/, "{{ \\"" jid "\\",") ; print; c=0; done=1; next}}
+  c && has == "" && /^ *admins *=/{{print; print "    -- cme-web (Tab Jitsi): Jigasi darf ohne Token in die Räume"; print "    token_verification_allowlist = {{ \\"" jid "\\" }}"; c=0; done=1; next}}
+  {{print}}
+  END{{if (!done) exit 3}}' "$F" > "$F.new" || {{ rm -f "$F.new"; echo "Keine Stelle für den Eintrag gefunden (admins der Komponente)"; exit 1; }}
+chmod --reference="$F" "$F.new"; chown --reference="$F" "$F.new"; mv "$F.new" "$F"
+prosodyctl check config >/dev/null 2>&1 || true
+systemctl restart prosody
+sleep 3
+systemctl restart jicofo jitsi-videobridge2 jigasi 2>/dev/null || true
+echo ALLOW=neu
+"""
+
+
 # ---------------- Flask ----------------
 
 def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
@@ -444,7 +478,10 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
                          f"sudo -n test -f /etc/letsencrypt/live/{m['domain']}/fullchain.pem && echo LE=1 || echo LE=0; "
                          "sudo -n test -f /etc/letsencrypt/renewal-hooks/deploy/prosody-cme-web.sh && echo HOOK=1 || echo HOOK=0; "
                          f"sudo -n grep -m1 -A3 '^VirtualHost \"{m['domain']}\"' /etc/prosody/conf.d/{m['domain']}.cfg.lua "
-                         "| grep -o 'authentication = \"[a-z_]*\"' || true")
+                         "| grep -o 'authentication = \"[a-z_]*\"' || true; "
+                         f"sudo -n awk '/^Component /{{c=0}} /^Component \"conference.{m['domain']}\" \"muc\"/{{c=1}} "
+                         "c && /\"token_verification\"/{print \"TV=1\"} c && /token_verification_allowlist/{print \"AL=\" $0}' "
+                         f"/etc/prosody/conf.d/{m['domain']}.cfg.lua 2>/dev/null || true")
             lines = st.splitlines()
             m["services"] = dict(zip(["jigasi", "prosody", "jicofo", "videobridge"], lines[:4]))
             info = "\n".join(lines[4:])
@@ -452,6 +489,11 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
                                  "until": (re.search(r"notAfter=(.*)", info) or [None, ""])[1].strip(),
                                  "letsencrypt": "LE=1" in info, "hook": "HOOK=1" in info}
             m["auth"] = (re.search(r'authentication = "([a-z_]+)"', info) or [None, ""])[1]
+            # Konferenz-Komponente mit token_verification: darf Jigasi ohne Token in die Räume?
+            jid = props.get(XMPP_ACC + "USER_ID", "").lower()
+            al = "\n".join(l for l in lines if l.startswith("AL="))
+            m["token_rooms"] = {"verification": "TV=1" in info, "jigasi": jid,
+                                "allowed": bool(jid) and f'"{jid}"' in al.lower()}
             out["jigasi"] = m
         except JitsiError as e:
             out["error"] = str(e)
@@ -532,6 +574,17 @@ def register(app, router, apply, demo: bool, cfgdir: Path) -> None:
                           s.get("jigasi_ip", ""), dialout, codec)
         res = apply(lines) if lines else {"ok": True, "config": []}
         return jsonify(ok=res["ok"], error=res.get("error"), config=lines)
+
+    @app.post("/api/jitsi/prosody-allow")
+    def jitsi_prosody_allow():
+        with lock:
+            props = parse_props(read_props())
+            m = model(props, host_ip, conf_port)
+            jid = props.get(XMPP_ACC + "USER_ID", "").lower()
+            if not m["domain"] or not jid:
+                raise JitsiError("Domain von Jitsi oder Jigasi-Konto (acc-xmpp-1.USER_ID) nicht erkannt.")
+            out = ssh("sudo -n sh -s", stdin=prosody_allow_script(m["domain"], jid), timeout=90)
+        return jsonify(ok=True, changed="ALLOW=neu" in out)
 
     @app.post("/api/jitsi/prosody-cert")
     def jitsi_prosody_cert():
